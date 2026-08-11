@@ -75,6 +75,7 @@ function includesAny(brief: string, terms: string[]) {
 export function derivePlan(brief: string) {
   const wantsFastInsight = includesAny(brief, ["播客", "快讯", "简报", "fast insight"]);
   const wantsPanelOnly = includesAny(brief, ["只做人设", "人设池", "panel only"]);
+  const publicWebOnly = includesAny(brief, ["仅使用公开", "只使用公开", "公开网页", "公开资料", "公开信息"]);
   const wantsProductRAndD = includesAny(brief, ["市场进入", "机会", "趋势", "产品研发", "竞品"]);
   const needsScout = wantsProductRAndD || includesAny(brief, ["社交媒体", "小红书", "微博", "抖音", "舆情"]);
   const needsDiscussion = includesAny(brief, ["比较", "定位", "概念", "创意", "包装", "价格"]);
@@ -98,7 +99,9 @@ export function derivePlan(brief: string) {
           ? "用户旅程"
           : "探索式定性研究";
 
-  const methods: StudyMethod[] = wantsFastInsight
+  const methods: StudyMethod[] = publicWebOnly
+    ? ["Fast Insight"]
+    : wantsFastInsight
     ? ["Fast Insight"]
     : wantsPanelOnly
       ? []
@@ -108,8 +111,8 @@ export function derivePlan(brief: string) {
           "Interview Chat",
         ];
 
-  const estimatedDurationMinutes = wantsFastInsight ? 180 : needsScout ? 2880 : 240;
-  const estimatedTokens = wantsFastInsight ? 35000 : needsScout ? 120000 : personaCount * 12000;
+  const estimatedDurationMinutes = publicWebOnly || wantsFastInsight ? 180 : needsScout ? 2880 : 240;
+  const estimatedTokens = publicWebOnly || wantsFastInsight ? 35000 : needsScout ? 120000 : personaCount * 12000;
 
   return {
     studyType,
@@ -117,12 +120,18 @@ export function derivePlan(brief: string) {
     methods,
     personaFilters: {
       audience: "由 Brief 与后续澄清确定",
-      source: needsScout ? "公众人设库 + Scout 生成" : "公众人设库",
+      source: publicWebOnly
+        ? "公开网页与可核查公共资料"
+        : needsScout
+          ? "公众人设库 + Scout 生成"
+          : "公众人设库",
     },
-    personaCount,
+    personaCount: publicWebOnly ? 1 : personaCount,
     estimatedDurationMinutes,
     estimatedTokens,
-    rationale: `根据 Brief 中的研究目标与关键词，采用${framework}框架，并将研究范围控制在可验证的公开信息与后续待执行方法内。`,
+    rationale: publicWebOnly
+      ? `根据 Brief 中的研究目标与公开资料约束，采用${framework}框架，只检索并综合可核查的公开网页，不执行或声称执行访谈、讨论及 Persona 模拟。`
+      : `根据 Brief 中的研究目标与关键词，采用${framework}框架，并将研究范围控制在可验证的公开信息与后续待执行方法内。`,
   };
 }
 

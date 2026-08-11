@@ -81,8 +81,10 @@ export default async function StudyDetailPage({ params }: PageProps<"/study/[pub
                 <p>
                   {study.plan.source === "openai"
                     ? `我已使用 ${study.plan.providerModel ?? "OpenAI"} 分析您的 Brief，并生成结构化研究计划。`
-                    : "我已根据您的 Brief 生成本地规则草案；配置 OpenAI 后，新项目会使用模型生成计划。"}
-                  确认前请检查研究类型、方法组合与人设范围。
+                    : provider.configured
+                      ? "模型计划生成暂时未完成，当前展示可继续确认的本地规则草案。"
+                      : "我已根据您的 Brief 生成本地规则草案；配置 OpenAI 后，新项目会使用模型生成计划。"}
+                  确认前请检查研究类型、方法组合与研究范围。
                 </p>
 
                 <section className="study-plan-panel">
@@ -97,7 +99,8 @@ export default async function StudyDetailPage({ params }: PageProps<"/study/[pub
                     <div><dt>研究类型</dt><dd>{studyTypeLabels[study.studyType] ?? study.studyType}</dd></div>
                     <div><dt>方法论框架</dt><dd>{study.plan.framework}</dd></div>
                     <div><dt>方法组合</dt><dd>{study.plan.methods.map((method) => methodLabels[method]).join(" + ") || "仅构建人设池"}</dd></div>
-                    <div><dt>人设池</dt><dd>{study.plan.personaCount} 个 Persona · {study.plan.personaFilters.source}</dd></div>
+                    <div><dt>目标受众</dt><dd>{study.plan.personaFilters.audience}</dd></div>
+                    <div><dt>信息来源</dt><dd>{study.plan.personaFilters.source}</dd></div>
                     <div><dt>计划依据</dt><dd>{study.plan.rationale}</dd></div>
                   </dl>
                   <div className="plan-metrics">
@@ -128,7 +131,7 @@ export default async function StudyDetailPage({ params }: PageProps<"/study/[pub
                         {study.report
                           ? "公开网页研究已完成"
                           : study.runStatus === "running"
-                            ? "OpenAI 正在检索与综合公开资料"
+                            ? "正在检索与综合公开资料"
                             : study.runStatus === "queued"
                               ? "研究任务已进入执行队列"
                               : executionFailed
@@ -236,7 +239,7 @@ export default async function StudyDetailPage({ params }: PageProps<"/study/[pub
           <ol className="progress-steps">
             <li className="complete"><span><Check size={14} /></span><div><strong>Brief</strong><p>研究问题已保存</p></div></li>
             <li className="complete"><span><Check size={14} /></span><div><strong>澄清与规划</strong><p>计划草案已生成</p></div></li>
-            <li className={confirmed ? "complete" : "active"}><span>{confirmed ? <Check size={14} /> : "3"}</span><div><strong>确认计划</strong><p>{confirmed ? "计划已经锁定" : "检查方法与人设池"}</p></div></li>
+            <li className={confirmed ? "complete" : "active"}><span>{confirmed ? <Check size={14} /> : "3"}</span><div><strong>确认计划</strong><p>{confirmed ? "计划已经锁定" : "检查方法与研究范围"}</p></div></li>
             <li className={study.report ? "complete" : confirmed ? "active" : ""}><span>{study.report ? <Check size={14} /> : "4"}</span><div><strong>执行</strong><p>{executionActive ? "公开网页研究进行中" : executionFailed ? "执行失败，可重试" : confirmed ? "等待 OpenAI 执行" : "公开网页研究"}</p></div></li>
             <li className={study.report ? "complete" : ""}><span>{study.report ? <Check size={14} /> : "5"}</span><div><strong>报告</strong><p>{study.report ? "报告已生成" : "生成洞察报告"}</p></div></li>
           </ol>

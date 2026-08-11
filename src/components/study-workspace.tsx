@@ -145,8 +145,8 @@ export function StudyWorkspace({ studies }: { studies: StudySummary[] }) {
         <ol className="progress-steps">
           <li className="active"><span>1</span><div><strong>Brief</strong><p>描述需要研究的问题</p></div></li>
           <li><span>2</span><div><strong>澄清</strong><p>补充目标与范围</p></div></li>
-          <li><span>3</span><div><strong>确认计划</strong><p>确认方法与人设池</p></div></li>
-          <li><span>4</span><div><strong>执行</strong><p>研究引擎与数据收集</p></div></li>
+          <li><span>3</span><div><strong>确认计划</strong><p>确认方法与研究范围</p></div></li>
+          <li><span>4</span><div><strong>执行</strong><p>研究执行与资料检索</p></div></li>
           <li><span>5</span><div><strong>报告</strong><p>生成洞察报告</p></div></li>
         </ol>
         <div className="progress-note">
