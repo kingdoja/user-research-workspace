@@ -1,0 +1,27 @@
+User-Agent: *
+Allow: /
+Allow: /pricing
+Allow: /newstudy
+Allow: /persona
+Allow: /interview
+Allow: /featured-studies
+Allow: /insight-radio
+Allow: /about
+Allow: /changelog
+Allow: /persona-simulation
+Allow: /privacy
+Allow: /terms
+Disallow: /admin
+Disallow: /api
+Disallow: /auth
+Disallow: /account
+Disallow: /studies
+Disallow: /payment
+Disallow: /maintenance
+Disallow: /status
+Disallow: /_next
+Disallow: /_public
+Disallow: /_pages
+Crawl-delay: 1
+
+Sitemap: https://atypica.ai/sitemap.xml

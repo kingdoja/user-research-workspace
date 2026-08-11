@@ -1,0 +1,1284 @@
+{
+  "capturedAt": "2026-08-11T11:25:53.614Z",
+  "origin": "https://atypica.ai",
+  "privacyBoundary": "Core public product pages only. Report, study, podcast, and other user-generated share URLs are excluded.",
+  "routes": [
+    {
+      "route": "/",
+      "requestedUrl": "https://atypica.ai/",
+      "finalUrl": "https://atypica.ai/",
+      "status": 200,
+      "title": "atypica.AI - The AI Research Agent Simulating Consumers",
+      "headings": [
+        "The AI Research AgentSimulating Consumers",
+        "AI Persona Research at Scale",
+        "AI Persona Research in Action",
+        "Testing",
+        "Planning",
+        "Insights",
+        "Creation",
+        "From question to insights in minutes",
+        "Persona Generation",
+        "AI-Led Interviews",
+        "Behavior Analysis",
+        "Instant Insights",
+        "AI Persona Research Studies",
+        "AI Personas from Deep Interviews",
+        "Beyond Demographics",
+        "Scale & Coverage",
+        "Build Your Custom AI Research Panel"
+      ],
+      "file": "pages/home.html",
+      "bytes": 317482
+    },
+    {
+      "route": "/pricing",
+      "requestedUrl": "https://atypica.ai/pricing",
+      "finalUrl": "https://atypica.ai/pricing",
+      "status": 200,
+      "title": "Pricing | atypica.AI",
+      "headings": [],
+      "file": "pages/pricing.html",
+      "bytes": 223418
+    },
+    {
+      "route": "/technology",
+      "requestedUrl": "https://atypica.ai/technology",
+      "finalUrl": "https://atypica.ai/technology",
+      "status": 200,
+      "title": "atypica.AI - The AI Research Agent Simulating Consumers",
+      "headings": [
+        "The AI ThatUnderstands Humans",
+        "“We do not react to reality, but to the models of reality in our heads.”",
+        "Objective",
+        "Subjective",
+        "Subjective World Model",
+        "Simulate × Research",
+        "AI SIMULATOR",
+        "Build AI Personas",
+        "AI RESEARCHER",
+        "Use Cases × Workflow",
+        "Assets of the Subjective World",
+        "AI Persona",
+        "AI Sage",
+        "AI Panel",
+        "Who Uses It.What It Changes.",
+        "Global Food Brand",
+        "Ready to Understand Your Users?"
+      ],
+      "file": "pages/technology.html",
+      "bytes": 400046
+    },
+    {
+      "route": "/usecases",
+      "requestedUrl": "https://atypica.ai/usecases",
+      "finalUrl": "https://atypica.ai/usecases",
+      "status": 200,
+      "title": "Use Cases - atypica.AI | atypica.AI",
+      "headings": [
+        "Atypica in Action",
+        "Product Concept Pre-Test",
+        "1000 Real Consumer Interviews → From AI Interview to AI Panel",
+        "Intergenerational Panel Simulation",
+        "Next-Gen Family MPV Research",
+        "Silicon Valley | Enterprise-Grade Research on a Lean Budget",
+        "U.S. Market Concept Pre-Test"
+      ],
+      "file": "pages/usecases.html",
+      "bytes": 258259
+    },
+    {
+      "route": "/featured-studies",
+      "requestedUrl": "https://atypica.ai/featured-studies",
+      "finalUrl": "https://atypica.ai/featured-studies",
+      "status": 200,
+      "title": "Featured Studies | atypica.AI",
+      "headings": [
+        "Featured Studies"
+      ],
+      "file": "pages/featured-studies.html",
+      "bytes": 221110
+    },
+    {
+      "route": "/insight-radio",
+      "requestedUrl": "https://atypica.ai/insight-radio",
+      "finalUrl": "https://atypica.ai/insight-radio",
+      "status": 200,
+      "title": "AI Podcasts | atypica.AI",
+      "headings": [
+        "All Podcasts",
+        "More to Discover",
+        "Business",
+        "Society & Culture",
+        "Ready to create your own podcast?"
+      ],
+      "file": "pages/insight-radio.html",
+      "bytes": 226737
+    },
+    {
+      "route": "/persona",
+      "requestedUrl": "https://atypica.ai/persona",
+      "finalUrl": "https://atypica.ai/persona",
+      "status": 200,
+      "title": "Build AI Persona | atypica.AI",
+      "headings": [
+        "Persona Platform",
+        "Build AI Persona",
+        "Import Interview",
+        "Follow-up Interviews",
+        "Chat with AI Personas",
+        "Research with AI Personas",
+        "Analysis Dimensions",
+        "Getting Started",
+        "Upload Interview PDF",
+        "Review Analysis",
+        "Follow-up Interview",
+        "Generate & Chat",
+        "Use in Research",
+        "Ready to start analyzing?"
+      ],
+      "file": "pages/persona.html",
+      "bytes": 251652
+    },
+    {
+      "route": "/interview",
+      "requestedUrl": "https://atypica.ai/interview",
+      "finalUrl": "https://atypica.ai/interview",
+      "status": 200,
+      "title": "AI-Powered Interview Research | atypica.AI",
+      "headings": [
+        "Interview Platform",
+        "AI-Powered Interview Research",
+        "Human Interviews",
+        "AI Persona Interviews",
+        "Smart Analytics",
+        "How It Works",
+        "Create Project",
+        "Choose Participants",
+        "AI-Led Interviews",
+        "Generate Reports",
+        "Ready to Start Your Research?"
+      ],
+      "file": "pages/interview.html",
+      "bytes": 231664
+    },
+    {
+      "route": "/sage",
+      "requestedUrl": "https://atypica.ai/sage",
+      "finalUrl": "https://atypica.ai/sage",
+      "status": 200,
+      "title": "Create Your Expert Agent | atypica.AI",
+      "headings": [
+        "Expert Agent Platform",
+        "Build AI Expert Agents",
+        "Knowledge Import",
+        "Knowledge Analysis",
+        "Supplementary Interview",
+        "Expert Consultation",
+        "Knowledge Analysis Dimensions"
+      ],
+      "file": "pages/sage.html",
+      "bytes": 243252
+    },
+    {
+      "route": "/about",
+      "requestedUrl": "https://atypica.ai/about",
+      "finalUrl": "https://atypica.ai/about",
+      "status": 200,
+      "title": "About Us | atypica.AI",
+      "headings": [
+        "Using Language Models to Model the Subjective World",
+        "Multi-Agent Collaboration System",
+        "Plan Mode Agent",
+        "Study Agent",
+        "Scout Agent",
+        "Fast Insight Agent",
+        "Interviewer Agent",
+        "Persona Agent",
+        "Sage Agent",
+        "Moderator AI",
+        "Core Technologies",
+        "AI Personas (Three Tiers)",
+        "Persistent Memory System (Dual-Layer)",
+        "Study Expert (Reasoning Model)",
+        "Research Methods",
+        "💬Interview (One-on-One)",
+        "👥Discussion (Group)",
+        "GEA: Generative Enterprise Architecture",
+        "Dual-Agent Architecture",
+        "Messages as Source of Truth",
+        "Research Types",
+        "Product R&D",
+        "Fast Insight",
+        "Testing",
+        "Insights",
+        "Creation",
+        "Planning",
+        "Research Process",
+        "Platform Statistics",
+        "Technical Evolution",
+        "HippyGhosts Community"
+      ],
+      "file": "pages/about.html",
+      "bytes": 258770
+    },
+    {
+      "route": "/enterprise",
+      "requestedUrl": "https://atypica.ai/enterprise",
+      "finalUrl": "https://atypica.ai/enterprise",
+      "status": 200,
+      "title": "Enterprise | atypica.AI",
+      "headings": [
+        "Scale Your Research with AI-Powered Insights",
+        "Complete Research Suite",
+        "AI Research - Intelligent User Insight System",
+        "Built for Your Organization",
+        "Report Templates",
+        "Knowledge Base",
+        "API Integration",
+        "Security & Compliance",
+        "Enterprise-Grade Security SOC2 Certified",
+        "SOC2 Certified",
+        "Enterprise Services",
+        "Customer Success Services",
+        "Enterprise Advanced Services",
+        "Ready to Transform Your Research?"
+      ],
+      "file": "pages/enterprise.html",
+      "bytes": 245761
+    },
+    {
+      "route": "/persona-simulation",
+      "requestedUrl": "https://atypica.ai/persona-simulation",
+      "finalUrl": "https://atypica.ai/persona-simulation",
+      "status": 200,
+      "title": "AI Personas from Deep Interviews - AI Consumer Modeling for Complex Business Problems | atypica.AI",
+      "headings": [
+        "AI Personas from Deep Interviews",
+        "What are AI Personas from Deep Interviews?",
+        "1. Complex Problems in Business",
+        "2. Three Dimensions of Consumer Understanding",
+        "3. Evolution of Consumer Insight Analysis",
+        "4. Consumer Modeling",
+        "AI Persona-Based Modeling Revolution",
+        "5. Using AI Personas",
+        "6. Atypica's Application Results",
+        "7. Application Scenarios and Limitations",
+        "8. Conclusion: Starting with Consumer-Understanding AI Personas",
+        "Consumer Understanding in the AI Persona Era"
+      ],
+      "file": "pages/persona-simulation.html",
+      "bytes": 38350
+    },
+    {
+      "route": "/features",
+      "requestedUrl": "https://atypica.ai/features",
+      "finalUrl": "https://atypica.ai/features",
+      "status": 200,
+      "title": "Features & Comparisons | atypica.AI Docs | atypica.AI",
+      "headings": [
+        "Features & Comparisons",
+        "Agent System",
+        "Interview vs Discussion: Which One Should You Use?",
+        "Scout Agent: Deep Social Media Observation",
+        "Plan Mode: Let AI Understand What You Want First",
+        "Fast Insight: Podcast-First Automation",
+        "Study Types",
+        "Product R&D Agent: Product Development Intelligence",
+        "Persona Library",
+        "AI Persona Three-Tier System",
+        "Platform Capabilities",
+        "Memory System: Progressive Learning for AI",
+        "Reference Studies + File Attachments",
+        "MCP Integration Capabilities",
+        "Sage: Evolving Expert System",
+        "Comparisons",
+        "AI Products",
+        "atypica.AI vs Listen Labs",
+        "atypica.AI vs Claude Projects",
+        "atypica.AI vs UserTesting",
+        "atypica.AI vs SurveyMonkey",
+        "atypica.AI vs NotebookLM",
+        "atypica.AI vs Otter.ai",
+        "atypica.AI vs Traditional Research",
+        "atypica vs Deepsona",
+        "atypica vs Maze",
+        "atypica vs Roundtable",
+        "atypica vs Sprig",
+        "atypica vs Yabble",
+        "atypica vs PersonaPanels",
+        "atypica vs Perplexity",
+        "atypica vs Wynter",
+        "atypica vs Synthetic Research Tools",
+        "atypica vs Qualtrics",
+        "atypica vs Delve AI",
+        "atypica vs Synthetic Users",
+        "atypica vs UserTesting",
+        "atypica vs AI Persona Tools",
+        "atypica vs Dovetail",
+        "Traditional Consulting",
+        "atypica vs McKinsey",
+        "atypica vs BCG",
+        "atypica vs Bain",
+        "atypica vs Nielsen",
+        "atypica vs Kantar",
+        "atypica vs Ipsos",
+        "atypica vs GfK",
+        "atypica vs Gartner",
+        "atypica vs Forrester",
+        "atypica vs IDC",
+        "atypica vs Roland Berger",
+        "atypica vs CTR"
+      ],
+      "file": "pages/features.html",
+      "bytes": 319138
+    },
+    {
+      "route": "/faq",
+      "requestedUrl": "https://atypica.ai/faq",
+      "finalUrl": "https://atypica.ai/faq",
+      "status": 200,
+      "title": "FAQ | atypica.AI Docs | atypica.AI",
+      "headings": [
+        "FAQ",
+        "Market Research",
+        "What's the difference between AI research and Gemini's deep research? What's the difference from business reports generated by deep research on the market?",
+        "Your social media observation capability, how can it help me? For example, the \"helping with scenarios where you cannot directly reach target users in new markets\" mentioned in your introduction, what specific situations does this refer to?",
+        "AI Persona",
+        "How are your 300K AI Personas built? Written manually one by one?",
+        "With 300K AI Personas, aren't they all too similar?",
+        "What's the difference between your AI Personas and creating characters myself with ChatGPT?",
+        "What's the gap between your AI Personas and real humans?",
+        "If I work in a niche/traditional industry, are there relevant personas in the AI Persona library?",
+        "General",
+        "If AI personas give wrong recommendations, who's responsible?",
+        "Has anyone actually made money using your product?"
+      ],
+      "file": "pages/faq.html",
+      "bytes": 249159
+    },
+    {
+      "route": "/guides",
+      "requestedUrl": "https://atypica.ai/guides",
+      "finalUrl": "https://atypica.ai/guides",
+      "status": 200,
+      "title": "User Guides | atypica.AI Docs | atypica.AI",
+      "headings": [
+        "User Guides",
+        "atypica.AI User Research Journey",
+        "Market Research",
+        "First time using atypica, where should I start?",
+        "How to create my first research project?",
+        "Does brief length (simple vs detailed) affect results significantly? How to write good briefs? Are there templates?",
+        "How to interpret AI Research-generated reports? Which parts are most important?",
+        "Can generated interview reports show data visualization results? For example: gender ratio, age distribution, platform usage frequency distribution, etc.",
+        "How to export and share my research results?",
+        "How to Use a Panel to Run Discussions and Interviews?",
+        "How to Have You Scan Social Media for Target Users?",
+        "What Platforms Are the Data Sources for AI Research?",
+        "How to Configure AI to Remember My Research Needs?",
+        "AI Persona",
+        "After Creating an Interview Project, How to Search and Select the Most Suitable AI Personas from the Public Persona Library? What Keywords Should I Use?",
+        "How to Choose the Right AI Persona?",
+        "How to Create My Own AI Persona?",
+        "How to Upload Interview Transcripts to Create AI Persona? What Formats Are Supported? How to Import My Existing User Data?",
+        "Can I Upload Multiple Users' Interview Data to Create Multiple AI Personas?",
+        "How to Manage and Organize My Persona Library?",
+        "Interview Project",
+        "How to Start an Interview?",
+        "How Many Personas Can I Select for One AI Interview?",
+        "Can Personas Talk to Each Other? How to Set It Up?",
+        "How to Have Multiple AI Personas Discuss Together?",
+        "When to Use AI Interview vs AI Research?",
+        "What's in the Interview Report? Where to View It?",
+        "AI Sage",
+        "How to Use AI Expert Agent to Interview AI Personas?",
+        "What's the Difference Between AI Expert Agent and Directly Defining Personas in ChatGPT?",
+        "General",
+        "atypica.AI User Research Journey",
+        "What's the Difference Between Free and Paid Versions?",
+        "How to View My Usage Records and Billing?",
+        "How to Invite Colleagues to Use Together?",
+        "How to Share Persona Library and Research Projects with Team?",
+        "Will My Uploaded Interview Data Be Leaked? Will Atypica Use My Data for Anything?",
+        "Can Generated Reports Be Edited?",
+        "If I exit during research, will it terminate?"
+      ],
+      "file": "pages/guides.html",
+      "bytes": 305852
+    },
+    {
+      "route": "/glossary",
+      "requestedUrl": "https://atypica.ai/glossary",
+      "finalUrl": "https://atypica.ai/glossary",
+      "status": 200,
+      "title": "Glossary | atypica.AI",
+      "headings": [
+        "[ atypica.AI Glossary ]",
+        "{/* 1. Core Concepts */}",
+        "{/* 2. AI Persona Tiers */}",
+        "Tier 1: AI Persona (Social Media)",
+        "Tier 2: AI Persona (Deep Interview)",
+        "Tier 3: Human AI Persona (Proprietary)",
+        "{/* 3. Simulated Human Agent Roles */}",
+        "AI Persona",
+        "Interviewer AI",
+        "Moderator AI",
+        "Sage"
+      ],
+      "file": "pages/glossary.html",
+      "bytes": 244079
+    },
+    {
+      "route": "/docs/api",
+      "requestedUrl": "https://atypica.ai/docs/api",
+      "finalUrl": "https://atypica.ai/docs/team",
+      "status": 200,
+      "title": "Team API Documentation | atypica.AI",
+      "headings": [
+        "atypica.AI Docs",
+        "Documentation",
+        "On This Page",
+        "atypica.AI Docs",
+        "Documentation",
+        "On This Page",
+        "Authentication",
+        "List Members",
+        "Request",
+        "Response (200 OK)",
+        "Create User",
+        "Request Body",
+        "Request",
+        "Response (200 OK)",
+        "Invite User",
+        "Request Body",
+        "Request",
+        "Response (200 OK)",
+        "Impersonation",
+        "Path Parameters",
+        "Request Body (optional)",
+        "Request",
+        "Response (200 OK)",
+        "Error Responses",
+        "401 Unauthorized",
+        "403 Forbidden (Domain Not Verified)",
+        "404 Not Found",
+        "500 Internal Server Error",
+        "Rate Limits"
+      ],
+      "file": "pages/docs--api.html",
+      "bytes": 254079
+    },
+    {
+      "route": "/auth/signin",
+      "requestedUrl": "https://atypica.ai/auth/signin",
+      "finalUrl": "https://atypica.ai/auth/signin",
+      "status": 200,
+      "title": "atypica.AI - The AI Research Agent Simulating Consumers",
+      "headings": [],
+      "file": "pages/auth--signin.html",
+      "bytes": 217400
+    },
+    {
+      "route": "/auth/signup",
+      "requestedUrl": "https://atypica.ai/auth/signup",
+      "finalUrl": "https://atypica.ai/auth/signup",
+      "status": 200,
+      "title": "atypica.AI - The AI Research Agent Simulating Consumers",
+      "headings": [],
+      "file": "pages/auth--signup.html",
+      "bytes": 218186
+    },
+    {
+      "route": "/startup-owners",
+      "requestedUrl": "https://atypica.ai/startup-owners",
+      "finalUrl": "https://atypica.ai/startup-owners",
+      "status": 200,
+      "title": "For Startup Owners - Validate Your Business Idea 10x Easier | atypica.AI",
+      "headings": [
+        "@keyframes brush-swipe {\n          0% { transform: scaleX(0); opacity: 0; }\n          30% { opacity: 1; }\n          100% { transform: scaleX(1); opacity: 1; }\n        }\n      Validate Your Business Idea\n        @keyframes brush-swipe {\n          0% { transform: scaleX(0); opacity: 0; }\n          30% { opacity: 1; }\n          100% { transform: scaleX(1); opacity: 1; }\n        }\n      10x Easier",
+        "1,000 AI Personas",
+        "Startups That Validated",
+        "Use Cases",
+        "Validate in hours, not months"
+      ],
+      "file": "pages/startup-owners.html",
+      "bytes": 620338
+    },
+    {
+      "route": "/product-managers",
+      "requestedUrl": "https://atypica.ai/product-managers",
+      "finalUrl": "https://atypica.ai/product-managers",
+      "status": 200,
+      "title": "For Product Managers - Innovation, De-Risked | atypica.AI",
+      "headings": [
+        "@keyframes brush-swipe {\n          0% { transform: scaleX(0); opacity: 0; }\n          30% { opacity: 1; }\n          100% { transform: scaleX(1); opacity: 1; }\n        }\n      Innovation,De-Risked",
+        "1,000 AI Personas",
+        "Products Users Love",
+        "Use Cases",
+        "Know what users want before you ship"
+      ],
+      "file": "pages/product-managers.html",
+      "bytes": 618841
+    },
+    {
+      "route": "/marketers",
+      "requestedUrl": "https://atypica.ai/marketers",
+      "finalUrl": "https://atypica.ai/marketers",
+      "status": 200,
+      "title": "For Marketers - Craft Your Digital Marketing Plan | atypica.AI",
+      "headings": [
+        "@keyframes brush-swipe {\n          0% { transform: scaleX(0); opacity: 0; }\n          30% { opacity: 1; }\n          100% { transform: scaleX(1); opacity: 1; }\n        }\n      Craft Your DigitalMarketing Plan",
+        "1,000 AI Personas",
+        "Marketing That Converts",
+        "Use Cases",
+        "Stop guessing, start knowing"
+      ],
+      "file": "pages/marketers.html",
+      "bytes": 618870
+    },
+    {
+      "route": "/influencers",
+      "requestedUrl": "https://atypica.ai/influencers",
+      "finalUrl": "https://atypica.ai/influencers",
+      "status": 200,
+      "title": "For Influencers - Monetize Trust | atypica.AI",
+      "headings": [
+        "@keyframes brush-swipe {\n          0% { transform: scaleX(0); opacity: 0; }\n          30% { opacity: 1; }\n          100% { transform: scaleX(1); opacity: 1; }\n        }\n      Monetize Trust",
+        "1,000 AI Personas",
+        "Influencers Earning More",
+        "Use Cases",
+        "Turn trust into revenue"
+      ],
+      "file": "pages/influencers.html",
+      "bytes": 618771
+    },
+    {
+      "route": "/creators",
+      "requestedUrl": "https://atypica.ai/creators",
+      "finalUrl": "https://atypica.ai/creators",
+      "status": 200,
+      "title": "For Creators - Turn Trends Viral, In Days | atypica.AI",
+      "headings": [
+        "Turn \n        @keyframes brush-swipe {\n          0% { transform: scaleX(0); opacity: 0; }\n          30% { opacity: 1; }\n          100% { transform: scaleX(1); opacity: 1; }\n        }\n      Trends viral,\n        @keyframes brush-swipe {\n          0% { transform: scaleX(0); opacity: 0; }\n          30% { opacity: 1; }\n          100% { transform: scaleX(1); opacity: 1; }\n        }\n      In Days",
+        "1,000 AI Personas",
+        "Creators Going Viral",
+        "Use Cases",
+        "Your next viral hit starts here"
+      ],
+      "file": "pages/creators.html",
+      "bytes": 620085
+    },
+    {
+      "route": "/consultants",
+      "requestedUrl": "https://atypica.ai/consultants",
+      "finalUrl": "https://atypica.ai/consultants",
+      "status": 200,
+      "title": "For Consultants - Show Consumer Proof, Not Just Slides | atypica.AI",
+      "headings": [
+        "Show \n        @keyframes brush-swipe {\n          0% { transform: scaleX(0); opacity: 0; }\n          30% { opacity: 1; }\n          100% { transform: scaleX(1); opacity: 1; }\n        }\n      Consumer Proof,Not Just Slides",
+        "1,000 AI Personas",
+        "Consulting Wins",
+        "Use Cases",
+        "Back every recommendation with proof"
+      ],
+      "file": "pages/consultants.html",
+      "bytes": 623725
+    }
+  ],
+  "assets": [
+    {
+      "url": "https://atypica.ai/_next/static/chunks/1309-da71e2f99328efbe.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/1309-da71e2f99328efbe.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 7811,
+      "file": "assets/bd2e02dfa2-1309-da71e2f99328efbe.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/1623-f067d77a6418f707.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/1623-f067d77a6418f707.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 114261,
+      "file": "assets/500361c660-1623-f067d77a6418f707.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/1a9d3a7a-ecf025d58826d610.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/1a9d3a7a-ecf025d58826d610.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 177879,
+      "file": "assets/9652aa4979-1a9d3a7a-ecf025d58826d610.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/2609-da198ca64883a14c.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/2609-da198ca64883a14c.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 93535,
+      "file": "assets/947761e9e1-2609-da198ca64883a14c.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/2680-4af53b0d368f4fe7.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/2680-4af53b0d368f4fe7.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 22657,
+      "file": "assets/5b4eaff667-2680-4af53b0d368f4fe7.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/2767-d1b1b2ce0327d499.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/2767-d1b1b2ce0327d499.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 7672,
+      "file": "assets/d068b5a716-2767-d1b1b2ce0327d499.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/2770-463c21bdb5cdf4c1.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/2770-463c21bdb5cdf4c1.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 13527,
+      "file": "assets/3e916fe885-2770-463c21bdb5cdf4c1.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/2881-85452ea16e3826fd.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/2881-85452ea16e3826fd.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 59301,
+      "file": "assets/3e483e4876-2881-85452ea16e3826fd.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/2f05c9d2-c30d7b84f5a12de5.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/2f05c9d2-c30d7b84f5a12de5.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 181166,
+      "file": "assets/3d8c35d112-2f05c9d2-c30d7b84f5a12de5.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/3040-a03f2d0662f36727.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/3040-a03f2d0662f36727.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 39891,
+      "file": "assets/19bfedcaa7-3040-a03f2d0662f36727.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/3207-0fd3b5e6318592bf.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/3207-0fd3b5e6318592bf.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 7455,
+      "file": "assets/b15ec62b98-3207-0fd3b5e6318592bf.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/3239-a87a2c6a9bcc23eb.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/3239-a87a2c6a9bcc23eb.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 14942,
+      "file": "assets/eee924a700-3239-a87a2c6a9bcc23eb.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/350-0fd3b5e6318592bf.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/350-0fd3b5e6318592bf.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 7455,
+      "file": "assets/7bd84f5bb7-350-0fd3b5e6318592bf.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/4211-d31693e310190310.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/4211-d31693e310190310.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 36423,
+      "file": "assets/f59926e57d-4211-d31693e310190310.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/4215-4fb523d944ae7a11.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/4215-4fb523d944ae7a11.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 5444,
+      "file": "assets/cc4cd4fb99-4215-4fb523d944ae7a11.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/4312-e8cfd5f09f6862b4.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/4312-e8cfd5f09f6862b4.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 10445,
+      "file": "assets/eb49aa1ddc-4312-e8cfd5f09f6862b4.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/4346-5bdf7eeae3fc51d5.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/4346-5bdf7eeae3fc51d5.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 8836,
+      "file": "assets/8f0ff0ce5d-4346-5bdf7eeae3fc51d5.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/43c6ac68-8d7065965f8f8aba.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/43c6ac68-8d7065965f8f8aba.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 173025,
+      "file": "assets/c5216b348f-43c6ac68-8d7065965f8f8aba.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/4459-16b6f5583b879fd8.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/4459-16b6f5583b879fd8.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 173725,
+      "file": "assets/aa851e8655-4459-16b6f5583b879fd8.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/453-49948314fcc319fc.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/453-49948314fcc319fc.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 805854,
+      "file": "assets/6c832bf344-453-49948314fcc319fc.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/4753-6aec1861e83e47c9.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/4753-6aec1861e83e47c9.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 23107,
+      "file": "assets/e91b2bb5f8-4753-6aec1861e83e47c9.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/4960-b6b4589e19d71ffb.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/4960-b6b4589e19d71ffb.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 34305,
+      "file": "assets/ccb63a083c-4960-b6b4589e19d71ffb.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/555-78f57396047f48de.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/555-78f57396047f48de.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 241328,
+      "file": "assets/577a8c929a-555-78f57396047f48de.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/5588-0fd3b5e6318592bf.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/5588-0fd3b5e6318592bf.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 7455,
+      "file": "assets/62d977ae70-5588-0fd3b5e6318592bf.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/5771-f37274246950920c.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/5771-f37274246950920c.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 8564,
+      "file": "assets/b9c9e1903f-5771-f37274246950920c.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/6066-cb5ac0d0da7abbea.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/6066-cb5ac0d0da7abbea.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 21725,
+      "file": "assets/47df69851a-6066-cb5ac0d0da7abbea.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/6432-ff3dad64aca3a5c0.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/6432-ff3dad64aca3a5c0.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 23057,
+      "file": "assets/b668100072-6432-ff3dad64aca3a5c0.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/644313f2-2648e6a35af35484.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/644313f2-2648e6a35af35484.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 175623,
+      "file": "assets/f870748d81-644313f2-2648e6a35af35484.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/6467-61dc8de1a4942434.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/6467-61dc8de1a4942434.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 23845,
+      "file": "assets/2d6c395cc3-6467-61dc8de1a4942434.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/661-64c5f42ae76f4c06.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/661-64c5f42ae76f4c06.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 15708,
+      "file": "assets/14d7201959-661-64c5f42ae76f4c06.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/6771-a1a57253e161872e.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/6771-a1a57253e161872e.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 10488,
+      "file": "assets/0d3c2d2d87-6771-a1a57253e161872e.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/6930-34578992f7d9aae8.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/6930-34578992f7d9aae8.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 12225,
+      "file": "assets/8dab4fe030-6930-34578992f7d9aae8.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/6970-1b45838fc5c33a9e.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/6970-1b45838fc5c33a9e.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 22546,
+      "file": "assets/654524274a-6970-1b45838fc5c33a9e.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/6996-94c1b76afb69a0c3.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/6996-94c1b76afb69a0c3.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 7552,
+      "file": "assets/d87dc09560-6996-94c1b76afb69a0c3.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/7031-0fe282e9dcdab21f.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/7031-0fe282e9dcdab21f.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 25098,
+      "file": "assets/894ab3991f-7031-0fe282e9dcdab21f.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/7107-2bb4c54ff6f09371.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/7107-2bb4c54ff6f09371.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 40697,
+      "file": "assets/d8c90af16d-7107-2bb4c54ff6f09371.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/7130-dd0f98fe94e81831.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/7130-dd0f98fe94e81831.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 12473,
+      "file": "assets/bff2fa1fab-7130-dd0f98fe94e81831.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/7171-6868865a71df635c.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/7171-6868865a71df635c.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 104722,
+      "file": "assets/9fb26a78f6-7171-6868865a71df635c.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/72759490-e6debdbcbad82cef.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/72759490-e6debdbcbad82cef.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 32810,
+      "file": "assets/26a748480e-72759490-e6debdbcbad82cef.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/7399-48e4932e96b5a409.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/7399-48e4932e96b5a409.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 2394,
+      "file": "assets/e81c4d2ce8-7399-48e4932e96b5a409.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/7499-ea2882df64c824b5.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/7499-ea2882df64c824b5.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 29196,
+      "file": "assets/aba8b3b02a-7499-ea2882df64c824b5.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/7511-bd505fba38f1d941.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/7511-bd505fba38f1d941.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 30829,
+      "file": "assets/811d124c52-7511-bd505fba38f1d941.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/7544-1eeff0d330564628.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/7544-1eeff0d330564628.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 31881,
+      "file": "assets/6439719177-7544-1eeff0d330564628.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/7844-270a5e501f20eabf.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/7844-270a5e501f20eabf.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 8081,
+      "file": "assets/30f57c711c-7844-270a5e501f20eabf.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/79812939-1edf36ad577c092d.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/79812939-1edf36ad577c092d.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 268331,
+      "file": "assets/312cad7806-79812939-1edf36ad577c092d.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/8001-3bd1f493788950cd.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/8001-3bd1f493788950cd.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 31549,
+      "file": "assets/076a37deb6-8001-3bd1f493788950cd.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/826-0fd3b5e6318592bf.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/826-0fd3b5e6318592bf.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 7455,
+      "file": "assets/de7c7a1b9e-826-0fd3b5e6318592bf.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/8276-6f6a440bbad6f43e.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/8276-6f6a440bbad6f43e.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 8832,
+      "file": "assets/683f61ce8f-8276-6f6a440bbad6f43e.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/8301-84bdcf8034d8c808.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/8301-84bdcf8034d8c808.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 115389,
+      "file": "assets/41b1f1899c-8301-84bdcf8034d8c808.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/8445-0fd3b5e6318592bf.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/8445-0fd3b5e6318592bf.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 7455,
+      "file": "assets/55650cef37-8445-0fd3b5e6318592bf.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/8540-5059f263858a94a1.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/8540-5059f263858a94a1.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 10658,
+      "file": "assets/78930ca879-8540-5059f263858a94a1.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/8706-0d64d23dea3568f4.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/8706-0d64d23dea3568f4.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 24746,
+      "file": "assets/d8f6bbe5cd-8706-0d64d23dea3568f4.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/8760-a24baa20d380add3.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/8760-a24baa20d380add3.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 9809,
+      "file": "assets/c6a57f6921-8760-a24baa20d380add3.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/9036-d8b961782aa2df89.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/9036-d8b961782aa2df89.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 13603,
+      "file": "assets/d970b7bdbf-9036-d8b961782aa2df89.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/9231-61bf87fa7e8d05bd.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/9231-61bf87fa7e8d05bd.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 6902,
+      "file": "assets/f520a88092-9231-61bf87fa7e8d05bd.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/9321-5f4fde6a569798c4.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/9321-5f4fde6a569798c4.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 27069,
+      "file": "assets/cdca06630d-9321-5f4fde6a569798c4.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/9923-71d3d3093d068cf1.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/9923-71d3d3093d068cf1.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 25350,
+      "file": "assets/c3b72ac5e4-9923-71d3d3093d068cf1.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/9925-b601edbcbc483bf0.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/9925-b601edbcbc483bf0.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 11224,
+      "file": "assets/0858ee0c62-9925-b601edbcbc483bf0.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(auth)/auth/layout-c700483f593198aa.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(auth)/auth/layout-c700483f593198aa.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 435,
+      "file": "assets/9f1ea678ff-layout-c700483f593198aa.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(auth)/auth/signin/page-932a56b88cbcc8cb.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(auth)/auth/signin/page-932a56b88cbcc8cb.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 15436,
+      "file": "assets/cc739167ed-page-932a56b88cbcc8cb.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(auth)/auth/signup/page-27e6874f788e5ced.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(auth)/auth/signup/page-27e6874f788e5ced.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 16887,
+      "file": "assets/ae94f6f99b-page-27e6874f788e5ced.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(enterprise)/enterprise/page-b7c05f582cecfba2.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(enterprise)/enterprise/page-b7c05f582cecfba2.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 59245,
+      "file": "assets/887d6abe4a-page-b7c05f582cecfba2.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(enterprise)/usecases/page-3c5e09604d672907.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(enterprise)/usecases/page-3c5e09604d672907.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 160,
+      "file": "assets/aa6c56f737-page-3c5e09604d672907.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(interviewProject)/interview/layout-c700483f593198aa.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(interviewProject)/interview/layout-c700483f593198aa.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 435,
+      "file": "assets/f5c2769a20-layout-c700483f593198aa.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(interviewProject)/interview/page-ae664e589a9a41ac.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(interviewProject)/interview/page-ae664e589a9a41ac.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 17077,
+      "file": "assets/b6c2103c0a-page-ae664e589a9a41ac.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(open)/docs/layout-c700483f593198aa.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(open)/docs/layout-c700483f593198aa.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 435,
+      "file": "assets/417ba876d4-layout-c700483f593198aa.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(open)/docs/team/page-1239a01d64cb0613.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(open)/docs/team/page-1239a01d64cb0613.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 139,
+      "file": "assets/60b1deec60-page-1239a01d64cb0613.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(persona)/persona/layout-c700483f593198aa.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(persona)/persona/layout-c700483f593198aa.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 435,
+      "file": "assets/5e77d14f93-layout-c700483f593198aa.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(persona)/persona/page-16be3f76f0e5f785.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(persona)/persona/page-16be3f76f0e5f785.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 39047,
+      "file": "assets/60b10edc8f-page-16be3f76f0e5f785.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/(docs)/faq/page-6d74f433c5919e9c.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/(docs)/faq/page-6d74f433c5919e9c.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 208,
+      "file": "assets/30cafbae68-page-6d74f433c5919e9c.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/(docs)/features/page-6d74f433c5919e9c.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/(docs)/features/page-6d74f433c5919e9c.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 208,
+      "file": "assets/907c8af8d8-page-6d74f433c5919e9c.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/(docs)/guides/page-6d74f433c5919e9c.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/(docs)/guides/page-6d74f433c5919e9c.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 208,
+      "file": "assets/fa583bff36-page-6d74f433c5919e9c.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/(solutions)/consultants/page-d823db7838612963.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/(solutions)/consultants/page-d823db7838612963.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 36125,
+      "file": "assets/1895783b7d-page-d823db7838612963.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/(solutions)/creators/page-a5d2c8a083e432c9.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/(solutions)/creators/page-a5d2c8a083e432c9.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 3200,
+      "file": "assets/2b96cc453d-page-a5d2c8a083e432c9.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/(solutions)/influencers/page-9ada8ac91b1dfbdd.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/(solutions)/influencers/page-9ada8ac91b1dfbdd.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 2856,
+      "file": "assets/dcace36f92-page-9ada8ac91b1dfbdd.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/(solutions)/marketers/page-d32641270f5b72c3.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/(solutions)/marketers/page-d32641270f5b72c3.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 3039,
+      "file": "assets/fc6c9c8dfa-page-d32641270f5b72c3.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/(solutions)/product-managers/page-aeb78b8c7485dba1.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/(solutions)/product-managers/page-aeb78b8c7485dba1.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 2902,
+      "file": "assets/7b7fc3a908-page-aeb78b8c7485dba1.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/(solutions)/startup-owners/page-fb140ce17cf75ab9.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/(solutions)/startup-owners/page-fb140ce17cf75ab9.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 3040,
+      "file": "assets/1a208c9a87-page-fb140ce17cf75ab9.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/about/page-2bf7dcda282f6e29.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/about/page-2bf7dcda282f6e29.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 66705,
+      "file": "assets/4aed0f01bb-page-2bf7dcda282f6e29.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/featured-studies/page-429bdc65d77f6a26.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/featured-studies/page-429bdc65d77f6a26.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 15463,
+      "file": "assets/b24e96bd16-page-429bdc65d77f6a26.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/insight-radio/page-376f56f91f4cd8ad.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/insight-radio/page-376f56f91f4cd8ad.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 24557,
+      "file": "assets/e8582b8043-page-376f56f91f4cd8ad.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/page-30971fcecbc62db9.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/page-30971fcecbc62db9.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 165,
+      "file": "assets/4ba493b4b7-page-30971fcecbc62db9.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/pricing/page-8e887dfceaeb125e.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/pricing/page-8e887dfceaeb125e.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 47368,
+      "file": "assets/0b6dbf707b-page-8e887dfceaeb125e.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(public)/technology/page-dd01571ad86b0c2e.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(public)/technology/page-dd01571ad86b0c2e.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 147611,
+      "file": "assets/1d0f737a9f-page-dd01571ad86b0c2e.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(sage)/(detail)/layout-c700483f593198aa.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(sage)/(detail)/layout-c700483f593198aa.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 435,
+      "file": "assets/68bbe4e533-layout-c700483f593198aa.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/(sage)/(public)/sage/page-71201551c1756329.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/(sage)/(public)/sage/page-71201551c1756329.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 10113,
+      "file": "assets/c4669a8604-page-71201551c1756329.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/forbidden-cb18564a2ae96080.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/forbidden-cb18564a2ae96080.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 1652,
+      "file": "assets/8072838bd2-forbidden-cb18564a2ae96080.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/layout-3e2a27443cbf4376.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/layout-3e2a27443cbf4376.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 38762,
+      "file": "assets/cb7d042a5e-layout-3e2a27443cbf4376.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/app/not-found-9c58f647d5d33b6a.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/app/not-found-9c58f647d5d33b6a.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 1487,
+      "file": "assets/c726af32c4-not-found-9c58f647d5d33b6a.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/bf76eac5-7f69d8630dcc87b4.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/bf76eac5-7f69d8630dcc87b4.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 174913,
+      "file": "assets/39ff7395fc-bf76eac5-7f69d8630dcc87b4.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/main-app-8840638cd3c98169.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/main-app-8840638cd3c98169.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 570,
+      "file": "assets/34324fa038-main-app-8840638cd3c98169.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/polyfills-42372ed130431b0a.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/polyfills-42372ed130431b0a.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 112594,
+      "file": "assets/052ebf01ad-polyfills-42372ed130431b0a.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/chunks/webpack-7f7d61b1ed975719.js",
+      "finalUrl": "https://atypica.ai/_next/static/chunks/webpack-7f7d61b1ed975719.js",
+      "contentType": "application/javascript; charset=UTF-8",
+      "bytes": 3968,
+      "file": "assets/b773f10a93-webpack-7f7d61b1ed975719.js"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/css/48b5257bbce97e8f.css",
+      "finalUrl": "https://atypica.ai/_next/static/css/48b5257bbce97e8f.css",
+      "contentType": "text/css; charset=UTF-8",
+      "bytes": 1058,
+      "file": "assets/70f019d603-48b5257bbce97e8f.css"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/css/9309d88176c6687e.css",
+      "finalUrl": "https://atypica.ai/_next/static/css/9309d88176c6687e.css",
+      "contentType": "text/css; charset=UTF-8",
+      "bytes": 107,
+      "file": "assets/e8d7233254-9309d88176c6687e.css"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/css/c0e6d92ce60f6906.css",
+      "finalUrl": "https://atypica.ai/_next/static/css/c0e6d92ce60f6906.css",
+      "contentType": "text/css; charset=UTF-8",
+      "bytes": 280372,
+      "file": "assets/83adef581e-c0e6d92ce60f6906.css"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/css/ef46db3751d8e999.css",
+      "finalUrl": "https://atypica.ai/_next/static/css/ef46db3751d8e999.css",
+      "contentType": "text/css; charset=UTF-8",
+      "bytes": 0,
+      "file": "assets/658818ce5d-ef46db3751d8e999.css"
+    },
+    {
+      "url": "https://atypica.ai/_next/static/css/fab8d9451f40a107.css",
+      "finalUrl": "https://atypica.ai/_next/static/css/fab8d9451f40a107.css",
+      "contentType": "text/css; charset=UTF-8",
+      "bytes": 1070,
+      "file": "assets/fe4dcd72fd-fab8d9451f40a107.css"
+    },
+    {
+      "url": "https://atypica.ai/_public/hippyghost-square-dark.jpg",
+      "finalUrl": "https://atypica.ai/_public/hippyghost-square-dark.jpg",
+      "contentType": "image/jpeg",
+      "bytes": 52443,
+      "file": "assets/92b73c223b-hippyghost-square-dark.jpg"
+    }
+  ]
+}

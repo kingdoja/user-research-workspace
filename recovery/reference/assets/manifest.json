@@ -1,0 +1,499 @@
+{
+  "assets": [
+    {
+      "contentType": "font/woff2",
+      "id": "cb5a9c8c50f757da",
+      "kind": "font",
+      "name": "e6099e249fd938cc-s.p.woff2",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/cb5a9c8c50f757da.woff2",
+      "url": "https://atypica.ai/_next/static/media/e6099e249fd938cc-s.p.woff2"
+    },
+    {
+      "contentType": "",
+      "id": "331c6e99d08831fe",
+      "kind": "stylesheet",
+      "name": "fab8d9451f40a107.css",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/331c6e99d08831fe.css",
+      "url": "https://atypica.ai/_next/static/css/fab8d9451f40a107.css"
+    },
+    {
+      "contentType": "",
+      "id": "13ab02802372ba81",
+      "kind": "stylesheet",
+      "name": "c0e6d92ce60f6906.css",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/13ab02802372ba81.css",
+      "url": "https://atypica.ai/_next/static/css/c0e6d92ce60f6906.css"
+    },
+    {
+      "contentType": "",
+      "id": "a5391b987b06c966",
+      "kind": "stylesheet",
+      "name": "ef46db3751d8e999.css",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/a5391b987b06c966.css",
+      "url": "https://atypica.ai/_next/static/css/ef46db3751d8e999.css"
+    },
+    {
+      "contentType": "font/ttf",
+      "id": "7bbcb4d0aa19e033",
+      "kind": "font",
+      "name": "Euclid-Circular-A-Medium.ttf",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/7bbcb4d0aa19e033.ttf",
+      "url": "https://atypica.ai/_public/fonts/Euclid-Circular-A-Medium.ttf"
+    },
+    {
+      "contentType": "image/webp",
+      "id": "1462115468dabd2f",
+      "kind": "image",
+      "name": "image",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/1462115468dabd2f",
+      "url": "https://atypica.ai/_next/image?url=%2Fapi%2Fimagegen%2Fdev%2FProfessional%20headshot%20of%20an%20Asian%20woman%20in%20her%2030s%2C%20smiling%20confidently%2C%20wearing%20business%20attire.%20Style%3A%20clean%2C%20professional%20lighting.&w=48&q=75"
+    },
+    {
+      "contentType": "image/webp",
+      "id": "4229515a2d493468",
+      "kind": "image",
+      "name": "image",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/4229515a2d493468",
+      "url": "https://atypica.ai/_next/image?url=%2Fapi%2Fimagegen%2Fdev%2FProfessional%20headshot%20of%20a%20Black%20man%20in%20his%2040s%2C%20friendly%20smile%2C%20wearing%20a%20modern%20business%20shirt.%20Style%3A%20warm%20lighting%2C%20professional.&w=48&q=75"
+    },
+    {
+      "contentType": "image/webp",
+      "id": "51602d59a07a6220",
+      "kind": "image",
+      "name": "image",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/51602d59a07a6220",
+      "url": "https://atypica.ai/_next/image?url=%2Fapi%2Fimagegen%2Fdev%2FProfessional%20headshot%20of%20a%20Latina%20woman%20in%20her%2030s%2C%20confident%20expression%2C%20wearing%20professional%20blazer.%20Style%3A%20bright%2C%20clean%20lighting.&w=48&q=75"
+    },
+    {
+      "contentType": "image/webp",
+      "id": "281327c2f364f39f",
+      "kind": "image",
+      "name": "image",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/281327c2f364f39f",
+      "url": "https://atypica.ai/_next/image?url=%2Fapi%2Fimagegen%2Fdev%2FProfessional%20headshot%20of%20an%20Asian%20man%20in%20his%2030s%2C%20warm%20smile%2C%20wearing%20casual%20business%20attire.%20Style%3A%20natural%20lighting%2C%20approachable.&w=48&q=75"
+    },
+    {
+      "contentType": "image/webp",
+      "id": "0a88121734065c13",
+      "kind": "image",
+      "name": "image",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/0a88121734065c13",
+      "url": "https://atypica.ai/_next/image?url=%2Fapi%2Fimagegen%2Fdev%2FProfessional%20headshot%20of%20a%20Caucasian%20woman%20in%20her%2020s%2C%20bright%20smile%2C%20wearing%20modern%20professional%20clothing.%20Style%3A%20soft%20lighting%2C%20friendly.&w=48&q=75"
+    },
+    {
+      "contentType": "image/jpeg",
+      "id": "28ffed8c3e12f50a",
+      "kind": "image",
+      "name": "atypica-promo-video-poster-20250624.jpeg",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/28ffed8c3e12f50a.jpeg",
+      "url": "https://bmrlab-prod.s3.us-east-1.amazonaws.com/atypica/public/atypica-promo-video-poster-20250624.jpeg"
+    },
+    {
+      "contentType": "image/webp",
+      "id": "4c7c5097f6a92f1b",
+      "kind": "image",
+      "name": "image",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/4c7c5097f6a92f1b",
+      "url": "https://atypica.ai/_next/image?url=https%3A%2F%2Fatypica-proxy.musecdn1.com%2Fproxy%2Fatypica-showcase-testing-poster-20250627.png%3FobjectUrl%3Dhttps%253A%252F%252Fbmrlab-prod.s3.us-east-1.amazonaws.com%252Fatypica%252Fpublic%252Fatypica-showcase-testing-poster-20250627.png&w=1200&q=75"
+    },
+    {
+      "contentType": "image/webp",
+      "id": "07c1061aa7dc8fb2",
+      "kind": "image",
+      "name": "image",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/07c1061aa7dc8fb2",
+      "url": "https://atypica.ai/_next/image?url=https%3A%2F%2Fatypica-proxy.musecdn1.com%2Fproxy%2Fatypica-showcase-planning-poster-20250627.png%3FobjectUrl%3Dhttps%253A%252F%252Fbmrlab-prod.s3.us-east-1.amazonaws.com%252Fatypica%252Fpublic%252Fatypica-showcase-planning-poster-20250627.png&w=1200&q=75"
+    },
+    {
+      "contentType": "image/jpeg",
+      "id": "eb9539a0c1e43a6f",
+      "kind": "image",
+      "name": "hippyghost-square-dark.jpg",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/eb9539a0c1e43a6f.jpg",
+      "url": "https://atypica.ai/_public/hippyghost-square-dark.jpg"
+    },
+    {
+      "contentType": "image/webp",
+      "id": "d5838d514a17a083",
+      "kind": "image",
+      "name": "image",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/d5838d514a17a083",
+      "url": "https://atypica.ai/_next/image?url=https%3A%2F%2Fatypica-proxy.musecdn1.com%2Fproxy%2Fatypica-showcase-insights-poster-20250627.png%3FobjectUrl%3Dhttps%253A%252F%252Fbmrlab-prod.s3.us-east-1.amazonaws.com%252Fatypica%252Fpublic%252Fatypica-showcase-insights-poster-20250627.png&w=1200&q=75"
+    },
+    {
+      "contentType": "image/webp",
+      "id": "c91a3a8485205827",
+      "kind": "image",
+      "name": "image",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/c91a3a8485205827",
+      "url": "https://atypica.ai/_next/image?url=https%3A%2F%2Fatypica-proxy.musecdn1.com%2Fproxy%2Fatypica-showcase-creation-poster-20250627.png%3FobjectUrl%3Dhttps%253A%252F%252Fbmrlab-prod.s3.us-east-1.amazonaws.com%252Fatypica%252Fpublic%252Fatypica-showcase-creation-poster-20250627.png&w=1200&q=75"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "f93b9342b1d4a08f",
+      "kind": "image",
+      "name": "svg-1",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/f93b9342b1d4a08f.svg",
+      "url": "inline-svg:f93b9342b1d4a08f"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "cc247aa90716b7e5",
+      "kind": "image",
+      "name": "svg-2",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/cc247aa90716b7e5.svg",
+      "url": "inline-svg:cc247aa90716b7e5"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "73125e2852cbd9d3",
+      "kind": "image",
+      "name": "svg-3",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/73125e2852cbd9d3.svg",
+      "url": "inline-svg:73125e2852cbd9d3"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "d4b38639fa4bf49e",
+      "kind": "image",
+      "name": "svg-4",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/d4b38639fa4bf49e.svg",
+      "url": "inline-svg:d4b38639fa4bf49e"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "392f51d60b2a33f4",
+      "kind": "image",
+      "name": "svg-5",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/392f51d60b2a33f4.svg",
+      "url": "inline-svg:392f51d60b2a33f4"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "b174b624c0896705",
+      "kind": "image",
+      "name": "svg-6",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/b174b624c0896705.svg",
+      "url": "inline-svg:b174b624c0896705"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "ffe45f645e1b90e4",
+      "kind": "image",
+      "name": "svg-7",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/ffe45f645e1b90e4.svg",
+      "url": "inline-svg:ffe45f645e1b90e4"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "e6815b8761127181",
+      "kind": "image",
+      "name": "svg-8",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/e6815b8761127181.svg",
+      "url": "inline-svg:e6815b8761127181"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "d39e8f89c1728ea5",
+      "kind": "image",
+      "name": "svg-9",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/d39e8f89c1728ea5.svg",
+      "url": "inline-svg:d39e8f89c1728ea5"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "e3b2e4df5979da81",
+      "kind": "image",
+      "name": "svg-10",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/e3b2e4df5979da81.svg",
+      "url": "inline-svg:e3b2e4df5979da81"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "7c3e107503862f6b",
+      "kind": "image",
+      "name": "svg-11",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/7c3e107503862f6b.svg",
+      "url": "inline-svg:7c3e107503862f6b"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "b6cc1e5e9ca5659c",
+      "kind": "image",
+      "name": "svg-12",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/b6cc1e5e9ca5659c.svg",
+      "url": "inline-svg:b6cc1e5e9ca5659c"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "d15d5fd245a11b46",
+      "kind": "image",
+      "name": "svg-13",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/d15d5fd245a11b46.svg",
+      "url": "inline-svg:d15d5fd245a11b46"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "673265ad1e36a1ab",
+      "kind": "image",
+      "name": "svg-14",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/673265ad1e36a1ab.svg",
+      "url": "inline-svg:673265ad1e36a1ab"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "d673052af858d621",
+      "kind": "image",
+      "name": "svg-15",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/d673052af858d621.svg",
+      "url": "inline-svg:d673052af858d621"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "befee769bad490ed",
+      "kind": "image",
+      "name": "svg-16",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/befee769bad490ed.svg",
+      "url": "inline-svg:befee769bad490ed"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "7b91a5fa604a7e67",
+      "kind": "image",
+      "name": "svg-17",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/7b91a5fa604a7e67.svg",
+      "url": "inline-svg:7b91a5fa604a7e67"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "89be68628bef3769",
+      "kind": "image",
+      "name": "svg-18",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/89be68628bef3769.svg",
+      "url": "inline-svg:89be68628bef3769"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "836db1cf8762fb37",
+      "kind": "image",
+      "name": "svg-19",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/836db1cf8762fb37.svg",
+      "url": "inline-svg:836db1cf8762fb37"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "061fc1fe9341f7e4",
+      "kind": "image",
+      "name": "svg-20",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/061fc1fe9341f7e4.svg",
+      "url": "inline-svg:061fc1fe9341f7e4"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "42d632d7e47fab47",
+      "kind": "image",
+      "name": "svg-21",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/42d632d7e47fab47.svg",
+      "url": "inline-svg:42d632d7e47fab47"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "f7d4040c433a075b",
+      "kind": "image",
+      "name": "svg-22",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/f7d4040c433a075b.svg",
+      "url": "inline-svg:f7d4040c433a075b"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "60bdfdc0db3d2bd3",
+      "kind": "image",
+      "name": "svg-23",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/60bdfdc0db3d2bd3.svg",
+      "url": "inline-svg:60bdfdc0db3d2bd3"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "627d01f03a874439",
+      "kind": "image",
+      "name": "svg-24",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/627d01f03a874439.svg",
+      "url": "inline-svg:627d01f03a874439"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "8c6f317965d6878c",
+      "kind": "image",
+      "name": "svg-25",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/8c6f317965d6878c.svg",
+      "url": "inline-svg:8c6f317965d6878c"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "2c76e68cd249c2e4",
+      "kind": "image",
+      "name": "svg-26",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/2c76e68cd249c2e4.svg",
+      "url": "inline-svg:2c76e68cd249c2e4"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "ef0bb7ab714b0c06",
+      "kind": "image",
+      "name": "svg-27",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/ef0bb7ab714b0c06.svg",
+      "url": "inline-svg:ef0bb7ab714b0c06"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "2cd8b6c6936dbfe3",
+      "kind": "image",
+      "name": "svg-28",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/2cd8b6c6936dbfe3.svg",
+      "url": "inline-svg:2cd8b6c6936dbfe3"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "3a320f4a5c484aa1",
+      "kind": "image",
+      "name": "svg-29",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/3a320f4a5c484aa1.svg",
+      "url": "inline-svg:3a320f4a5c484aa1"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "5a5318b92da8ea90",
+      "kind": "image",
+      "name": "svg-30",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/5a5318b92da8ea90.svg",
+      "url": "inline-svg:5a5318b92da8ea90"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "661afcb4615d7f41",
+      "kind": "image",
+      "name": "svg-31",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/661afcb4615d7f41.svg",
+      "url": "inline-svg:661afcb4615d7f41"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "3426378fb2f19461",
+      "kind": "image",
+      "name": "svg-32",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/3426378fb2f19461.svg",
+      "url": "inline-svg:3426378fb2f19461"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "791f32d866116a3e",
+      "kind": "image",
+      "name": "svg-33",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/791f32d866116a3e.svg",
+      "url": "inline-svg:791f32d866116a3e"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "332fbcf052f4dd3b",
+      "kind": "image",
+      "name": "svg-34",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/332fbcf052f4dd3b.svg",
+      "url": "inline-svg:332fbcf052f4dd3b"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "3963b68e769b7768",
+      "kind": "image",
+      "name": "svg-35",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/3963b68e769b7768.svg",
+      "url": "inline-svg:3963b68e769b7768"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "f2648dbd880190f7",
+      "kind": "image",
+      "name": "svg-36",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/f2648dbd880190f7.svg",
+      "url": "inline-svg:f2648dbd880190f7"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "924e403f3886e949",
+      "kind": "image",
+      "name": "svg-37",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/924e403f3886e949.svg",
+      "url": "inline-svg:924e403f3886e949"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "153585d6d693a873",
+      "kind": "image",
+      "name": "svg-38",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/153585d6d693a873.svg",
+      "url": "inline-svg:153585d6d693a873"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "5416d94e5d289318",
+      "kind": "image",
+      "name": "svg-39",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/5416d94e5d289318.svg",
+      "url": "inline-svg:5416d94e5d289318"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "6481430977c4b1f8",
+      "kind": "image",
+      "name": "svg-40",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/6481430977c4b1f8.svg",
+      "url": "inline-svg:6481430977c4b1f8"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "3317aba52b892c9d",
+      "kind": "image",
+      "name": "svg-41",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/3317aba52b892c9d.svg",
+      "url": "inline-svg:3317aba52b892c9d"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "f7008cddae205183",
+      "kind": "image",
+      "name": "svg-42",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/f7008cddae205183.svg",
+      "url": "inline-svg:f7008cddae205183"
+    },
+    {
+      "contentType": "image/svg+xml",
+      "id": "a7dfcbdb9f048344",
+      "kind": "image",
+      "name": "svg-43",
+      "path": "/var/folders/b8/qv_rvmnj10b7bz2z__vxrb_r0000gn/T/browser-use/assets/6c0bf592-3300-4ddd-bb2b-9228f33c43bb/a7dfcbdb9f048344.svg",
+      "url": "inline-svg:a7dfcbdb9f048344"
+    }
+  ],
+  "failures": [
+    {
+      "contentType": null,
+      "id": "7cc4ce15f2be2279",
+      "name": "collect",
+      "reason": "Loaded resource fetch failed: Asset bundling failed; page fetch failed: Browser Use encountered an error interacting with this webpage: TypeError: Failed to fetch\n    at tG (<anonymous>:1:41)\n    at <anonymous>:1:354",
+      "url": "https://px.ads.linkedin.com/collect?v=2&fmt=js&pid=9667692&time=1786445741270&li_adsId=b03cd495-b748-4630-aa2b-0ee76463b599&url=https%3A%2F%2Fatypica.ai%2F"
+    },
+    {
+      "contentType": null,
+      "id": "8d0ff8a2c72adbc9",
+      "name": "17609229510",
+      "reason": "Loaded resource fetch failed: Asset bundling failed; page fetch failed: Browser Use encountered an error interacting with this webpage: TypeError: Failed to fetch\n    at tG (<anonymous>:1:41)\n    at <anonymous>:1:354",
+      "url": "https://www.google.com/pagead/1p-user-list/17609229510/?random=1786445741327&cv=11&fst=1786442400000&bg=ffffff&guid=ON&async=1&en=gtag.config&gtm=45be6871v9231083851za200zb9208779120zd9208779120xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115938465~115938469~118395335~118897920~118897930~119367802~119367810~119527020~119896802~120315471~120385422&u_w=1470&u_h=956&url=https%3A%2F%2Fatypica.ai%2F&rcb=2&frm=0&tiba=atypica.AI%20-%20%E5%95%86%E4%B8%9A%E7%A0%94%E7%A9%B6%E5%A4%9A%E6%99%BA%E8%83%BD%E4%BD%93&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=1580036615.1786444548&uaa=arm&uab=64&uafvl=Not%253DA%253FBrand%3B99.0.0.0%7CGoogle%2520Chrome%3B151.0.7922.71%7CChromium%3B151.0.7922.71&uamb=0&uam=&uap=macOS&uapv=26.5.0&uaw=0&data=event%3Dgtag.config&ept=9&rfmt=3&fmt=3&is_vtc=1&cid=CAQS0wEAEQoqgQs7GgtMMHHie4DDBOmBZDCJQ4h0tMgHAmtvViFgA_W_4a-QMpaQDXop06wKlaMuUN5xKipNXfWKtAAmV4OWzi51SqAm3npiOqQwKUfGEjPsq6_EGQR9Rn_N0YYkiFvz49D7xZArI7rrzt50bL2HznemoeH9EzXYLHrnRfx4YSJrDUvjL4mMHjpFB3IwpwOPkpiJaRTgt4-VkDoLBYTG0GMw4sQt9fH_1_NUJdrWcIKVAN9sGq1vRMByxmmd76d2Nx7fNjRzlq8LZV3RXEAR&random=835420319&rmt_tld=0&ipr=y"
+    },
+    {
+      "contentType": null,
+      "id": "febf001e07a519c0",
+      "name": "17609229510",
+      "reason": "Loaded resource fetch failed: Asset bundling failed; page fetch failed: Browser Use encountered an error interacting with this webpage: TypeError: Failed to fetch\n    at tG (<anonymous>:1:41)\n    at <anonymous>:1:354",
+      "url": "https://www.google.com.tw/pagead/1p-user-list/17609229510/?random=1786445741327&cv=11&fst=1786442400000&bg=ffffff&guid=ON&async=1&en=gtag.config&gtm=45be6871v9231083851za200zb9208779120zd9208779120xec&gcd=13l3l3l3l1l1&dma=0&tag_exp=115938465~115938469~118395335~118897920~118897930~119367802~119367810~119527020~119896802~120315471~120385422&u_w=1470&u_h=956&url=https%3A%2F%2Fatypica.ai%2F&rcb=2&frm=0&tiba=atypica.AI%20-%20%E5%95%86%E4%B8%9A%E7%A0%94%E7%A9%B6%E5%A4%9A%E6%99%BA%E8%83%BD%E4%BD%93&hn=www.googleadservices.com&npa=0&pscdl=noapi&auid=1580036615.1786444548&uaa=arm&uab=64&uafvl=Not%253DA%253FBrand%3B99.0.0.0%7CGoogle%2520Chrome%3B151.0.7922.71%7CChromium%3B151.0.7922.71&uamb=0&uam=&uap=macOS&uapv=26.5.0&uaw=0&data=event%3Dgtag.config&ept=9&rfmt=3&fmt=3&is_vtc=1&cid=CAQS0wEAEQoqgQs7GgtMMHHie4DDBOmBZDCJQ4h0tMgHAmtvViFgA_W_4a-QMpaQDXop06wKlaMuUN5xKipNXfWKtAAmV4OWzi51SqAm3npiOqQwKUfGEjPsq6_EGQR9Rn_N0YYkiFvz49D7xZArI7rrzt50bL2HznemoeH9EzXYLHrnRfx4YSJrDUvjL4mMHjpFB3IwpwOPkpiJaRTgt4-VkDoLBYTG0GMw4sQt9fH_1_NUJdrWcIKVAN9sGq1vRMByxmmd76d2Nx7fNjRzlq8LZV3RXEAR&random=835420319&rmt_tld=1&ipr=y"
+    }
+  ]
+}

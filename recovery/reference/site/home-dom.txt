@@ -1,0 +1,251 @@
+- banner:
+  - link "atypica.AI":
+    - /url: /
+    - generic: atypica.AI
+  - button "技术":
+    - text: 技术
+  - button "产品":
+    - text: 产品
+  - button "解决方案":
+    - text: 解决方案
+  - link "价格":
+    - /url: /pricing
+  - link "开始使用":
+    - /url: /auth/signin?callbackUrl=%2F
+  - button "Open menu":
+- heading "商业研究多智能体" [level=1]: 商业研究多智能体
+- paragraph: Atypica 模拟消费者决策，全自动访谈和分析,并产出报告。
+- link "开始您的研究":
+  - /url: /newstudy
+  - text: 开始您的研究
+- generic: 无需信用卡 · 赠送 1,000,000 免费 Token
+- generic "Sarah Chen - Product Manager at Microsoft":
+  - img "Sarah Chen - Product Manager at Microsoft"
+- generic "Marcus Johnson - Marketing Director at Canva":
+  - img "Marcus Johnson - Marketing Director at Canva"
+- generic "Emily Rodriguez - Research Lead at UFC":
+  - img "Emily Rodriguez - Research Lead at UFC"
+- generic "David Kim - Founder at Simple Modern":
+  - img "David Kim - Founder at Simple Modern"
+- generic "Jessica Taylor - Brand Manager at SKIMS":
+  - img "Jessica Taylor - Brand Manager at SKIMS"
+- generic: 受到各大机构用户信赖
+- generic: •
+- link "SOC2 合规":
+  - /url: /enterprise
+  - text: SOC2 合规
+- heading "大规模AI用户画像研究" [level=2]
+- paragraph: 构建真人智能体以理解 人类决策
+- generic: 🤖 AI人设
+- generic: 💬 专家访谈
+- generic: 📊 行为洞察
+- generic: 300K
+- generic: AI人设创建
+- generic: +1M
+- generic: 访谈已完成
+- generic: <30m
+- generic: 每次研究用时
+- paragraph: 研究应用
+- heading "AI人设研究实践" [level=2]
+- paragraph: 了解高精度AI人设如何在不同场景中转换研究方式。从概念测试到洞察发现，我们的AI人设通过结构化访谈流程提供真实反馈。
+- img "测试 use case cover"
+- button "Play video for 测试":
+- heading "测试" [level=3]
+- paragraph: 访谈AI人设以测试产品概念和活动创意，获得真实反馈。
+- img "规划 use case cover"
+- button "Play video for 规划":
+- heading "规划" [level=3]
+- paragraph: 通过访谈AI人设了解偏好和优先级，创建框架以指导路线图制定。
+- img "洞察 use case cover"
+- button "Play video for 洞察":
+- heading "洞察" [level=3]
+- paragraph: 通过访谈代表目标受众的AI人设，揭示行为模式和动机。
+- img "创意 use case cover"
+- button "Play video for 创意":
+- heading "创意" [level=3]
+- paragraph: 与AI人设头脑风暴和共创，产生创新想法并验证创意概念。
+- paragraph: 主观世界建模实践
+- heading "从问题到洞察，数分钟内完成" [level=2]
+- img "A sky blue 'Generate AI Personas' button with sparkle icon on warm cream background. Frosted glass effect with subtle transparency and blur."
+- generic: "01"
+- heading "AI人设生成" [level=3]
+- paragraph: 基于真实行为模式和人口统计洞察，生成多样化的AI人设。
+- img "An emerald green 'Start Interview' button with microphone icon and simple chat bubbles on warm cream background. Frosted glass effect with subtle transparency and blur."
+- generic: "02"
+- heading "AI主导访谈" [level=3]
+- paragraph: 与AI人设进行自然对话，挖掘深层动机和关键决策驱动因素。
+- img "A violet 'Analyze Behavior' button with brain icon and simple insight cards on warm cream background. Frosted glass effect with subtle transparency and blur."
+- generic: "03"
+- heading "行为分析" [level=3]
+- paragraph: 识别影响购买决策的情感触发点、认知偏见和文化因素。
+- img "An amber 'Download Report' button with download icon and report preview card on warm cream background. Frosted glass effect with subtle transparency and blur."
+- generic: "04"
+- heading "即时洞察" [level=3]
+- paragraph: 在数分钟内生成全面洞察，而非传统研究流程的数周时间。
+- paragraph: 我们的工作
+- heading "AI人设研究案例" [level=2]
+- paragraph: 探索真实案例研究，了解高精度AI人设和专家访谈如何提供深入的消费者洞察，助力更好的商业决策。
+- 'link "View Case Study: 奢侈品入口级女性消费者的生活方式与消费理念变化研究（18–25 与 26–35 岁段）及策略建议"':
+  - /url: /study/4gmwaGnuxQ4mmNn7/share?replay=1
+  - generic: "View Case Study: 奢侈品入口级女性消费者的生活方式与消费理念变化研究（18–25 与 26–35 岁段）及策略建议"
+- img "report cover"
+- heading "奢侈品入口级女性消费者的生活方式与消费理念变化研究（18–25 与 26–35 岁段）及策略建议" [level=3]
+- 'link "View Case Study: 35岁技术背景宝妈离职后的职业路径规划与平衡家庭的转型方案"':
+  - /url: /study/pyAjTWisaPJgxfx3/share?replay=1
+  - generic: "View Case Study: 35岁技术背景宝妈离职后的职业路径规划与平衡家庭的转型方案"
+- img "report cover"
+- heading "35岁技术背景宝妈离职后的职业路径规划与平衡家庭的转型方案" [level=3]
+- 'link "View Case Study: 苏超现象：全民赛事的消费洞察与商业模式分析"':
+  - /url: /study/fb6NALfepX9MsU7K/share?replay=1
+  - generic: "View Case Study: 苏超现象：全民赛事的消费洞察与商业模式分析"
+- img "report cover"
+- heading "苏超现象：全民赛事的消费洞察与商业模式分析" [level=3]
+- 'link "View Case Study: AI 短剧市场潜力与入局策略研究梳理与评估"':
+  - /url: /study/7dKsdTc7427dnCGz/share?replay=1
+  - generic: "View Case Study: AI 短剧市场潜力与入局策略研究梳理与评估"
+- img "report cover"
+- heading "AI 短剧市场潜力与入局策略研究梳理与评估" [level=3]
+- 'link "View Case Study: 奢侈品春季小红书话题命名研究与创意建议诊断报告"':
+  - /url: /study/3VakPXHpMWkk76Tu/share?replay=1
+  - generic: "View Case Study: 奢侈品春季小红书话题命名研究与创意建议诊断报告"
+- img "report cover"
+- heading "奢侈品春季小红书话题命名研究与创意建议诊断报告" [level=3]
+- 'link "View Case Study: 中国二手车市场发展挑战与未来路径分析研究计划与访谈洞察"':
+  - /url: /study/cNHp4bAHhAjfpteW/share?replay=1
+  - generic: "View Case Study: 中国二手车市场发展挑战与未来路径分析研究计划与访谈洞察"
+- img "report cover"
+- heading "中国二手车市场发展挑战与未来路径分析研究计划与访谈洞察" [level=3]
+- link "查看所有研究":
+  - /url: /featured-studies
+- paragraph: 核心技术
+- heading "通过深度访谈构建 AI 人设" [level=2]
+- paragraph: 模拟真实人类认知的高级AI人设。无论是使用我们丰富的模型库，还是通过您自己的访谈数据创建私有人设，这些智能体都能保持一致的个性和行为框架，提供逼真的洞察。
+- paragraph: Technology Deep Dive
+- blockquote: “我们的深度访谈 AI 人设是一项高精度消费者模拟技术。您也可以将这项强大的技术应用于您自己的访谈记录，以创建供您专用的、安全的、私有的 AI 人设。”
+- paragraph: 这些智能体保持一致的认知模式、情感反应和决策框架，实现真实的研究对话——在行为模拟中达到85%的人类相似度准确性。
+- link "了解更多关于通过深度访谈构建 AI 人设":
+  - /url: /persona-simulation
+  - text: 了解更多关于通过深度访谈构建 AI 人设
+- paragraph: 模拟准确度
+- generic: 85%
+- paragraph: AI人设回应中的人类行为一致性
+- paragraph: Core Differentiator
+- heading "超越人口统计学" [level=3]
+- paragraph: 与传统调研数据或统计模型不同，我们的AI人设是复杂的行为模拟，在新情境中保持一致的个性特征和决策逻辑。
+- generic: 在不同情境下保持一致的个性特征和决策逻辑
+- generic: 模拟真实的人类认知偏见和情感反应
+- generic: 提供逼真、有深度的访谈回应，而不仅仅是数据聚合
+- paragraph: Agent Ecosystem
+- heading "智能体生态系统" [level=3]
+- generic: 30万个 AI 人设 (社交媒体)
+- generic: 基于社交媒体数据分析
+- generic: 1万个 AI 人设 (深度访谈)
+- generic: 基于深度访谈数据
+- generic: 真人 AI 人设 (私有)
+- generic: 通过您自己的私有访谈数据构建
+- heading "构建您的定制化 AI 研究面板" [level=3]
+- paragraph: 通过您自己的访谈数据创建私有的、高保真的 AI 人设，或利用我们丰富的模型库发现深度的消费者洞察。
+- link "构建您的私有 AI 人设":
+  - /url: /persona
+- link "开始您的研究":
+  - /url: /newstudy
+  - text: 开始您的研究
+- heading "最新 Insight 播客" [level=3]
+- button:
+- link "30岁PM裸辞用AI在小红书半年到10万？可行路线图与实操打法":
+  - /url: /artifacts/podcast/tLQfkeiKjrUFFNes/share
+  - heading "30岁PM裸辞用AI在小红书半年到10万？可行路线图与实操打法" [level=4]
+- paragraph: 很多产品经理想裸辞创业，用AI在小红书从零做到10万收入——这是真的可能，但有条件。我们用产品思维、用户研究与AI技术交叉解读Atypica.AI的实证研究，拆解赛道选择、内容MVP、增长路径与工具组合，评估风险与可操作的90天行动计划。 我们会讨论： - 适合的赛道🏷️ - AI+人如何分工🤝 - 内容MVP快速验证🧪 - 成长三阶段变现📈 - 必备AI工具组合🛠️ - 裸辞风险与应对⚖️
+- link "收听":
+  - /url: /artifacts/podcast/tLQfkeiKjrUFFNes/share
+  - text: 收听
+- link "查看全部":
+  - /url: /insight-radio
+  - text: 查看全部
+- contentinfo:
+  - generic: atypica.AI
+  - paragraph: 为「主观世界」建模
+  - paragraph: © 2026 BMRLab. 保留所有权利。
+  - link:
+    - /url: https://www.linkedin.com/company/atypica-ai
+  - link:
+    - /url: https://x.com/atypica_ai
+  - link:
+    - /url: https://www.instagram.com/atypica_ai
+  - link "系统运行中":
+    - /url: /status
+    - generic: 系统运行中
+  - heading "产品" [level=4]
+  - link "关于 atypica.AI":
+    - /url: /about
+  - link "技术":
+    - /url: /technology
+  - link "价格":
+    - /url: /pricing
+  - link "AI 研究":
+    - /url: /newstudy
+  - link "AI Persona":
+    - /url: /persona
+  - link "AI 访谈":
+    - /url: /interview
+  - link "AI Sage":
+    - /url: /sage
+  - link "Insight 播客":
+    - /url: /insight-radio
+  - link "skill0":
+    - /url: https://skill0.io
+  - link "Game Lab":
+    - /url: https://game.atypica.ai
+  - heading "解决方案" [level=4]
+  - link "企业版":
+    - /url: /enterprise
+  - link "案例展示":
+    - /url: /usecases
+  - link "内容创作者":
+    - /url: /creators
+  - link "网红":
+    - /url: /influencers
+  - link "营销人员":
+    - /url: /marketers
+  - link "产品经理":
+    - /url: /product-managers
+  - link "创业者":
+    - /url: /startup-owners
+  - link "咨询顾问":
+    - /url: /consultants
+  - heading "资源" [level=4]
+  - link "产品文档":
+    - /url: /features
+  - link "常见问题":
+    - /url: /faq
+  - link "使用指南":
+    - /url: /guides
+  - link "AI Persona 模拟":
+    - /url: /persona-simulation
+  - link "API 文档":
+    - /url: /docs/api
+  - link "词汇表":
+    - /url: /glossary
+  - link "更新日志":
+    - /url: /changelog
+  - link "博客":
+    - /url: /blog
+  - link "研究":
+    - /url: /research
+  - link "工程":
+    - /url: /engineering
+  - heading "公司" [level=4]
+  - link "加入我们":
+    - /url: /join-us
+  - link "联盟推广":
+    - /url: /affiliate
+  - link "技术介绍":
+    - /url: /deck/about
+  - link "项目介绍":
+    - /url: /deck/pitch
+  - link "服务条款":
+    - /url: /terms
+  - link "隐私政策":
+    - /url: /privacy
+- region "Notifications alt+T"
+- alert
