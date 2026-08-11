@@ -4,6 +4,8 @@ import { getViewer } from "@/lib/auth";
 import { isSameOriginRequest } from "@/lib/request-security";
 import { createStudy, listStudies } from "@/lib/studies";
 
+export const maxDuration = 120;
+
 const createStudySchema = z.object({
   brief: z.string().trim().min(12, "请再具体描述一些研究问题").max(4000, "研究问题不能超过 4000 个字符"),
 });

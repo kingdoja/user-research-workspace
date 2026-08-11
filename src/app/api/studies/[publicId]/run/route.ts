@@ -1,11 +1,11 @@
 import { after, NextResponse } from "next/server";
 import { getViewer } from "@/lib/auth";
 import { isSameOriginRequest } from "@/lib/request-security";
-import { confirmStudyPlan, executeStudyRun } from "@/lib/studies";
+import { executeStudyRun, queueStudyRun } from "@/lib/studies";
 
 export const maxDuration = 300;
 
-export async function POST(request: Request, context: RouteContext<"/api/studies/[publicId]/confirm">) {
+export async function POST(request: Request, context: RouteContext<"/api/studies/[publicId]/run">) {
   if (!isSameOriginRequest(request)) {
     return NextResponse.json({ error: "请求来源无效" }, { status: 403 });
   }
@@ -17,13 +17,24 @@ export async function POST(request: Request, context: RouteContext<"/api/studies
   }
 
   const { publicId } = await context.params;
-  const result = await confirmStudyPlan(viewer, publicId);
+  const result = await queueStudyRun(viewer, publicId);
 
   if (result === "not_found") {
     return NextResponse.json({ error: "研究项目不存在" }, { status: 404 });
   }
 
-  if (result === "confirmed") {
+  if (result === "plan_not_confirmed") {
+    return NextResponse.json({ error: "请先确认并锁定研究计划" }, { status: 409 });
+  }
+
+  if (result === "provider_missing") {
+    return NextResponse.json(
+      { error: "服务器尚未配置 OPENAI_API_KEY" },
+      { status: 503 },
+    );
+  }
+
+  if (result === "queued") {
     after(() => executeStudyRun(publicId, viewer.workspaceId));
   }
 

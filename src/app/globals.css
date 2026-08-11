@@ -268,6 +268,41 @@ button:disabled { cursor: not-allowed; opacity: .55; transform: none !important;
 .provider-waiting { display: flex; align-items: flex-start; gap: 13px; margin-top: 18px; padding: 16px; border: 1px solid #3e4d3a; border-radius: 5px; background: #192018; }
 .provider-waiting svg { flex: 0 0 auto; color: var(--accent); }
 .provider-waiting p { margin-top: 6px; color: #8f9a8b; font-size: 12px; }
+.run-state-failed { border-color: #6a3b3f; background: #211719; }
+.run-state-failed svg { color: #ff9ea3; }
+.run-state-running, .run-state-queued { border-color: #3e6740; }
+.run-state-completed { border-color: #35614b; }
+.run-actions { display: flex; align-items: center; gap: 14px; margin-top: 14px; }
+.run-actions .workspace-inline-error { margin: 0; }
+.research-report { margin-top: 16px; overflow: hidden; border: 1px solid #414246; border-radius: 6px; background: #171819; }
+.research-report > header { padding: 24px; border-bottom: 1px solid #38393c; }
+.research-report > header > span { color: var(--accent); font-size: 10px; text-transform: uppercase; }
+.research-report > header h2 { margin: 8px 0 0; font-size: 22px; line-height: 1.4; font-weight: 500; }
+.research-report > header p { margin-top: 14px; color: #b8b9bb; }
+.report-findings > article { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 14px; padding: 22px 24px; border-bottom: 1px solid #303134; }
+.report-findings > article > span { color: var(--accent); font-size: 12px; }
+.report-findings h3, .report-section h3, .report-sources h3 { margin: 0; font-size: 16px; font-weight: 500; }
+.report-findings p { margin-top: 9px; color: #b1b2b5; }
+.report-findings dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 16px 0 0; }
+.report-findings dl > div { padding: 12px; border-left: 2px solid #3f4143; background: #1d1e20; }
+.report-findings dt { color: #7e8083; font-size: 10px; }
+.report-findings dd { margin: 6px 0 0; color: #c8c9ca; font-size: 12px; line-height: 1.65; }
+.report-section, .report-sources { padding: 22px 24px; border-bottom: 1px solid #303134; }
+.recommendation-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+.recommendation-list article { min-width: 0; padding: 14px; border: 1px solid #36373a; border-radius: 4px; background: #1b1c1e; }
+.recommendation-list h4 { margin: 10px 0 0; font-size: 13px; font-weight: 500; }
+.recommendation-list p { margin-top: 8px; font-size: 12px; }
+.recommendation-list small { display: block; margin-top: 10px; color: #7f8084; font-size: 10px; line-height: 1.6; }
+.priority { display: inline-flex; padding: 3px 6px; border: 1px solid #4b4d50; border-radius: 3px; color: #bfc0c2; font-size: 9px; text-transform: uppercase; }
+.priority-high { border-color: #6e4b2f; color: #f1b77d; }
+.priority-medium { border-color: #5c5934; color: #ddd27b; }
+.priority-low { border-color: #365441; color: #8ad8aa; }
+.report-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
+.report-columns ul, .report-sources ol { margin: 13px 0 0; padding-left: 18px; color: #a5a6a9; font-size: 12px; line-height: 1.75; }
+.report-sources { border-bottom: 0; }
+.report-sources a { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; color: #b7ddb0; }
+.report-sources a span { overflow-wrap: anywhere; }
+.report-sources p { font-size: 12px; }
 .detail-progress { min-height: calc(100vh - 68px); }
 
 .account-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 28px; }
@@ -370,4 +405,9 @@ button:disabled { cursor: not-allowed; opacity: .55; transform: none !important;
   .plan-metrics > div + div { border-top: 1px solid #303134; border-left: 0; }
   .plan-actions { align-items: stretch; flex-direction: column-reverse; }
   .plan-actions .button { width: 100%; }
+  .run-actions { align-items: stretch; flex-direction: column; }
+  .run-actions .button { width: 100%; }
+  .report-findings > article { grid-template-columns: 28px minmax(0, 1fr); padding-inline: 14px; }
+  .report-findings dl, .report-columns, .recommendation-list { grid-template-columns: 1fr; }
+  .research-report > header, .report-section, .report-sources { padding-inline: 14px; }
 }

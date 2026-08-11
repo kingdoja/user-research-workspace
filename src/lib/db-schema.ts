@@ -84,6 +84,10 @@ create table if not exists study_plans (
   persona_count integer not null,
   estimated_duration_minutes integer not null,
   estimated_tokens bigint not null,
+  source text not null default 'local_rules',
+  provider_response_id text,
+  provider_model text,
+  rationale text not null default '',
   status text not null default 'draft',
   confirmed_at timestamptz,
   created_at timestamptz not null default now(),
@@ -95,6 +99,11 @@ create table if not exists study_plans (
 );
 
 create index if not exists study_plans_study_id_idx on study_plans(study_id);
+
+alter table study_plans add column if not exists source text not null default 'local_rules';
+alter table study_plans add column if not exists provider_response_id text;
+alter table study_plans add column if not exists provider_model text;
+alter table study_plans add column if not exists rationale text not null default '';
 
 create table if not exists study_messages (
   id bigint generated always as identity primary key,
@@ -115,6 +124,10 @@ create table if not exists study_runs (
   study_id bigint not null references studies(id) on delete cascade,
   status text not null default 'awaiting_provider',
   provider text,
+  provider_response_id text,
+  provider_model text,
+  prompt_version text,
+  usage jsonb not null default '{}'::jsonb,
   started_at timestamptz,
   finished_at timestamptz,
   error_message text,
@@ -124,6 +137,11 @@ create table if not exists study_runs (
 
 create index if not exists study_runs_study_id_idx on study_runs(study_id);
 create index if not exists study_runs_status_idx on study_runs(status);
+
+alter table study_runs add column if not exists provider_response_id text;
+alter table study_runs add column if not exists provider_model text;
+alter table study_runs add column if not exists prompt_version text;
+alter table study_runs add column if not exists usage jsonb not null default '{}'::jsonb;
 
 create table if not exists study_events (
   id bigint generated always as identity primary key,
@@ -143,6 +161,7 @@ create table if not exists reports (
   title text not null,
   description text not null default '',
   content_html text not null,
+  content_json jsonb not null default '{}'::jsonb,
   cover_url text,
   share_enabled boolean not null default false,
   share_token text unique,
@@ -151,4 +170,6 @@ create table if not exists reports (
 );
 
 create index if not exists reports_study_id_idx on reports(study_id);
+
+alter table reports add column if not exists content_json jsonb not null default '{}'::jsonb;
 `;
