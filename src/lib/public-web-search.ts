@@ -12,6 +12,16 @@ const SEARCH_RESULT_LIMIT = 12;
 const PAGE_TEXT_LIMIT = 5000;
 const RESPONSE_BYTE_LIMIT = 1_500_000;
 
+export function getPublicWebSearchStatus() {
+  const tavilyConfigured = Boolean(process.env.TAVILY_API_KEY?.trim());
+
+  return {
+    tavilyConfigured,
+    primaryProvider: tavilyConfigured ? "tavily" : "bing",
+    fallbackProvider: "bing",
+  } as const;
+}
+
 function isPrivateAddress(address: string) {
   const normalized = address.toLowerCase();
 
