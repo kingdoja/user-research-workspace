@@ -1,49 +1,80 @@
 "use client";
 
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, LoaderCircle } from "lucide-react";
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useState, useTransition } from "react";
 
-export function SignInForm() {
+export function SignInForm({ callbackUrl = "/newstudy" }: { callbackUrl?: string }) {
   const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState("");
+  const [pending, startTransition] = useTransition();
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setMessage("登录接口尚未迁移，表单数据未发送。");
+    const form = new FormData(event.currentTarget);
+    setMessage("");
+
+    startTransition(async () => {
+      try {
+        const response = await fetch("/api/auth/signin", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            email: form.get("email"),
+            password: form.get("password"),
+            callbackUrl,
+          }),
+        });
+        const result = (await response.json()) as { error?: string; redirectTo?: string };
+
+        if (!response.ok || !result.redirectTo) {
+          setMessage(result.error ?? "暂时无法登录");
+          return;
+        }
+
+        window.location.assign(result.redirectTo);
+      } catch {
+        setMessage("网络连接失败，请稍后重试");
+      }
+    });
   }
 
   return (
     <form className="sign-in-card" onSubmit={handleSubmit}>
       <h1>登录</h1>
-      <p>请输入您的登录信息</p>
+      <p>进入您的研究工作区</p>
       <label>
         <span className="sr-only">邮箱地址</span>
-        <input type="email" required placeholder="您的邮箱地址" autoComplete="email" />
+        <input name="email" type="email" required placeholder="您的邮箱地址" autoComplete="email" />
       </label>
       <label className="password-field">
         <span className="sr-only">密码</span>
         <input
+          name="password"
           type={showPassword ? "text" : "password"}
           required
           placeholder="您的密码"
           autoComplete="current-password"
         />
-        <button type="button" onClick={() => setShowPassword((value) => !value)} aria-label="切换密码可见性">
+        <button
+          type="button"
+          onClick={() => setShowPassword((value) => !value)}
+          aria-label={showPassword ? "隐藏密码" : "显示密码"}
+        >
           {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
         </button>
       </label>
-      <button className="forgot-link" type="button">忘记密码？</button>
-      <button className="button sign-in-primary" type="submit">登录</button>
-      <div className="divider"><span>或者通过以下方式</span></div>
-      <button className="button social-button" type="button" onClick={() => setMessage("Google OAuth 尚未迁移。")}>
-        <span className="google-mark">G</span>谷歌账号登录
+      <button className="forgot-link" type="button" disabled>
+        忘记密码？
       </button>
-      <button className="button social-button" type="button" onClick={() => setMessage("AWS Marketplace 登录尚未迁移。")}>
-        <span className="aws-mark">⌒</span>Try Free with AWS
+      <button className="button sign-in-primary" type="submit" disabled={pending}>
+        {pending ? <LoaderCircle className="spin" size={17} /> : null}
+        {pending ? "正在登录" : "登录"}
       </button>
-      <p className="signup-copy">还没有账号？ <Link href="/auth/signup">立即注册</Link></p>
-      {message ? <p className="form-status" role="status">{message}</p> : null}
+      <p className="signup-copy">
+        还没有账号？ <Link href={`/auth/signup?callbackUrl=${encodeURIComponent(callbackUrl)}`}>立即注册</Link>
+      </p>
+      {message ? <p className="form-status form-error" role="alert">{message}</p> : null}
     </form>
   );
 }
