@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { createLocalAccount, createSession } from "@/lib/auth";
+import { createAccount } from "@/lib/auth";
 import { isSameOriginRequest, safeCallbackPath } from "@/lib/request-security";
 
 const signupSchema = z.object({
@@ -25,16 +25,30 @@ export async function POST(request: Request) {
   }
 
   try {
-    const account = await createLocalAccount(parsed.data);
-    await createSession(account.userId);
+    const account = await createAccount(parsed.data);
 
-    return NextResponse.json({ redirectTo: safeCallbackPath(parsed.data.callbackUrl) }, { status: 201 });
+    return NextResponse.json({
+      redirectTo: account.requiresEmailConfirmation
+        ? "/auth/signin?registered=check-email"
+        : safeCallbackPath(parsed.data.callbackUrl),
+      requiresEmailConfirmation: account.requiresEmailConfirmation,
+    }, { status: 201 });
   } catch (error) {
-    if (error instanceof Error && error.message === "EMAIL_EXISTS") {
-      return NextResponse.json({ error: "该邮箱已经注册" }, { status: 409 });
+    if (error instanceof Error) {
+      const knownErrors: Record<string, { message: string; status: number }> = {
+        EMAIL_EXISTS: { message: "该邮箱已经注册", status: 409 },
+        EMAIL_INVALID: { message: "该邮箱地址不可用于注册", status: 400 },
+        EMAIL_RATE_LIMITED: { message: "注册请求过于频繁，请稍后再试", status: 429 },
+        PASSWORD_WEAK: { message: "密码强度不足，请使用更复杂的密码", status: 400 },
+      };
+      const knownError = knownErrors[error.message];
+
+      if (knownError) {
+        return NextResponse.json({ error: knownError.message }, { status: knownError.status });
+      }
     }
 
-    console.error("Failed to create local account", error);
+    console.error("Failed to create Supabase account", error);
     return NextResponse.json({ error: "暂时无法创建账号" }, { status: 500 });
   }
 }

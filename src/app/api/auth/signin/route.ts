@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { authenticateLocalAccount, createSession } from "@/lib/auth";
+import { authenticateAccount } from "@/lib/auth";
 import { isSameOriginRequest, safeCallbackPath } from "@/lib/request-security";
 
 const signinSchema = z.object({
@@ -23,12 +23,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const userId = await authenticateLocalAccount(parsed.data.email, parsed.data.password);
+  const authenticated = await authenticateAccount(parsed.data.email, parsed.data.password);
 
-  if (!userId) {
+  if (!authenticated) {
     return NextResponse.json({ error: "邮箱或密码不正确" }, { status: 401 });
   }
 
-  await createSession(userId);
   return NextResponse.json({ redirectTo: safeCallbackPath(parsed.data.callbackUrl) });
 }

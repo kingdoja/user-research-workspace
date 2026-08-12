@@ -42,7 +42,7 @@ export function SignUpForm({ callbackUrl = "/newstudy" }: { callbackUrl?: string
   return (
     <form className="sign-in-card" onSubmit={handleSubmit}>
       <h1>注册</h1>
-      <p>创建本地 atypica.AI 研究工作区</p>
+      <p>创建 atypica.AI 研究工作区</p>
       <label>
         <span className="sr-only">姓名</span>
         <input name="name" required minLength={2} placeholder="您的姓名" autoComplete="name" />

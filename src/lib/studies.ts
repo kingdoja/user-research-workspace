@@ -7,7 +7,9 @@ import {
   generateProviderStudyPlan,
   getOpenAIProviderStatus,
   type ResearchCitation,
+  type ResearchProgressEvent,
   type ResearchReport,
+  type SyntheticPanelResearch,
 } from "@/lib/openai-provider";
 
 export type StudyMethod = "Interview Chat" | "Discussion Chat" | "Scout Agent" | "Fast Insight";
@@ -50,6 +52,32 @@ export type StudyDetail = StudySummary & {
   runProvider: string | null;
   runModel: string | null;
   runError: string | null;
+  runId: string | null;
+  events: Array<{
+    id: string;
+    runId: string | null;
+    type: string;
+    payload: Record<string, unknown>;
+    createdAt: string;
+  }>;
+  personas: Array<{
+    publicId: string;
+    name: string;
+    archetype: string;
+    profile: SyntheticPanelResearch["personas"][number];
+  }>;
+  panel: {
+    publicId: string;
+    title: string;
+    description: string;
+  } | null;
+  interviews: Array<{
+    personaPublicId: string;
+    personaName: string;
+    batch: number;
+    objective: string;
+    content: SyntheticPanelResearch["interviews"][number];
+  }>;
   report: {
     publicId: string;
     title: string;
@@ -58,6 +86,20 @@ export type StudyDetail = StudySummary & {
     generatedAt: string;
   } | null;
 };
+
+async function appendStudyEvent(
+  database: Awaited<ReturnType<typeof getDatabase>>,
+  studyId: string,
+  runId: string | null,
+  type: string,
+  payload: Record<string, unknown> = {},
+) {
+  await database.query(
+    `insert into study_events (study_id, run_id, event_type, payload)
+     values ($1, $2, $3, $4::jsonb)`,
+    [studyId, runId, type, JSON.stringify(payload)],
+  );
+}
 
 const titlePattern = /[。！？.!?\n]/;
 

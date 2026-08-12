@@ -8,6 +8,14 @@ export type PublicWebSource = {
   excerpt: string;
 };
 
+export type PublicWebSearchMetadata = {
+  primaryProvider: "tavily" | "bing";
+  fallbackUsed: boolean;
+  seedSourceCount: number;
+  searchSourceCount: number;
+  finalSourceCount: number;
+};
+
 const SEARCH_RESULT_LIMIT = 12;
 const PAGE_TEXT_LIMIT = 5000;
 const RESPONSE_BYTE_LIMIT = 1_500_000;
@@ -307,12 +315,30 @@ export async function collectPublicWebSources(queries: string[], seedUrls: strin
     const tavilySources = deduplicateSources([seedSources, ...tavilyGroups]);
 
     if (tavilySources.length >= 6) {
-      return tavilySources;
+      return {
+        sources: tavilySources,
+        metadata: {
+          primaryProvider: "tavily",
+          fallbackUsed: false,
+          seedSourceCount: seedSources.length,
+          searchSourceCount: Math.max(0, tavilySources.length - seedSources.length),
+          finalSourceCount: tavilySources.length,
+        } satisfies PublicWebSearchMetadata,
+      };
     }
   }
 
   if (seedSources.length >= 6) {
-    return seedSources;
+    return {
+      sources: seedSources,
+      metadata: {
+        primaryProvider: tavilyApiKey ? "tavily" : "bing",
+        fallbackUsed: false,
+        seedSourceCount: seedSources.length,
+        searchSourceCount: 0,
+        finalSourceCount: seedSources.length,
+      } satisfies PublicWebSearchMetadata,
+    };
   }
 
   const searchGroups = await Promise.all(queries.map(async (query) => {
@@ -336,5 +362,14 @@ export async function collectPublicWebSources(queries: string[], seedUrls: strin
     }
   }));
 
-  return enriched;
+  return {
+    sources: enriched,
+    metadata: {
+      primaryProvider: tavilyApiKey ? "tavily" : "bing",
+      fallbackUsed: Boolean(tavilyApiKey),
+      seedSourceCount: seedSources.length,
+      searchSourceCount: Math.max(0, enriched.length - seedSources.length),
+      finalSourceCount: enriched.length,
+    } satisfies PublicWebSearchMetadata,
+  };
 }

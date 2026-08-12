@@ -6,7 +6,7 @@ import { collectPublicWebSources } from "@/lib/public-web-search";
 
 const DEFAULT_MODEL = "gpt-5.6-terra";
 const PLAN_PROMPT_VERSION = "study-plan-v1";
-const REPORT_PROMPT_VERSION = "public-web-research-v2";
+const REPORT_PROMPT_VERSION = "synthetic-panel-research-v1";
 
 const searchSourcePlanSchema = z.object({
   queries: z.array(z.string().min(3)).min(3),
@@ -64,6 +64,46 @@ const reportSchema = z.object({
   })).min(3),
   limitations: z.array(z.string().min(10)).min(1),
   nextQuestions: z.array(z.string().min(10)).min(2),
+});
+
+const personaSchema = z.object({
+  name: z.string().min(2),
+  archetype: z.string().min(2),
+  age: z.number().int().min(18).max(75),
+  city: z.string().min(2),
+  occupation: z.string().min(2),
+  commute: z.string().min(5),
+  budget: z.string().min(2),
+  currentSituation: z.string().min(10),
+  goals: z.array(z.string().min(4)).min(2).max(4),
+  painPoints: z.array(z.string().min(4)).min(2).max(4),
+  decisionStyle: z.string().min(8),
+  tags: z.array(z.string().min(2)).min(3).max(5),
+});
+
+const panelResearchSchema = z.object({
+  panel: z.object({
+    title: z.string().min(4),
+    description: z.string().min(20),
+  }),
+  personas: z.array(personaSchema).min(6).max(8),
+  interviews: z.array(z.object({
+    personaName: z.string().min(2),
+    batch: z.number().int().min(1).max(2),
+    objective: z.string().min(10),
+    summary: z.string().min(40),
+    quotes: z.array(z.string().min(10)).min(2).max(4),
+    insights: z.array(z.string().min(10)).min(2).max(4),
+  })).min(6).max(8),
+  validation: z.object({
+    directions: z.array(z.object({
+      title: z.string().min(4),
+      appeal: z.string().min(20),
+      resistance: z.string().min(20),
+      verdict: z.enum(["strong", "mixed", "weak"]),
+    })).min(2).max(4),
+    summary: z.string().min(40),
+  }),
 });
 
 const planJsonSchema = {
@@ -157,6 +197,89 @@ const reportJsonSchema = {
   additionalProperties: false,
 } as const;
 
+const panelResearchJsonSchema = {
+  type: "object",
+  properties: {
+    panel: {
+      type: "object",
+      properties: {
+        title: { type: "string", minLength: 4, maxLength: 80 },
+        description: { type: "string", minLength: 20, maxLength: 500 },
+      },
+      required: ["title", "description"],
+      additionalProperties: false,
+    },
+    personas: {
+      type: "array",
+      minItems: 6,
+      maxItems: 8,
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string", minLength: 2, maxLength: 40 },
+          archetype: { type: "string", minLength: 2, maxLength: 80 },
+          age: { type: "integer", minimum: 18, maximum: 75 },
+          city: { type: "string", minLength: 2, maxLength: 40 },
+          occupation: { type: "string", minLength: 2, maxLength: 80 },
+          commute: { type: "string", minLength: 5, maxLength: 240 },
+          budget: { type: "string", minLength: 2, maxLength: 80 },
+          currentSituation: { type: "string", minLength: 10, maxLength: 500 },
+          goals: { type: "array", minItems: 2, maxItems: 4, items: { type: "string", minLength: 4, maxLength: 160 } },
+          painPoints: { type: "array", minItems: 2, maxItems: 4, items: { type: "string", minLength: 4, maxLength: 160 } },
+          decisionStyle: { type: "string", minLength: 8, maxLength: 300 },
+          tags: { type: "array", minItems: 3, maxItems: 5, items: { type: "string", minLength: 2, maxLength: 30 } },
+        },
+        required: ["name", "archetype", "age", "city", "occupation", "commute", "budget", "currentSituation", "goals", "painPoints", "decisionStyle", "tags"],
+        additionalProperties: false,
+      },
+    },
+    interviews: {
+      type: "array",
+      minItems: 6,
+      maxItems: 8,
+      items: {
+        type: "object",
+        properties: {
+          personaName: { type: "string", minLength: 2, maxLength: 40 },
+          batch: { type: "integer", minimum: 1, maximum: 2 },
+          objective: { type: "string", minLength: 10, maxLength: 300 },
+          summary: { type: "string", minLength: 40, maxLength: 1200 },
+          quotes: { type: "array", minItems: 2, maxItems: 4, items: { type: "string", minLength: 10, maxLength: 300 } },
+          insights: { type: "array", minItems: 2, maxItems: 4, items: { type: "string", minLength: 10, maxLength: 300 } },
+        },
+        required: ["personaName", "batch", "objective", "summary", "quotes", "insights"],
+        additionalProperties: false,
+      },
+    },
+    validation: {
+      type: "object",
+      properties: {
+        directions: {
+          type: "array",
+          minItems: 2,
+          maxItems: 4,
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string", minLength: 4, maxLength: 100 },
+              appeal: { type: "string", minLength: 20, maxLength: 500 },
+              resistance: { type: "string", minLength: 20, maxLength: 500 },
+              verdict: { type: "string", enum: ["strong", "mixed", "weak"] },
+            },
+            required: ["title", "appeal", "resistance", "verdict"],
+            additionalProperties: false,
+          },
+        },
+        summary: { type: "string", minLength: 40, maxLength: 1000 },
+      },
+      required: ["directions", "summary"],
+      additionalProperties: false,
+    },
+  },
+  required: ["panel", "personas", "interviews", "validation"],
+  additionalProperties: false,
+} as const;
+
 export type ProviderStudyPlan = z.infer<typeof planSchema> & {
   source: "openai";
   responseId: string;
@@ -165,6 +288,12 @@ export type ProviderStudyPlan = z.infer<typeof planSchema> & {
 };
 
 export type ResearchReport = z.infer<typeof reportSchema>;
+export type SyntheticPanelResearch = z.infer<typeof panelResearchSchema>;
+
+export type ResearchProgressEvent = {
+  type: string;
+  payload?: Record<string, unknown>;
+};
 
 export type ResearchCitation = {
   title: string;
@@ -173,6 +302,7 @@ export type ResearchCitation = {
 
 export type ProviderResearchReport = {
   report: ResearchReport;
+  panelResearch: SyntheticPanelResearch;
   citations: ResearchCitation[];
   responseId: string;
   model: string;
@@ -333,8 +463,13 @@ export async function generateProviderResearchReport(input: {
   audience: string;
   userPublicId: string;
   studyPublicId: string;
+  onProgress?: (event: ResearchProgressEvent) => Promise<void> | void;
 }): Promise<ProviderResearchReport> {
+  const emit = async (type: string, payload: Record<string, unknown> = {}) => {
+    await input.onProgress?.({ type, payload });
+  };
   const model = getResearchModel();
+  await emit("trend.scan.started", { focus: "category_and_charging" });
   const queryResponse = await getClient().responses.create({
     model,
     reasoning: { effort: "low" },
@@ -365,15 +500,100 @@ export async function generateProviderResearchReport(input: {
   });
   const sourcePlan = parseOutput(queryResponse.output_text, searchSourcePlanSchema);
   const queries = sourcePlan.queries.slice(0, 5);
-  const sources = await collectPublicWebSources(queries, sourcePlan.seedUrls);
+  await emit("search.plan.completed", { queryCount: queries.length, queries });
+  const sourceResult = await collectPublicWebSources(queries, sourcePlan.seedUrls);
+  const sources = sourceResult.sources;
 
   if (sources.length < 3) {
     throw new Error("PUBLIC_WEB_SOURCES_INSUFFICIENT");
   }
 
+  const sourceSummary = sources.map(({ title, url }) => ({ title, url }));
+  const firstThird = Math.max(1, Math.ceil(sources.length / 3));
+  const secondThird = Math.max(firstThird + 1, Math.ceil(sources.length * 2 / 3));
+  await emit("trend.scan.completed", {
+    focus: "category_and_charging",
+    sourceCount: firstThird,
+    sources: sourceSummary.slice(0, firstThird),
+    provider: sourceResult.metadata.primaryProvider,
+  });
+  await emit("upgrade.scan.completed", {
+    focus: "replacement_and_brand_upgrade",
+    sourceCount: secondThird - firstThird,
+    sources: sourceSummary.slice(firstThird, secondThird),
+  });
+  await emit("policy.research.completed", {
+    focus: "policy_and_industry_context",
+    sourceCount: sources.length - secondThird,
+    sources: sourceSummary.slice(secondThird),
+    fallbackUsed: sourceResult.metadata.fallbackUsed,
+  });
+
   const evidencePacket = sources.map((source, index) => (
     `[S${index + 1}] ${source.title}\nURL: ${source.url}\n公开网页摘录：${source.excerpt}`
   )).join("\n\n");
+  await emit("personas.generate.started", { targetCount: 8 });
+  const panelResponse = await getClient().responses.create({
+    model,
+    reasoning: { effort: "medium" },
+    safety_identifier: safetyIdentifier(input.userPublicId),
+    store: true,
+    metadata: {
+      surface: "synthetic_persona_panel",
+      prompt_version: REPORT_PROMPT_VERSION,
+      study_id: input.studyPublicId,
+    },
+    instructions: [
+      "你是研究模拟系统。仅根据 Brief 与公开网页证据构建 6 到 8 个差异化的 AI 合成 Persona，并进行透明标注的模拟访谈。",
+      "Persona 不是现实中的真人，quotes 是基于 Persona 约束生成的模拟回答，不得写成真实受访者原话或统计代表性证据。",
+      "覆盖不同城市、年龄、职业、预算、决策风格与使用情境，避免刻板印象和仅改名字的重复画像。",
+      "将访谈分为两批：第一批关注决策路径，第二批关注体验、焦虑或关键使用问题。每个 Persona 只出现一次。",
+      "validation 用 Panel 的模拟回答评估 2 到 4 个产品或策略方向，并明确吸引力与阻力。输出简体中文。",
+    ].join("\n"),
+    input: [
+      `研究 Brief：${input.brief}`,
+      `研究框架：${input.framework}`,
+      `目标受众：${input.audience}`,
+      `计划方法：${input.methods.join("、") || "AI 合成 Persona 模拟"}`,
+      `公开网页证据包：\n${evidencePacket}`,
+    ].join("\n\n"),
+    text: {
+      format: {
+        type: "json_schema",
+        name: "synthetic_panel_research",
+        strict: true,
+        schema: panelResearchJsonSchema,
+      },
+    },
+  });
+  const panelResearch = parseOutput(panelResponse.output_text, panelResearchSchema);
+  await emit("personas.generated", {
+    count: panelResearch.personas.length,
+    names: panelResearch.personas.map((persona) => persona.name),
+  });
+  await emit("panel.created", {
+    title: panelResearch.panel.title,
+    count: panelResearch.personas.length,
+  });
+  const batchOne = panelResearch.interviews.filter((interview) => interview.batch === 1);
+  const batchTwo = panelResearch.interviews.filter((interview) => interview.batch === 2);
+  await emit("interviews.batch1.completed", {
+    participantCount: batchOne.length,
+    participants: batchOne.map((interview) => interview.personaName),
+  });
+  await emit("interviews.batch2.completed", {
+    participantCount: batchTwo.length,
+    participants: batchTwo.map((interview) => interview.personaName),
+  });
+  await emit("validation.completed", {
+    directionCount: panelResearch.validation.directions.length,
+    directions: panelResearch.validation.directions.map(({ title, verdict }) => ({ title, verdict })),
+  });
+  await emit("report.synthesis.started", {
+    evidenceCharacters: evidencePacket.length,
+    personaCount: panelResearch.personas.length,
+    interviewCount: panelResearch.interviews.length,
+  });
   const response = await getClient().responses.create({
     model,
     reasoning: { effort: "medium" },
@@ -386,7 +606,7 @@ export async function generateProviderResearchReport(input: {
     },
     instructions: [
       "你是严谨的商业研究员。只根据输入中的公开网页证据包生成可审计的中文报告。",
-      "清楚区分公开来源事实、分析推断和建议。不要声称完成了真人访谈、焦点小组、私域社媒抓取或 Persona 模拟。",
+      "清楚区分公开来源事实、AI 合成 Persona 模拟、分析推断和建议。不得把模拟访谈写成真人研究或具有统计代表性的证据。",
       "每条 finding.evidence 都要引用对应的 [S编号]；证据不足时必须写入 limitations，不得补造来源或数字。",
       "没有买方侧直接证据时，不得在标题、洞察或总结中使用“最关注、首要、普遍、主要偏好”等排序断言；规范性建议应使用“应当、可作为、建议”措辞，并明确它不是已验证的市场事实。",
       "搜索摘要可能不完整，涉及采购或合规决策时应建议复核原始页面。优先采用近期、权威且彼此独立的来源。",
@@ -399,6 +619,7 @@ export async function generateProviderResearchReport(input: {
       `目标受众：${input.audience}`,
       `实际检索词：${queries.join("；")}`,
       `公开网页证据包：\n${evidencePacket}`,
+      `AI 合成 Panel 模拟：\n${JSON.stringify(panelResearch)}`,
       "请给出关键发现、证据、业务含义、行动建议、局限与下一步问题。",
     ].join("\n\n"),
     text: {
@@ -413,6 +634,7 @@ export async function generateProviderResearchReport(input: {
 
   return {
     report: parseOutput(response.output_text, reportSchema),
+    panelResearch,
     citations: sources.map(({ title, url }) => ({ title, url })),
     responseId: response.id,
     model: response.model,
