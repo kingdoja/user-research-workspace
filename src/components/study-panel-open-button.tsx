@@ -1,7 +1,8 @@
 "use client";
 
 import { ArrowUpRight } from "lucide-react";
+import Link from "next/link";
 
-export function StudyPanelOpenButton() {
-  return <button type="button" className="agent-panel-open" onClick={() => window.dispatchEvent(new Event("atypica:panel"))}>查看 Panel<ArrowUpRight size={14} /></button>;
+export function StudyPanelOpenButton({ publicId }: { publicId: string }) {
+  return <Link className="agent-panel-open" href={`/panel/${publicId}`}>查看 Panel<ArrowUpRight size={14} /></Link>;
 }

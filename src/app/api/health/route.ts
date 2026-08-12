@@ -11,10 +11,12 @@ export async function GET() {
     service: "atypica-rebuild",
     phase: "provider-integration",
     providers: {
-      openai: {
+      model: {
+        name: provider.providerName,
         configured: provider.configured,
         planModel: provider.planModel,
         researchModel: provider.researchModel,
+        protocol: provider.protocol,
       },
       search,
     },

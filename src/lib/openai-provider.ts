@@ -8,6 +8,7 @@ const DEFAULT_MODEL = "gpt-5.6-terra";
 const PLAN_PROMPT_VERSION = "study-plan-v1";
 const REPORT_PROMPT_VERSION = "synthetic-panel-research-v1";
 const FOLLOWUP_PROMPT_VERSION = "report-followup-v1";
+const INTERVIEW_PROMPT_VERSION = "synthetic-interview-v1";
 
 const searchSourcePlanSchema = z.object({
   queries: z.array(z.string().min(3)).min(3),
@@ -72,6 +73,67 @@ const followupAnswerSchema = z.object({
   citations: z.array(z.string().url()).max(5),
   caveat: z.string().min(10),
 });
+
+const syntheticInterviewSchema = z.object({
+  sessions: z.array(z.object({
+    personaPublicId: z.string().min(8),
+    summary: z.string().min(40),
+    insights: z.array(z.string().min(10)).min(2).max(5),
+    quotes: z.array(z.string().min(10)).min(2).max(4),
+    messages: z.array(z.object({
+      role: z.enum(["interviewer", "persona"]),
+      content: z.string().min(8),
+    })).min(6).max(12),
+  })).min(1).max(8),
+});
+
+const syntheticInterviewJsonSchema = {
+  type: "object",
+  properties: {
+    sessions: {
+      type: "array",
+      minItems: 1,
+      maxItems: 8,
+      items: {
+        type: "object",
+        properties: {
+          personaPublicId: { type: "string", minLength: 8, maxLength: 120 },
+          summary: { type: "string", minLength: 40, maxLength: 1600 },
+          insights: {
+            type: "array",
+            minItems: 2,
+            maxItems: 5,
+            items: { type: "string", minLength: 10, maxLength: 500 },
+          },
+          quotes: {
+            type: "array",
+            minItems: 2,
+            maxItems: 4,
+            items: { type: "string", minLength: 10, maxLength: 500 },
+          },
+          messages: {
+            type: "array",
+            minItems: 6,
+            maxItems: 12,
+            items: {
+              type: "object",
+              properties: {
+                role: { type: "string", enum: ["interviewer", "persona"] },
+                content: { type: "string", minLength: 8, maxLength: 1200 },
+              },
+              required: ["role", "content"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["personaPublicId", "summary", "insights", "quotes", "messages"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["sessions"],
+  additionalProperties: false,
+} as const;
 
 const followupAnswerJsonSchema = {
   type: "object",
@@ -351,7 +413,34 @@ export type ProviderFollowupAnswer = z.infer<typeof followupAnswerSchema> & {
   promptVersion: string;
 };
 
+export type SyntheticInterviewResult = z.infer<typeof syntheticInterviewSchema>;
+
 let client: OpenAI | null = null;
+
+type StructuredResponseRequest = {
+  model: string;
+  reasoning?: { effort: "low" | "medium" | "high" };
+  safety_identifier?: string;
+  store?: boolean;
+  metadata?: Record<string, string>;
+  instructions: string;
+  input: string;
+  text: {
+    format: {
+      type: "json_schema";
+      name: string;
+      strict: boolean;
+      schema: Record<string, unknown>;
+    };
+  };
+};
+
+type StructuredResponse = {
+  id: string;
+  model: string;
+  output_text: string;
+  usage: unknown;
+};
 
 function getClient() {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -373,6 +462,105 @@ function getPlanModel() {
 
 function getResearchModel() {
   return process.env.OPENAI_RESEARCH_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+}
+
+function getApiProtocol() {
+  return process.env.OPENAI_API_PROTOCOL?.trim() === "chat_completions"
+    ? "chat_completions" as const
+    : "responses" as const;
+}
+
+async function createStructuredResponse(
+  request: StructuredResponseRequest,
+  options?: { timeout?: number; maxRetries?: number },
+): Promise<StructuredResponse> {
+  if (getApiProtocol() === "chat_completions") {
+    const completion = await getClient().chat.completions.create({
+      model: request.model,
+      messages: [
+        { role: "system", content: request.instructions },
+        { role: "user", content: request.input },
+      ],
+      reasoning_effort: request.reasoning?.effort,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: request.text.format.name,
+          strict: request.text.format.strict,
+          schema: request.text.format.schema,
+        },
+      },
+    }, options);
+    const rawCompletion = completion as unknown;
+    if (typeof rawCompletion === "string") {
+      const normalized = rawCompletion.trim().replace(/^```(?:json)?\s*|\s*```$/g, "");
+      if (normalized.startsWith("{") || normalized.startsWith("[")) {
+        const parsed = JSON.parse(normalized) as Record<string, unknown>;
+        const parsedChoices = Array.isArray(parsed.choices)
+          ? parsed.choices as Array<{ message?: { content?: unknown } }>
+          : [];
+        const parsedContent = parsedChoices[0]?.message?.content;
+        if (typeof parsedContent === "string" && parsedContent.trim()) {
+          return {
+            id: typeof parsed.id === "string" ? parsed.id : `chat_${Date.now()}`,
+            model: typeof parsed.model === "string" ? parsed.model : request.model,
+            output_text: parsedContent.trim().replace(/^```(?:json)?\s*|\s*```$/g, ""),
+            usage: parsed.usage ?? null,
+          };
+        }
+        const nestedOutput = typeof parsed.output === "string"
+          ? parsed.output
+          : typeof parsed.data === "string"
+            ? parsed.data
+            : null;
+        if (nestedOutput) {
+          return {
+            id: `chat_${Date.now()}`,
+            model: request.model,
+            output_text: nestedOutput.trim().replace(/^```(?:json)?\s*|\s*```$/g, ""),
+            usage: null,
+          };
+        }
+        const required = Array.isArray(request.text.format.schema.required)
+          ? request.text.format.schema.required.filter((key): key is string => typeof key === "string")
+          : [];
+        if (required.some((key) => !(key in parsed))) {
+          throw new Error(`OPENAI_GATEWAY_SCHEMA_KEYS:${Object.keys(parsed).slice(0, 12).join(",") || "empty"}`);
+        }
+        return {
+          id: `chat_${Date.now()}`,
+          model: request.model,
+          output_text: normalized,
+          usage: null,
+        };
+      }
+      throw new Error(`OPENAI_TEXT_RESPONSE:${normalized.slice(0, 240)}`);
+    }
+    const gatewayResult = completion as typeof completion & {
+      code?: number;
+      code_msg?: string;
+      code_reason?: string;
+    };
+    const outputText = gatewayResult.choices?.[0]?.message.content;
+    if (!outputText && gatewayResult.code && gatewayResult.code !== 200) {
+      throw new Error(gatewayResult.code_reason || gatewayResult.code_msg || `UPSTREAM_${gatewayResult.code}`);
+    }
+    if (!outputText) throw new Error(`OPENAI_EMPTY_RESPONSE:${Object.keys(gatewayResult).join(",")}`);
+    return {
+      id: completion.id,
+      model: completion.model,
+      output_text: outputText,
+      usage: completion.usage,
+    };
+  }
+
+  const response = await getClient().responses.create(request, options);
+  return {
+    id: response.id,
+    model: response.model,
+    output_text: response.output_text,
+    usage: response.usage,
+  };
 }
 
 function safetyIdentifier(userPublicId: string) {
@@ -399,9 +587,11 @@ function parseOutput<T>(outputText: string, schema: z.ZodType<T>) {
 
 export function getOpenAIProviderStatus() {
   return {
+    providerName: process.env.OPENAI_PROVIDER_NAME?.trim() || "openai",
     configured: Boolean(process.env.OPENAI_API_KEY?.trim()),
     planModel: getPlanModel(),
     researchModel: getResearchModel(),
+    protocol: getApiProtocol(),
   };
 }
 
@@ -433,7 +623,7 @@ export function describeOpenAIError(error: unknown) {
     };
   }
 
-  if (error instanceof Error && error.message === "OPENAI_INVALID_SCHEMA") {
+  if (error instanceof Error && error.message.startsWith("OPENAI_INVALID_SCHEMA")) {
     return {
       message: "模型返回的研究结构不完整，请重新执行。",
       status: null,
@@ -447,6 +637,19 @@ export function describeOpenAIError(error: unknown) {
       message: "模型返回的内容无法解析，请重新执行。",
       status: null,
       code: error.message,
+      requestId: null,
+    };
+  }
+
+  if (
+    error instanceof Error
+    && ["OPENAI_TEXT_RESPONSE", "OPENAI_GATEWAY_SCHEMA_KEYS", "OPENAI_EMPTY_RESPONSE"]
+      .some((prefix) => error.message.startsWith(prefix))
+  ) {
+    return {
+      message: "上游网关返回了不兼容的响应格式，请重试或切换网关。",
+      status: null,
+      code: "UPSTREAM_INCOMPATIBLE_RESPONSE",
       requestId: null,
     };
   }
@@ -474,7 +677,7 @@ export async function generateProviderStudyPlan(
   clarificationContext?: string,
 ): Promise<ProviderStudyPlan> {
   const model = getPlanModel();
-  const response = await getClient().responses.create({
+  const response = await createStructuredResponse({
     model,
     reasoning: { effort: "low" },
     safety_identifier: safetyIdentifier(userPublicId),
@@ -512,6 +715,64 @@ export async function generateProviderStudyPlan(
   };
 }
 
+export async function generateProviderSyntheticInterviews(input: {
+  title: string;
+  objective: string;
+  personas: Array<{
+    publicId: string;
+    name: string;
+    archetype: string;
+    profile: SyntheticPanelResearch["personas"][number];
+  }>;
+  userPublicId: string;
+}) {
+  const model = getResearchModel();
+  const response = await createStructuredResponse({
+    model,
+    reasoning: { effort: "medium" },
+    safety_identifier: safetyIdentifier(input.userPublicId),
+    store: true,
+    metadata: { surface: "synthetic_interview", prompt_version: INTERVIEW_PROMPT_VERSION },
+    instructions: [
+      "你是专业的用户研究访谈员，负责基于结构化 AI Persona 进行假设探索访谈。",
+      "为每个输入 Persona 生成一场独立的中文模拟访谈，逐轮交替使用 interviewer 和 persona 角色，第一轮必须是 interviewer。",
+      "问题应围绕访谈目标，由浅入深并包含追问；回答必须符合 Persona 的背景、目标、痛点和决策方式，不得声称是真人经历或真实招募样本。",
+      "summary、insights 和 quotes 只能概括本次合成对话。不得推断人群占比、统计显著性或市场普遍性。",
+      "personaPublicId 必须逐字使用输入提供的 ID，每个 Persona 恰好生成一个 session。",
+    ].join("\n"),
+    input: [
+      `访谈项目：${input.title}`,
+      `访谈目标：${input.objective}`,
+      `AI Persona：\n${JSON.stringify(input.personas)}`,
+    ].join("\n\n"),
+    text: {
+      format: {
+        type: "json_schema",
+        name: "synthetic_interview_sessions",
+        strict: true,
+        schema: syntheticInterviewJsonSchema,
+      },
+    },
+  });
+  const result = parseOutput(response.output_text, syntheticInterviewSchema);
+  const expectedIds = new Set(input.personas.map((persona) => persona.publicId));
+  const resultIds = new Set(result.sessions.map((session) => session.personaPublicId));
+  const validIds = result.sessions.length === input.personas.length
+    && resultIds.size === expectedIds.size
+    && [...expectedIds].every((publicId) => resultIds.has(publicId));
+  const validTurns = result.sessions.every((session) => (
+    session.messages[0]?.role === "interviewer"
+    && session.messages.every((message, index) => index === 0 || message.role !== session.messages[index - 1].role)
+  ));
+  if (!validIds || !validTurns) throw new Error("OPENAI_INVALID_SCHEMA");
+  return {
+    ...result,
+    responseId: response.id,
+    model: response.model,
+    promptVersion: INTERVIEW_PROMPT_VERSION,
+  };
+}
+
 export async function generateProviderFollowupAnswer(input: {
   question: string;
   report: ResearchReport;
@@ -522,7 +783,7 @@ export async function generateProviderFollowupAnswer(input: {
 }): Promise<ProviderFollowupAnswer> {
   const model = getResearchModel();
   const allowedUrls = new Set(input.citations.map((citation) => citation.url));
-  const response = await getClient().responses.create({
+  const response = await createStructuredResponse({
     model,
     reasoning: { effort: "low" },
     safety_identifier: safetyIdentifier(input.userPublicId),
@@ -579,7 +840,7 @@ export async function generateProviderResearchReport(input: {
   };
   const model = getResearchModel();
   await emit("trend.scan.started", { focus: "category_and_charging" });
-  const queryResponse = await getClient().responses.create({
+  const queryResponse = await createStructuredResponse({
     model,
     reasoning: { effort: "low" },
     safety_identifier: safetyIdentifier(input.userPublicId),
@@ -653,7 +914,7 @@ export async function generateProviderResearchReport(input: {
   const panelEvidencePacket = sources.map((source, index) => (
     `[S${index + 1}] ${source.title}\n${source.excerpt.slice(0, 1200)}`
   )).join("\n\n");
-  const panelResponse = await getClient().responses.create({
+  const panelResponse = await createStructuredResponse({
     model,
     reasoning: { effort: "medium" },
     safety_identifier: safetyIdentifier(input.userPublicId),
@@ -777,7 +1038,7 @@ export async function generateProviderResearchReport(input: {
     personaCount: panelResearch.personas.length,
     interviewCount: panelResearch.interviews.length,
   });
-  const response = await getClient().responses.create({
+  const response = await createStructuredResponse({
     model,
     reasoning: { effort: "medium" },
     safety_identifier: safetyIdentifier(input.userPublicId),

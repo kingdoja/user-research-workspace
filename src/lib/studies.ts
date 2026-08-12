@@ -138,6 +138,54 @@ export type SharedStudyReport = {
   interviews: StudyDetail["interviews"];
 };
 
+export type PanelDetail = {
+  publicId: string;
+  title: string;
+  description: string;
+  createdAt: string;
+  sourceStudy: {
+    publicId: string;
+    title: string;
+    brief: string;
+  };
+  personas: StudyDetail["personas"];
+  interviews: StudyDetail["interviews"];
+  projects: StudySummary[];
+};
+
+export type PersonaPanelUsage = {
+  publicId: string;
+  title: string;
+};
+
+export type PersonaLibraryItem = StudyDetail["personas"][number] & {
+  source: "generated" | "manual";
+  visibility: "private" | "workspace";
+  createdAt: string;
+  updatedAt: string;
+  sourceStudy: { publicId: string; title: string } | null;
+  panels: PersonaPanelUsage[];
+  interviewCount: number;
+  canEdit: boolean;
+};
+
+export type PersonaInput = {
+  name: string;
+  archetype: string;
+  age: number;
+  city: string;
+  occupation: string;
+  commute: string;
+  budget: string;
+  currentSituation: string;
+  goals: string[];
+  painPoints: string[];
+  decisionStyle: string;
+  tags: string[];
+  visibility: "private" | "workspace";
+  addToPanelPublicIds: string[];
+};
+
 async function appendStudyEvent(
   database: Awaited<ReturnType<typeof getDatabase>>,
   studyId: string,
@@ -282,7 +330,7 @@ export function derivePlan(brief: string) {
   };
 }
 
-export async function createStudy(viewer: Viewer, briefInput: string) {
+export async function createStudy(viewer: Viewer, briefInput: string, sourcePanelPublicId?: string) {
   const database = await getDatabase();
   const brief = briefInput.trim();
   const localPlan = {
@@ -298,11 +346,27 @@ export async function createStudy(viewer: Viewer, briefInput: string) {
   const title = createStudyTitle(brief);
 
   return database.transaction(async (transaction) => {
+    let sourcePanelId: string | null = null;
+
+    if (sourcePanelPublicId) {
+      const panelResult = await transaction.query<{ id: string }>(
+        `select study_panels.id::text as id
+         from study_panels
+         join studies on studies.id = study_panels.study_id
+         where study_panels.public_id = $1 and studies.workspace_id = $2
+         limit 1`,
+        [sourcePanelPublicId, viewer.workspaceId],
+      );
+
+      if (!panelResult.rows[0]) throw new Error("PANEL_NOT_FOUND");
+      sourcePanelId = panelResult.rows[0].id;
+    }
+
     const studyResult = await transaction.query<{ id: string }>(
       `insert into studies (
          public_id, workspace_id, created_by, title, brief, study_type, status,
-         current_stage, estimated_tokens
-       ) values ($1, $2, $3, $4, $5, $6, 'planning', 'clarification', $7)
+         current_stage, estimated_tokens, source_panel_id
+       ) values ($1, $2, $3, $4, $5, $6, 'planning', 'clarification', $7, $8)
        returning id::text as id`,
       [
         publicId,
@@ -312,6 +376,7 @@ export async function createStudy(viewer: Viewer, briefInput: string) {
         brief,
         plan.studyType,
         plan.estimatedTokens,
+        sourcePanelId,
       ],
     );
     const studyId = studyResult.rows[0].id;
@@ -364,6 +429,309 @@ export async function createStudy(viewer: Viewer, briefInput: string) {
     );
 
     return publicId;
+  });
+}
+
+export async function getPanel(viewer: Viewer, publicId: string): Promise<PanelDetail | null> {
+  const database = await getDatabase();
+  const panelResult = await database.query<{
+    id: string;
+    public_id: string;
+    title: string;
+    description: string;
+    study_id: string;
+    study_public_id: string;
+    study_title: string;
+    study_brief: string;
+    created_at: string;
+  }>(
+    `select study_panels.id::text as id, study_panels.public_id, study_panels.title,
+            study_panels.description, study_panels.study_id::text as study_id,
+            studies.public_id as study_public_id, studies.title as study_title,
+            studies.brief as study_brief, study_panels.created_at::text as created_at
+     from study_panels
+     join studies on studies.id = study_panels.study_id
+     where study_panels.public_id = $1 and studies.workspace_id = $2
+     limit 1`,
+    [publicId, viewer.workspaceId],
+  );
+  const panel = panelResult.rows[0];
+  if (!panel) return null;
+
+  const [personasResult, interviewsResult, projectsResult] = await Promise.all([
+    database.query<{
+      public_id: string;
+      name: string;
+      archetype: string;
+      profile: SyntheticPanelResearch["personas"][number] | string;
+    }>(
+      `select study_personas.public_id, study_personas.name, study_personas.archetype, study_personas.profile
+       from study_panel_members
+       join study_personas on study_personas.id = study_panel_members.persona_id
+       where study_panel_members.panel_id = $1
+       order by study_panel_members.position asc`,
+      [panel.id],
+    ),
+    database.query<{
+      persona_public_id: string;
+      persona_name: string;
+      batch: number;
+      objective: string;
+      content: SyntheticPanelResearch["interviews"][number] | string;
+    }>(
+      `select study_personas.public_id as persona_public_id, study_personas.name as persona_name,
+              study_interviews.batch, study_interviews.objective, study_interviews.content
+       from study_interviews
+       join study_personas on study_personas.id = study_interviews.persona_id
+       join study_panel_members on study_panel_members.persona_id = study_personas.id
+       where study_panel_members.panel_id = $1
+       order by study_interviews.batch asc, study_interviews.created_at asc, study_interviews.id asc`,
+      [panel.id],
+    ),
+    database.query<{
+      public_id: string;
+      title: string;
+      status: string;
+      current_stage: string;
+      study_type: string;
+      methods: StudyMethod[] | string;
+      updated_at: string;
+    }>(
+      `select studies.public_id, studies.title, studies.status, studies.current_stage,
+              studies.study_type, coalesce(study_plans.methods, '[]'::jsonb) as methods,
+              studies.updated_at::text as updated_at
+       from studies
+       left join study_plans on study_plans.study_id = studies.id
+       where studies.id = $1 or studies.source_panel_id = $2
+       order by studies.updated_at desc
+       limit 20`,
+      [panel.study_id, panel.id],
+    ),
+  ]);
+
+  return {
+    publicId: panel.public_id,
+    title: panel.title,
+    description: panel.description,
+    createdAt: panel.created_at,
+    sourceStudy: {
+      publicId: panel.study_public_id,
+      title: panel.study_title,
+      brief: panel.study_brief,
+    },
+    personas: personasResult.rows.map((persona) => ({
+      publicId: persona.public_id,
+      name: persona.name,
+      archetype: persona.archetype,
+      profile: typeof persona.profile === "string" ? JSON.parse(persona.profile) : persona.profile,
+    })),
+    interviews: interviewsResult.rows.map((interview) => ({
+      personaPublicId: interview.persona_public_id,
+      personaName: interview.persona_name,
+      batch: interview.batch,
+      objective: interview.objective,
+      content: typeof interview.content === "string" ? JSON.parse(interview.content) : interview.content,
+    })),
+    projects: projectsResult.rows.map((project) => ({
+      publicId: project.public_id,
+      title: project.title,
+      status: project.status,
+      currentStage: project.current_stage,
+      studyType: project.study_type,
+      methods: typeof project.methods === "string" ? JSON.parse(project.methods) : project.methods,
+      updatedAt: project.updated_at,
+    })),
+  };
+}
+
+export async function listPersonas(viewer: Viewer): Promise<{
+  personas: PersonaLibraryItem[];
+  panels: PersonaPanelUsage[];
+}> {
+  const database = await getDatabase();
+  const [personasResult, panelsResult] = await Promise.all([
+    database.query<{
+      public_id: string;
+      name: string;
+      archetype: string;
+      profile: SyntheticPanelResearch["personas"][number] | string;
+      source: PersonaLibraryItem["source"];
+      visibility: PersonaLibraryItem["visibility"];
+      created_at: string;
+      updated_at: string;
+      created_by: string;
+      study_public_id: string | null;
+      study_title: string | null;
+      panels: PersonaPanelUsage[] | string;
+      interview_count: number;
+    }>(
+      `select persona.public_id, persona.name, persona.archetype, persona.profile,
+              persona.source, persona.visibility, persona.created_at::text as created_at,
+              persona.updated_at::text as updated_at, persona.created_by::text as created_by,
+              studies.public_id as study_public_id, studies.title as study_title,
+              coalesce(jsonb_agg(distinct jsonb_build_object(
+                'publicId', panels.public_id, 'title', panels.title
+              )) filter (where panels.id is not null), '[]'::jsonb) as panels,
+              (count(distinct interviews.id) + count(distinct workspace_interviews.id))::int as interview_count
+       from study_personas persona
+       left join studies on studies.id = persona.study_id
+       left join study_panel_members members on members.persona_id = persona.id
+       left join study_panels panels on panels.id = members.panel_id
+       left join study_interviews interviews on interviews.persona_id = persona.id
+       left join interview_sessions workspace_interviews on workspace_interviews.persona_id = persona.id
+       where persona.workspace_id = $1
+         and (persona.visibility = 'workspace' or persona.created_by = $2)
+       group by persona.id, studies.public_id, studies.title
+       order by persona.updated_at desc, persona.id desc`,
+      [viewer.workspaceId, viewer.userId],
+    ),
+    database.query<{ public_id: string; title: string }>(
+      `select study_panels.public_id, study_panels.title
+       from study_panels
+       join studies on studies.id = study_panels.study_id
+       where studies.workspace_id = $1
+       order by study_panels.created_at desc`,
+      [viewer.workspaceId],
+    ),
+  ]);
+
+  return {
+    personas: personasResult.rows.map((persona) => ({
+      publicId: persona.public_id,
+      name: persona.name,
+      archetype: persona.archetype,
+      profile: typeof persona.profile === "string" ? JSON.parse(persona.profile) : persona.profile,
+      source: persona.source,
+      visibility: persona.visibility,
+      createdAt: persona.created_at,
+      updatedAt: persona.updated_at,
+      sourceStudy: persona.study_public_id && persona.study_title
+        ? { publicId: persona.study_public_id, title: persona.study_title }
+        : null,
+      panels: typeof persona.panels === "string" ? JSON.parse(persona.panels) : persona.panels,
+      interviewCount: persona.interview_count,
+      canEdit: persona.created_by === viewer.userId || viewer.role === "owner" || viewer.role === "admin",
+    })),
+    panels: panelsResult.rows.map((panel) => ({ publicId: panel.public_id, title: panel.title })),
+  };
+}
+
+function toPersonaProfile(input: PersonaInput): SyntheticPanelResearch["personas"][number] {
+  return {
+    name: input.name.trim(),
+    archetype: input.archetype.trim(),
+    age: input.age,
+    city: input.city.trim(),
+    occupation: input.occupation.trim(),
+    commute: input.commute.trim(),
+    budget: input.budget.trim(),
+    currentSituation: input.currentSituation.trim(),
+    goals: input.goals.map((item) => item.trim()).filter(Boolean),
+    painPoints: input.painPoints.map((item) => item.trim()).filter(Boolean),
+    decisionStyle: input.decisionStyle.trim(),
+    tags: input.tags.map((item) => item.trim()).filter(Boolean),
+  };
+}
+
+async function resolvePanelIds(
+  queryable: Parameters<Parameters<Awaited<ReturnType<typeof getDatabase>>["transaction"]>[0]>[0],
+  viewer: Viewer,
+  publicIds: string[],
+) {
+  if (!publicIds.length) return [];
+  const result = await queryable.query<{ id: string }>(
+    `select study_panels.id::text as id
+     from study_panels
+     join studies on studies.id = study_panels.study_id
+     where studies.workspace_id = $1 and study_panels.public_id = any($2::text[])`,
+    [viewer.workspaceId, publicIds],
+  );
+  if (result.rows.length !== new Set(publicIds).size) throw new Error("PANEL_NOT_FOUND");
+  return result.rows.map((row) => row.id);
+}
+
+export async function createPersona(viewer: Viewer, input: PersonaInput) {
+  const database = await getDatabase();
+  const profile = toPersonaProfile(input);
+  const publicId = createPublicId("per");
+
+  await database.transaction(async (transaction) => {
+    const panelIds = await resolvePanelIds(transaction, viewer, input.addToPanelPublicIds);
+    const personaResult = await transaction.query<{ id: string }>(
+      `insert into study_personas (
+         public_id, workspace_id, created_by, name, archetype, profile, source, visibility
+       ) values ($1, $2, $3, $4, $5, $6::jsonb, 'manual', $7)
+       returning id::text as id`,
+      [publicId, viewer.workspaceId, viewer.userId, profile.name, profile.archetype, JSON.stringify(profile), input.visibility],
+    );
+    for (const panelId of panelIds) {
+      await transaction.query(
+        `insert into study_panel_members (panel_id, persona_id, position)
+         values ($1, $2, (select coalesce(max(position), -1) + 1 from study_panel_members where panel_id = $1))
+         on conflict (panel_id, persona_id) do nothing`,
+        [panelId, personaResult.rows[0].id],
+      );
+    }
+  });
+  return publicId;
+}
+
+export async function updatePersona(viewer: Viewer, publicId: string, input: PersonaInput) {
+  const database = await getDatabase();
+  const profile = toPersonaProfile(input);
+  return database.transaction(async (transaction) => {
+    const result = await transaction.query<{ id: string; created_by: string }>(
+      `select id::text as id, created_by::text as created_by
+       from study_personas where public_id = $1 and workspace_id = $2 for update`,
+      [publicId, viewer.workspaceId],
+    );
+    const persona = result.rows[0];
+    if (!persona) return "not_found" as const;
+    const canEdit = persona.created_by === viewer.userId || viewer.role === "owner" || viewer.role === "admin";
+    if (!canEdit) return "forbidden" as const;
+    const panelIds = await resolvePanelIds(transaction, viewer, input.addToPanelPublicIds);
+    await transaction.query(
+      `update study_personas set name = $2, archetype = $3, profile = $4::jsonb,
+              visibility = $5, updated_at = now() where id = $1`,
+      [persona.id, profile.name, profile.archetype, JSON.stringify(profile), input.visibility],
+    );
+    for (const panelId of panelIds) {
+      await transaction.query(
+        `insert into study_panel_members (panel_id, persona_id, position)
+         values ($1, $2, (select coalesce(max(position), -1) + 1 from study_panel_members where panel_id = $1))
+         on conflict (panel_id, persona_id) do nothing`,
+        [panelId, persona.id],
+      );
+    }
+    return "updated" as const;
+  });
+}
+
+export async function deletePersona(viewer: Viewer, publicId: string) {
+  const database = await getDatabase();
+  return database.transaction(async (transaction) => {
+    const result = await transaction.query<{ id: string; created_by: string }>(
+      `select id::text as id, created_by::text as created_by
+       from study_personas
+       where public_id = $1 and workspace_id = $2
+       for update`,
+      [publicId, viewer.workspaceId],
+    );
+    const persona = result.rows[0];
+    if (!persona) return "not_found" as const;
+    const canEdit = persona.created_by === viewer.userId || viewer.role === "owner" || viewer.role === "admin";
+    if (!canEdit) return "forbidden" as const;
+    const usageResult = await transaction.query<{ panel_count: number; interview_count: number }>(
+      `select
+         (select count(*)::int from study_panel_members where persona_id = $1) as panel_count,
+         ((select count(*) from study_interviews where persona_id = $1)
+          + (select count(*) from interview_sessions where persona_id = $1))::int as interview_count`,
+      [persona.id],
+    );
+    const usage = usageResult.rows[0];
+    if (usage.panel_count > 0 || usage.interview_count > 0) return "in_use" as const;
+    await transaction.query("delete from study_personas where id = $1", [persona.id]);
+    return "deleted" as const;
   });
 }
 
@@ -827,6 +1195,7 @@ export async function executeStudyRun(publicId: string, workspaceId: string) {
     methods: StudyMethod[] | string;
     persona_filters: StudyDetail["plan"]["personaFilters"] | string;
     user_public_id: string;
+    created_by: string;
     run_id: string | null;
     run_status: string | null;
   }>(
@@ -837,6 +1206,7 @@ export async function executeStudyRun(publicId: string, workspaceId: string) {
        study_plans.methods,
        study_plans.persona_filters,
        users.public_id as user_public_id,
+       studies.created_by::text as created_by,
        latest_run.id as run_id,
        latest_run.status as run_status
      from studies
@@ -867,17 +1237,17 @@ export async function executeStudyRun(publicId: string, workspaceId: string) {
          select 1 from study_events
          where study_id = $1 and event_type = 'provider.configuration_missing'
        )`,
-      [study.study_id, JSON.stringify({ provider: "openai", requiredVariable: "OPENAI_API_KEY" })],
+      [study.study_id, JSON.stringify({ provider: providerStatus.providerName, requiredVariable: "OPENAI_API_KEY" })],
     );
     return "provider_missing" as const;
   }
 
   const claim = await database.query<{ id: string }>(
     `update study_runs
-     set status = 'running', provider = 'openai', provider_model = $2, started_at = now(), error_message = null
+     set status = 'running', provider = $2, provider_model = $3, started_at = now(), error_message = null
      where id = $1 and status in ('awaiting_provider', 'queued')
      returning id::text as id`,
-    [study.run_id, providerStatus.researchModel],
+    [study.run_id, providerStatus.providerName, providerStatus.researchModel],
   );
 
   if (claim.rows.length === 0) {
@@ -891,7 +1261,7 @@ export async function executeStudyRun(publicId: string, workspaceId: string) {
   await database.query(
     `insert into study_events (study_id, run_id, event_type, payload)
      values ($1, $2, 'run.started', $3::jsonb)`,
-    [study.study_id, study.run_id, JSON.stringify({ provider: "openai", model: providerStatus.researchModel })],
+    [study.study_id, study.run_id, JSON.stringify({ provider: providerStatus.providerName, model: providerStatus.researchModel })],
   );
 
   const methods = typeof study.methods === "string" ? JSON.parse(study.methods) : study.methods;
@@ -920,12 +1290,13 @@ export async function executeStudyRun(publicId: string, workspaceId: string) {
 
       for (const persona of providerResult.panelResearch.personas) {
         const personaResult = await transaction.query<{ id: string }>(
-          `insert into study_personas (public_id, study_id, run_id, name, archetype, profile)
-           values ($1, $2, $3, $4, $5, $6::jsonb)
+          `insert into study_personas (
+             public_id, workspace_id, created_by, study_id, run_id, name, archetype, profile
+           ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
            returning id::text as id`,
           [
-            createPublicId("per"), study.study_id, study.run_id, persona.name,
-            persona.archetype, JSON.stringify(persona),
+            createPublicId("per"), workspaceId, study.created_by, study.study_id, study.run_id,
+            persona.name, persona.archetype, JSON.stringify(persona),
           ],
         );
         personaIdsByName.set(persona.name, personaResult.rows[0].id);
@@ -1006,7 +1377,7 @@ export async function executeStudyRun(publicId: string, workspaceId: string) {
          values ($1, $2, 'report.generated', $3::jsonb),
                 ($1, $2, 'research.completed', $4::jsonb)`,
         [study.study_id, study.run_id, JSON.stringify({
-          provider: "openai",
+          provider: providerStatus.providerName,
           responseId: providerResult.responseId,
           model: providerResult.model,
           promptVersion: providerResult.promptVersion,
@@ -1145,15 +1516,15 @@ export async function queueStudyRun(viewer: Viewer, publicId: string) {
 
     if (study.run_id && study.run_status === "awaiting_provider") {
       await transaction.query(
-        "update study_runs set status = 'queued', provider = 'openai', provider_model = $2 where id = $1",
-        [study.run_id, providerStatus.researchModel],
+        "update study_runs set status = 'queued', provider = $2, provider_model = $3 where id = $1",
+        [study.run_id, providerStatus.providerName, providerStatus.researchModel],
       );
     } else {
       const runResult = await transaction.query<{ id: string }>(
         `insert into study_runs (study_id, status, provider, provider_model)
-         values ($1, 'queued', 'openai', $2)
+         values ($1, 'queued', $2, $3)
          returning id::text as id`,
-        [study.study_id, providerStatus.researchModel],
+        [study.study_id, providerStatus.providerName, providerStatus.researchModel],
       );
       queuedRunId = runResult.rows[0].id;
     }
@@ -1165,7 +1536,7 @@ export async function queueStudyRun(viewer: Viewer, publicId: string) {
     await transaction.query(
       `insert into study_events (study_id, run_id, event_type, payload)
        values ($1, $2, 'run.queued', $3::jsonb)`,
-      [study.study_id, queuedRunId, JSON.stringify({ provider: "openai", model: providerStatus.researchModel })],
+      [study.study_id, queuedRunId, JSON.stringify({ provider: providerStatus.providerName, model: providerStatus.researchModel })],
     );
 
     return "queued" as const;

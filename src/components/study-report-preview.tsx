@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Download, ExternalLink, Eye, FileText, Printer, X } from "lucide-react";
+import { ChevronDown, Download, ExternalLink, Eye, FileText, Hash, Printer, X } from "lucide-react";
 import { useState } from "react";
 import type { StudyDetail } from "@/lib/studies";
 
@@ -10,6 +10,13 @@ export function StudyReportPreview({ study }: { study: StudyDetail }) {
   const findingCount = report?.content.findings.length ?? 0;
   const recommendationCount = report?.content.recommendations.length ?? 0;
   const sourceCount = report?.citations.length ?? 0;
+  const reportSections = [
+    { id: "report-summary", label: "执行摘要" },
+    { id: "report-findings", label: `核心发现 · ${findingCount}` },
+    { id: "report-recommendations", label: `行动建议 · ${recommendationCount}` },
+    { id: "report-limitations", label: "局限与后续问题" },
+    { id: "report-sources", label: `公开来源 · ${sourceCount}` },
+  ];
 
   function downloadMarkdown() {
     if (!report) return;
@@ -74,40 +81,55 @@ export function StudyReportPreview({ study }: { study: StudyDetail }) {
               <button type="button" onClick={() => setOpen(false)} aria-label="关闭报告"><X size={20} /></button>
             </nav>
           </header>
-          <div className="report-reader-content">
-            <section className="report-reader-summary">
+          <div className="report-reader-layout">
+            <nav className="report-reader-nav" aria-label="报告章节">
+              <span>章节</span>
+              {reportSections.map((section) => <a href={`#${section.id}`} key={section.id}>{section.label}</a>)}
+              <div className="report-reader-nav-note"><Hash size={13} />公开证据可回溯</div>
+            </nav>
+            <div className="report-reader-content">
+            <section className="report-reader-summary" id="report-summary">
               <span>EXECUTIVE SUMMARY</span>
               <h2>{report.title}</h2>
               <p>{report.content.executiveSummary}</p>
+              <dl className="report-reader-metrics">
+                <div><dt>洞察</dt><dd>{findingCount}</dd></div>
+                <div><dt>建议</dt><dd>{recommendationCount}</dd></div>
+                <div><dt>来源</dt><dd>{sourceCount}</dd></div>
+                <div><dt>生成时间</dt><dd>{new Date(report.generatedAt).toLocaleDateString("zh-CN")}</dd></div>
+              </dl>
             </section>
-            {report.content.findings.map((finding, index) => (
-              <section className="report-reader-finding" key={`${finding.title}-${index}`}>
+            <section id="report-findings" aria-label="核心发现">
+              {report.content.findings.map((finding, index) => (
+                <section className="report-reader-finding" key={`${finding.title}-${index}`}>
                 <span>{String(index + 1).padStart(2, "0")}</span>
                 <div>
                   <h3>{finding.title}</h3>
                   <p>{finding.insight}</p>
                   <dl><div><dt>证据</dt><dd>{finding.evidence}</dd></div><div><dt>业务含义</dt><dd>{finding.implication}</dd></div></dl>
                 </div>
-              </section>
-            ))}
-            <section className="report-reader-recommendations">
+                </section>
+              ))}
+            </section>
+            <section className="report-reader-recommendations" id="report-recommendations">
               <h3>行动建议</h3>
               {report.content.recommendations.map((item) => (
                 <article key={item.title}><span>{item.priority}</span><div><h4>{item.title}</h4><p>{item.action}</p><small>{item.rationale}</small></div></article>
               ))}
             </section>
-            <section className="report-reader-limitations">
+            <section className="report-reader-limitations" id="report-limitations">
               <h3>研究局限</h3>
               <ul>{report.content.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul>
               <h3>后续问题</h3>
               <ul>{report.content.nextQuestions.map((question) => <li key={question}>{question}</li>)}</ul>
             </section>
-            <section className="report-reader-sources">
+            <section className="report-reader-sources" id="report-sources">
               <h3>公开来源</h3>
-              {report.citations.length ? report.citations.map((citation) => (
-                <a href={citation.url} target="_blank" rel="noreferrer" key={citation.url}>{citation.title}<ExternalLink size={13} /></a>
+              {report.citations.length ? report.citations.map((citation, index) => (
+                <a href={citation.url} target="_blank" rel="noreferrer" key={citation.url}><span>{String(index + 1).padStart(2, "0")}</span>{citation.title}<ExternalLink size={13} /></a>
               )) : <p>本次报告没有返回可展示的 URL 注释。</p>}
             </section>
+            </div>
           </div>
         </div>
       ) : null}

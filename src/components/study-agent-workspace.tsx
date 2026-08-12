@@ -257,7 +257,7 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
                   {typeof payload.citationCount === "number" ? <div><dt>sources</dt><dd>{payload.citationCount}</dd></div> : null}
                   {typeof payload.findingCount === "number" ? <div><dt>findings</dt><dd>{payload.findingCount}</dd></div> : null}
                   {typeof payload.recommendationCount === "number" ? <div><dt>recommendations</dt><dd>{payload.recommendationCount}</dd></div> : null}
-                  {index === 0 ? <><div><dt>provider</dt><dd>{study.runProvider ?? "openai"}</dd></div><div><dt>model</dt><dd>{study.runModel ?? provider.researchModel}</dd></div></> : null}
+                  {index === 0 ? <><div><dt>provider</dt><dd>{study.runProvider ?? provider.providerName}</dd></div><div><dt>model</dt><dd>{study.runModel ?? provider.researchModel}</dd></div></> : null}
                   {step.status === "failed" && study.runError ? <div><dt>error</dt><dd>{study.runError}</dd></div> : null}
                 </dl>
                 <TracePayloadDetails stepKey={step.key} payload={payload} events={events} />
@@ -302,7 +302,7 @@ function ResearchOutput({ study }: { study: StudyDetail }) {
       <div className="agent-panel-summary">
         <span className="agent-panel-avatars"><i /><i /><i /><i /></span>
         <div><strong>{study.panel ? `${study.panel.title} · AI 合成 Panel` : "公开资料研究与综合分析"}</strong><p>{study.report.citations.length} 个来源，{study.personas.length} 个 Persona，{study.interviews.length} 份模拟访谈，{study.report.content.findings.length} 项洞察</p></div>
-        {study.panel ? <StudyPanelOpenButton /> : null}
+        {study.panel ? <StudyPanelOpenButton publicId={study.panel.publicId} /> : null}
       </div>
       <section className="agent-limitations">
         <h3>研究局限</h3>
@@ -395,8 +395,8 @@ export function StudyAgentWorkspace({
 function createProgressItems(study: StudyDetail): ProgressDefinition[] {
   const runEvents = study.events.filter((event) => !study.runId || event.runId === study.runId || event.runId === null);
   const eventTypes = new Set(runEvents.map((event) => event.type));
-  const failed = study.runStatus === "failed";
-  const running = study.runStatus === "queued" || study.runStatus === "running";
+  const failed = study.runStatus === "failed" || study.runRecoverable;
+  const running = (study.runStatus === "queued" || study.runStatus === "running") && !study.runRecoverable;
   const researchCompleted = study.runStatus === "completed" || Boolean(study.report);
   const completedCount = progressDefinitions.findLastIndex((definition) => definition.completedTypes.some((type) => eventTypes.has(type))) + 1;
 

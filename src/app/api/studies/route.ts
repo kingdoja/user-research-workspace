@@ -8,6 +8,7 @@ export const maxDuration = 120;
 
 const createStudySchema = z.object({
   brief: z.string().trim().min(12, "请再具体描述一些研究问题").max(4000, "研究问题不能超过 4000 个字符"),
+  sourcePanelPublicId: z.string().trim().min(8).max(120).optional(),
 });
 
 export async function GET() {
@@ -40,6 +41,13 @@ export async function POST(request: Request) {
     );
   }
 
-  const publicId = await createStudy(viewer, parsed.data.brief);
-  return NextResponse.json({ publicId, redirectTo: `/study/${publicId}` }, { status: 201 });
+  try {
+    const publicId = await createStudy(viewer, parsed.data.brief, parsed.data.sourcePanelPublicId);
+    return NextResponse.json({ publicId, redirectTo: `/study/${publicId}` }, { status: 201 });
+  } catch (error) {
+    if (error instanceof Error && error.message === "PANEL_NOT_FOUND") {
+      return NextResponse.json({ error: "Panel 不存在或不属于当前工作区" }, { status: 404 });
+    }
+    throw error;
+  }
 }
