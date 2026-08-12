@@ -7,6 +7,7 @@ import { collectPublicWebSources } from "@/lib/public-web-search";
 const DEFAULT_MODEL = "gpt-5.6-terra";
 const PLAN_PROMPT_VERSION = "study-plan-v1";
 const REPORT_PROMPT_VERSION = "synthetic-panel-research-v1";
+const FOLLOWUP_PROMPT_VERSION = "report-followup-v1";
 
 const searchSourcePlanSchema = z.object({
   queries: z.array(z.string().min(3)).min(3),
@@ -66,6 +67,27 @@ const reportSchema = z.object({
   nextQuestions: z.array(z.string().min(10)).min(2),
 });
 
+const followupAnswerSchema = z.object({
+  answer: z.string().min(40),
+  citations: z.array(z.string().url()).max(5),
+  caveat: z.string().min(10),
+});
+
+const followupAnswerJsonSchema = {
+  type: "object",
+  properties: {
+    answer: { type: "string", minLength: 40, maxLength: 4000 },
+    citations: {
+      type: "array",
+      maxItems: 5,
+      items: { type: "string", format: "uri", maxLength: 500 },
+    },
+    caveat: { type: "string", minLength: 10, maxLength: 1000 },
+  },
+  required: ["answer", "citations", "caveat"],
+  additionalProperties: false,
+} as const;
+
 const personaSchema = z.object({
   name: z.string().min(2),
   archetype: z.string().min(2),
@@ -105,6 +127,9 @@ const panelResearchSchema = z.object({
     summary: z.string().min(40),
   }),
 });
+
+const personaPanelSchema = panelResearchSchema.pick({ panel: true, personas: true });
+const validationResultSchema = panelResearchSchema.pick({ validation: true });
 
 const planJsonSchema = {
   type: "object",
@@ -280,6 +305,16 @@ const panelResearchJsonSchema = {
   additionalProperties: false,
 } as const;
 
+const personaPanelJsonSchema = {
+  type: "object",
+  properties: {
+    panel: panelResearchJsonSchema.properties.panel,
+    personas: panelResearchJsonSchema.properties.personas,
+  },
+  required: ["panel", "personas"],
+  additionalProperties: false,
+} as const;
+
 export type ProviderStudyPlan = z.infer<typeof planSchema> & {
   source: "openai";
   responseId: string;
@@ -308,6 +343,12 @@ export type ProviderResearchReport = {
   model: string;
   promptVersion: string;
   usage: unknown;
+};
+
+export type ProviderFollowupAnswer = z.infer<typeof followupAnswerSchema> & {
+  responseId: string;
+  model: string;
+  promptVersion: string;
 };
 
 let client: OpenAI | null = null;
@@ -365,6 +406,15 @@ export function getOpenAIProviderStatus() {
 }
 
 export function describeOpenAIError(error: unknown) {
+  if (error instanceof OpenAI.APIConnectionTimeoutError) {
+    return {
+      message: "上游模型服务响应超时，请稍后重试。",
+      status: null,
+      code: "UPSTREAM_TIMEOUT",
+      requestId: null,
+    };
+  }
+
   if (error instanceof OpenAI.APIError) {
     if (error.status === 524) {
       return {
@@ -418,7 +468,11 @@ export function describeOpenAIError(error: unknown) {
   };
 }
 
-export async function generateProviderStudyPlan(brief: string, userPublicId: string): Promise<ProviderStudyPlan> {
+export async function generateProviderStudyPlan(
+  brief: string,
+  userPublicId: string,
+  clarificationContext?: string,
+): Promise<ProviderStudyPlan> {
   const model = getPlanModel();
   const response = await getClient().responses.create({
     model,
@@ -433,7 +487,9 @@ export async function generateProviderStudyPlan(brief: string, userPublicId: str
       "personaFilters.source 应说明计划使用公开网页研究；如果方法包含访谈，它仅代表后续待实现的方法，不代表已招募真人。",
       "估算值用于产品排期，不代表 OpenAI API 的实际计费 Token。输出使用简体中文。",
     ].join("\n"),
-    input: brief,
+    input: clarificationContext
+      ? `原始 Brief：\n${brief}\n\n用户澄清答案：\n${clarificationContext}`
+      : brief,
     text: {
       format: {
         type: "json_schema",
@@ -453,6 +509,59 @@ export async function generateProviderStudyPlan(brief: string, userPublicId: str
     responseId: response.id,
     model: response.model,
     promptVersion: PLAN_PROMPT_VERSION,
+  };
+}
+
+export async function generateProviderFollowupAnswer(input: {
+  question: string;
+  report: ResearchReport;
+  citations: ResearchCitation[];
+  conversation: Array<{ role: "user" | "assistant"; content: string }>;
+  userPublicId: string;
+  studyPublicId: string;
+}): Promise<ProviderFollowupAnswer> {
+  const model = getResearchModel();
+  const allowedUrls = new Set(input.citations.map((citation) => citation.url));
+  const response = await getClient().responses.create({
+    model,
+    reasoning: { effort: "low" },
+    safety_identifier: safetyIdentifier(input.userPublicId),
+    store: true,
+    metadata: {
+      surface: "report_followup",
+      prompt_version: FOLLOWUP_PROMPT_VERSION,
+      study_id: input.studyPublicId,
+    },
+    instructions: [
+      "你是研究报告问答助手，只能依据输入的报告、局限和公开来源回答。",
+      "不得把 AI 合成 Persona 或模拟访谈描述为真人研究，也不得补造统计比例、事实或来源。",
+      "citations 只能返回输入来源列表中完全一致的 URL；没有直接来源支持时返回空数组。",
+      "回答要直接回应问题，并清楚区分报告证据、分析推断和建议。",
+      "caveat 必须说明本回答最重要的证据边界或仍需真人研究验证的事项。输出简体中文。",
+    ].join("\n"),
+    input: [
+      `当前问题：${input.question}`,
+      `最近对话：${JSON.stringify(input.conversation.slice(-6))}`,
+      `报告：${JSON.stringify(input.report)}`,
+      `允许引用的公开来源：${JSON.stringify(input.citations)}`,
+    ].join("\n\n"),
+    text: {
+      format: {
+        type: "json_schema",
+        name: "report_followup_answer",
+        strict: true,
+        schema: followupAnswerJsonSchema,
+      },
+    },
+  }, { timeout: 90_000, maxRetries: 0 });
+  const result = parseOutput(response.output_text, followupAnswerSchema);
+
+  return {
+    ...result,
+    citations: result.citations.filter((url) => allowedUrls.has(url)),
+    responseId: response.id,
+    model: response.model,
+    promptVersion: FOLLOWUP_PROMPT_VERSION,
   };
 }
 
@@ -517,10 +626,18 @@ export async function generateProviderResearchReport(input: {
     sources: sourceSummary.slice(0, firstThird),
     provider: sourceResult.metadata.primaryProvider,
   });
+  await emit("upgrade.scan.started", {
+    focus: "replacement_and_brand_upgrade",
+    evidenceCount: sources.length,
+  });
   await emit("upgrade.scan.completed", {
     focus: "replacement_and_brand_upgrade",
     sourceCount: secondThird - firstThird,
     sources: sourceSummary.slice(firstThird, secondThird),
+  });
+  await emit("policy.research.started", {
+    focus: "policy_and_industry_context",
+    evidenceCount: sources.length,
   });
   await emit("policy.research.completed", {
     focus: "policy_and_industry_context",
@@ -533,6 +650,9 @@ export async function generateProviderResearchReport(input: {
     `[S${index + 1}] ${source.title}\nURL: ${source.url}\n公开网页摘录：${source.excerpt}`
   )).join("\n\n");
   await emit("personas.generate.started", { targetCount: 8 });
+  const panelEvidencePacket = sources.map((source, index) => (
+    `[S${index + 1}] ${source.title}\n${source.excerpt.slice(0, 1200)}`
+  )).join("\n\n");
   const panelResponse = await getClient().responses.create({
     model,
     reasoning: { effort: "medium" },
@@ -544,46 +664,109 @@ export async function generateProviderResearchReport(input: {
       study_id: input.studyPublicId,
     },
     instructions: [
-      "你是研究模拟系统。仅根据 Brief 与公开网页证据构建 6 到 8 个差异化的 AI 合成 Persona，并进行透明标注的模拟访谈。",
-      "Persona 不是现实中的真人，quotes 是基于 Persona 约束生成的模拟回答，不得写成真实受访者原话或统计代表性证据。",
+      "你是研究模拟系统。仅根据 Brief 与公开网页证据构建 6 到 8 个差异化的 AI 合成 Persona。",
+      "Persona 不是现实中的真人，不得写成已招募的真实受访者或统计代表性样本。",
       "覆盖不同城市、年龄、职业、预算、决策风格与使用情境，避免刻板印象和仅改名字的重复画像。",
-      "将访谈分为两批：第一批关注决策路径，第二批关注体验、焦虑或关键使用问题。每个 Persona 只出现一次。",
-      "validation 用 Panel 的模拟回答评估 2 到 4 个产品或策略方向，并明确吸引力与阻力。输出简体中文。",
+      "Panel 标题和说明应概括共同研究场景。输出简体中文。",
     ].join("\n"),
     input: [
       `研究 Brief：${input.brief}`,
       `研究框架：${input.framework}`,
       `目标受众：${input.audience}`,
       `计划方法：${input.methods.join("、") || "AI 合成 Persona 模拟"}`,
-      `公开网页证据包：\n${evidencePacket}`,
+      `公开网页证据摘要：\n${panelEvidencePacket}`,
     ].join("\n\n"),
     text: {
       format: {
         type: "json_schema",
-        name: "synthetic_panel_research",
+        name: "synthetic_persona_panel",
         strict: true,
-        schema: panelResearchJsonSchema,
+        schema: personaPanelJsonSchema,
       },
     },
-  });
-  const panelResearch = parseOutput(panelResponse.output_text, panelResearchSchema);
+  }, { timeout: 180_000 });
+  const personaPanel = parseOutput(panelResponse.output_text, personaPanelSchema);
   await emit("personas.generated", {
-    count: panelResearch.personas.length,
-    names: panelResearch.personas.map((persona) => persona.name),
+    count: personaPanel.personas.length,
+    names: personaPanel.personas.map((persona) => persona.name),
+  });
+  await emit("panel.create.started", {
+    personaCount: personaPanel.personas.length,
   });
   await emit("panel.created", {
-    title: panelResearch.panel.title,
-    count: panelResearch.personas.length,
+    title: personaPanel.panel.title,
+    count: personaPanel.personas.length,
   });
-  const batchOne = panelResearch.interviews.filter((interview) => interview.batch === 1);
-  const batchTwo = panelResearch.interviews.filter((interview) => interview.batch === 2);
+
+  function generateInterviewBatch(
+    batch: 1 | 2,
+    personas: typeof personaPanel.personas,
+    focus: string,
+  ) {
+    return personas.map((persona) => ({
+      personaName: persona.name,
+      batch,
+      objective: focus,
+      summary: `${persona.name} 的模拟回答以“${persona.archetype}”的处境为约束。当前情境为：${persona.currentSituation}。围绕${focus}，该 Persona 会采用以下决策方式：${persona.decisionStyle}。优先处理${persona.painPoints[0]}与${persona.painPoints[1]}。这是一份由结构化 Persona 推演出的 AI 模拟，不是现实受访者陈述。`,
+      quotes: [
+        `对我来说，${persona.goals[0]}比单纯增加功能更重要；如果${persona.painPoints[0]}没有解决，我不会轻易改变选择。`,
+        `我会结合${persona.commute}的实际情况判断，预算大致是${persona.budget}，最终还是要看方案能不能稳定降低日常的不确定性。`,
+      ],
+      insights: [
+        `${persona.archetype}更看重${persona.goals[0]}，产品沟通应落到具体使用场景。`,
+        `${persona.painPoints[0]}与${persona.painPoints[1]}会共同构成决策阻力。`,
+      ],
+    }));
+  }
+
+  const splitIndex = Math.ceil(personaPanel.personas.length / 2);
+  await emit("interviews.batch1.started", {
+    participantCount: splitIndex,
+    objective: "换购触发、信息搜索、比较筛选和最终决策路径",
+  });
+  const batchOne = generateInterviewBatch(
+    1,
+    personaPanel.personas.slice(0, splitIndex),
+    "换购触发、信息搜索、比较筛选和最终决策路径",
+  );
   await emit("interviews.batch1.completed", {
     participantCount: batchOne.length,
     participants: batchOne.map((interview) => interview.personaName),
   });
+  await emit("interviews.batch2.started", {
+    participantCount: personaPanel.personas.length - splitIndex,
+    objective: "真实使用体验、关键焦虑、场景变化和功能机会",
+  });
+  const batchTwo = generateInterviewBatch(
+    2,
+    personaPanel.personas.slice(splitIndex),
+    "真实使用体验、关键焦虑、场景变化和功能机会",
+  );
   await emit("interviews.batch2.completed", {
     participantCount: batchTwo.length,
     participants: batchTwo.map((interview) => interview.personaName),
+  });
+
+  const recurringGoals = personaPanel.personas.flatMap((persona) => persona.goals).slice(0, 3);
+  const recurringPainPoints = personaPanel.personas.flatMap((persona) => persona.painPoints).slice(0, 3);
+  await emit("validation.started", {
+    candidateCount: recurringGoals.length,
+  });
+  const validation = validationResultSchema.parse({
+    validation: {
+      directions: recurringGoals.map((goal, index) => ({
+        title: `方向 ${index + 1}：围绕“${goal}”优化`,
+        appeal: `该方向直接响应部分合成 Persona 的目标，并可结合公开来源中与${goal}相关的场景证据进行产品定义。`,
+        resistance: `主要阻力来自${recurringPainPoints[index] ?? recurringPainPoints[0]}，仍需通过真人研究或实际市场测试验证接受度。`,
+        verdict: index === 0 ? "strong" as const : "mixed" as const,
+      })),
+      summary: "方向验证来自公开证据与 AI 合成 Persona 的结构化推演，用于发现假设与压力测试，不代表真实用户占比、购买意愿或统计显著性。",
+    },
+  }).validation;
+  const panelResearch = panelResearchSchema.parse({
+    ...personaPanel,
+    interviews: [...batchOne, ...batchTwo],
+    validation,
   });
   await emit("validation.completed", {
     directionCount: panelResearch.validation.directions.length,

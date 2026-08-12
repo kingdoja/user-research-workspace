@@ -19,11 +19,11 @@ export default async function StudyDetailPage({ params }: PageProps<"/study/[pub
     notFound();
   }
 
-  const executionActive = study.runStatus === "queued" || study.runStatus === "running";
+  const executionActive = (study.runStatus === "queued" || study.runStatus === "running") && !study.runRecoverable;
 
   return (
     <>
-      {executionActive ? <StudyAutoRefresh /> : null}
+      {executionActive ? <StudyAutoRefresh publicId={study.publicId} /> : null}
       <StudyAgentWorkspace
         study={study}
         viewer={viewer}
