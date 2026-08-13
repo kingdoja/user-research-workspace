@@ -47,12 +47,15 @@ export async function getDatabase() {
   }
 
   if (!databaseGlobals.atypicaPool) {
+    const ssl = process.env.DATABASE_SSL_MODE === "disable"
+      ? false
+      : { rejectUnauthorized: false };
     databaseGlobals.atypicaPool = new Pool({
       connectionString,
       max: Number(process.env.DATABASE_POOL_SIZE ?? 5),
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
-      ssl: { rejectUnauthorized: false },
+      ssl,
     });
   }
 

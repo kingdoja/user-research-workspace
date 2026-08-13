@@ -1,5 +1,10 @@
 # Recovery record
 
+## Restoration design
+
+- [`RESTORATION_BLUEPRINT.md`](RESTORATION_BLUEPRINT.md): evidence-graded product and architecture reconstruction plan, including the GEA runtime, Skill and Context contracts, evidence provenance, data model, APIs, phased delivery, and acceptance criteria.
+- [`ARCHITECTURE_RECOVERY.md`](ARCHITECTURE_RECOVERY.md): focused audit of the current repository's architecture and implemented recovery boundaries.
+
 ## Evidence captured
 
 - `reference/site/`: surviving homepage HTML, sitemap, robots file, web app manifest, and Next.js build manifest.

@@ -1,5 +1,5 @@
 import type { Viewer } from "@/lib/auth";
-import { getDatabase } from "@/lib/db";
+import { getDatabase, type Queryable } from "@/lib/db";
 import { createPublicId } from "@/lib/identifiers";
 import type { CreateInterviewProjectInput } from "@/lib/interview-schema";
 import {
@@ -109,6 +109,45 @@ export type PublicInterviewInvitation = {
 
 function parseJson<T>(value: T | string): T {
   return typeof value === "string" ? JSON.parse(value) as T : value;
+}
+
+const defaultSyntheticInterviewQuestions = [
+  "请先介绍一下与你当前处境最相关的日常场景，以及这件事为什么值得你投入时间或预算？",
+  "最近一次你认真比较或选择相关产品、服务或方案时，是什么事件触发了你开始行动？",
+  "你通常会从哪些渠道搜集信息，又会用什么标准排除不合适的选项？",
+  "在实际决策过程中，最让你犹豫、担心或拖延的因素是什么？",
+  "如果现有方案只能改进一件事，什么变化会最明显地提升你的体验或选择意愿？",
+  "哪些条件会让你明确拒绝一个看起来不错的方案？",
+];
+
+async function ensureInterviewQuestionSnapshot(queryable: Queryable, projectId: string) {
+  const result = await queryable.query<{ content: string }>(
+    "select content from interview_questions where project_id = $1 order by position",
+    [projectId],
+  );
+  const questions = result.rows.map((question) => question.content.trim()).filter(Boolean);
+  if (questions.length) return questions.slice(0, 12);
+  for (const [index, question] of defaultSyntheticInterviewQuestions.entries()) {
+    await queryable.query(
+      `insert into interview_questions (public_id, project_id, position, content)
+       values ($1, $2, $3, $4)`,
+      [createPublicId("inq"), projectId, index + 1, question],
+    );
+  }
+  return defaultSyntheticInterviewQuestions;
+}
+
+async function enqueueInterviewJob(queryable: Queryable, runId: string) {
+  await queryable.query(
+    `insert into interview_job_queue (run_id, status, available_at)
+     values ($1, 'queued', now())
+     on conflict (run_id) do update set
+       status = case when interview_job_queue.status = 'completed' then 'completed' else 'queued' end,
+       available_at = now(), lease_owner = null, lease_expires_at = null,
+       attempt = case when interview_job_queue.status = 'failed' then 0 else interview_job_queue.attempt end,
+       error_message = null, updated_at = now()`,
+    [runId],
+  );
 }
 
 const INTERVIEW_IMAGE_BUCKET = "interview-question-images";
@@ -281,7 +320,10 @@ export async function getInterviewProject(viewer: Viewer, publicId: string): Pro
       `select run.id::text as id, run.public_id, run.status, run.provider, run.provider_model,
               run.error_message, run.created_at::text as created_at,
               run.started_at::text as started_at, run.finished_at::text as finished_at,
-              (select max(event.created_at)::text from interview_events event where event.run_id = run.id) as last_event_at
+              greatest(
+                (select max(event.created_at) from interview_events event where event.run_id = run.id),
+                (select job.updated_at from interview_job_queue job where job.run_id = run.id)
+              )::text as last_event_at
        from interview_runs run where run.project_id = $1
        order by run.created_at asc, run.id asc`,
       [project.id],
@@ -305,7 +347,7 @@ export async function getInterviewProject(viewer: Viewer, publicId: string): Pro
       [project.id],
     ),
   ]);
-  const questions = questionsResult.rows.map((question, index) => {
+  const questions = questionsResult.rows.map((question) => {
     const imagePaths = parseJson<string[]>(question.image_paths);
     return {
     publicId: question.public_id,
@@ -318,8 +360,7 @@ export async function getInterviewProject(viewer: Viewer, publicId: string): Pro
     imageUrls: imagePaths.map(getInterviewImageUrl).filter(Boolean),
     answers: sessions.flatMap((session) => {
       const questionMessageIndex = session.messages.findIndex((candidate) => (
-        candidate.role === "interviewer"
-        && session.messages.filter((item) => item.role === "interviewer").indexOf(candidate) === index
+        candidate.role === "interviewer" && candidate.content.trim() === question.content.trim()
       ));
       const answer = questionMessageIndex >= 0
         ? session.messages.slice(questionMessageIndex + 1).find((candidate) => candidate.role === "persona")
@@ -849,11 +890,13 @@ export async function createInterviewProject(viewer: Viewer, input: CreateInterv
       );
     }
     if (personaResult.rows.length > 0) {
+      const questions = await ensureInterviewQuestionSnapshot(transaction, projectResult.rows[0].id);
       const runResult = await transaction.query<{ id: string }>(
-        `insert into interview_runs (public_id, project_id, status, provider, provider_model)
-         values ($1, $2, 'queued', $3, $4) returning id::text as id`,
-        [createPublicId("irn"), projectResult.rows[0].id, provider.providerName, provider.researchModel],
+        `insert into interview_runs (public_id, project_id, status, provider, provider_model, question_snapshot)
+         values ($1, $2, 'queued', $3, $4, $5::jsonb) returning id::text as id`,
+        [createPublicId("irn"), projectResult.rows[0].id, provider.providerName, provider.researchModel, JSON.stringify(questions)],
       );
+      await enqueueInterviewJob(transaction, runResult.rows[0].id);
       await transaction.query(
         `insert into interview_events (project_id, run_id, event_type, payload)
          values ($1, $2, 'run.queued', $3::jsonb)`,
@@ -861,6 +904,7 @@ export async function createInterviewProject(viewer: Viewer, input: CreateInterv
           provider: provider.providerName,
           model: provider.researchModel,
           personaCount: personaResult.rows.length,
+          questionCount: questions.length,
         })],
       );
     }
@@ -868,62 +912,57 @@ export async function createInterviewProject(viewer: Viewer, input: CreateInterv
   return { publicId, queued: personaResult.rows.length > 0 };
 }
 
-export async function executeInterviewRun(publicId: string, workspaceId: string) {
+async function executeInterviewRunById(runId: string) {
   const database = await getDatabase();
   const provider = getOpenAIProviderStatus();
   const result = await database.query<{
     project_id: string;
+    public_id: string;
+    workspace_id: string;
     title: string;
     objective: string;
     user_public_id: string;
-    run_id: string | null;
-    run_status: string | null;
+    run_id: string;
+    run_status: string;
+    run_started_at: string | null;
+    question_snapshot: string[] | string;
   }>(
-    `select project.id::text as project_id, project.title, project.objective,
-            creator.public_id as user_public_id, latest_run.id as run_id, latest_run.status as run_status
+    `select project.id::text as project_id, project.public_id, project.workspace_id::text as workspace_id,
+            project.title, project.objective, creator.public_id as user_public_id,
+            run.id::text as run_id, run.status as run_status, run.started_at::text as run_started_at,
+            run.question_snapshot
      from interview_projects project
      join users creator on creator.id = project.created_by
-     left join lateral (
-       select run.id::text as id, run.status
-       from interview_runs run where run.project_id = project.id
-       order by run.created_at desc, run.id desc limit 1
-     ) latest_run on true
-     where project.public_id = $1 and project.workspace_id = $2 limit 1`,
-    [publicId, workspaceId],
+     join interview_runs run on run.project_id = project.id
+     where run.id = $1 limit 1`,
+    [runId],
   );
   const project = result.rows[0];
-  if (!project || !project.run_id) return "not_found" as const;
+  if (!project) return "not_found" as const;
+  if (project.run_status === "completed") return "completed" as const;
 
   if (!provider.configured) {
-    const message = "模型服务尚未配置，无法执行访谈。";
-    await database.transaction(async (transaction) => {
-      await transaction.query(
-        `update interview_runs set status = 'failed', error_message = $2, finished_at = now()
-         where id = $1 and status = 'queued'`,
-        [project.run_id, message],
-      );
-      await transaction.query(
-        `insert into interview_events (project_id, run_id, event_type, payload)
-         values ($1, $2, 'run.failed', $3::jsonb)`,
-        [project.project_id, project.run_id, JSON.stringify({ message, code: "PROVIDER_NOT_CONFIGURED" })],
-      );
-    });
-    return "provider_missing" as const;
+    throw new Error("OPENAI_API_KEY_MISSING");
   }
 
   const claim = await database.query<{ id: string }>(
     `update interview_runs set status = 'running', provider = $2, provider_model = $3,
-            started_at = now(), error_message = null
-     where id = $1 and status = 'queued' returning id::text as id`,
+            started_at = coalesce(started_at, now()), finished_at = null, error_message = null
+     where id = $1 and status in ('queued', 'running') returning id::text as id`,
     [project.run_id, provider.providerName, provider.researchModel],
   );
-  if (!claim.rowCount) return project.run_status === "completed" ? "completed" as const : "already_running" as const;
+  if (!claim.rowCount) return "already_running" as const;
 
   try {
     await database.query(
       `insert into interview_events (project_id, run_id, event_type, payload)
-       values ($1, $2, 'run.started', $3::jsonb)`,
-      [project.project_id, project.run_id, JSON.stringify({ provider: provider.providerName, model: provider.researchModel })],
+       values ($1, $2, $3, $4::jsonb)`,
+      [
+        project.project_id,
+        project.run_id,
+        project.run_started_at ? "run.resumed" : "run.started",
+        JSON.stringify({ provider: provider.providerName, model: provider.researchModel }),
+      ],
     );
     const personasResult = await database.query<{
       id: string;
@@ -939,59 +978,70 @@ export async function executeInterviewRun(publicId: string, workspaceId: string)
       [project.project_id],
     );
     if (!personasResult.rowCount) throw new Error("PERSONA_NOT_FOUND");
-    const personas = personasResult.rows.map((persona) => ({
-      publicId: persona.public_id,
-      name: persona.name,
-      archetype: persona.archetype,
-      profile: parseJson(persona.profile),
-    }));
+    let questions = parseJson(project.question_snapshot).map((question) => question.trim()).filter(Boolean);
+    if (!questions.length) {
+      questions = await ensureInterviewQuestionSnapshot(database, project.project_id);
+      await database.query(
+        "update interview_runs set question_snapshot = $2::jsonb where id = $1",
+        [project.run_id, JSON.stringify(questions)],
+      );
+    }
+    const completedResult = await database.query<{ persona_id: string }>(
+      `select persona_id::text as persona_id from interview_sessions
+       where run_id = $1 and persona_id is not null and status = 'completed'`,
+      [project.run_id],
+    );
+    const completedPersonaIds = new Set(completedResult.rows.map((row) => row.persona_id));
     await database.query(
       `insert into interview_events (project_id, run_id, event_type, payload)
-       values ($1, $2, 'personas.loaded', $3::jsonb),
-              ($1, $2, 'provider.request.started', $4::jsonb)`,
-      [project.project_id, project.run_id, JSON.stringify({ personaCount: personas.length }), JSON.stringify({ provider: provider.providerName })],
+       values ($1, $2, 'personas.loaded', $3::jsonb)`,
+      [project.project_id, project.run_id, JSON.stringify({
+        personaCount: personasResult.rows.length,
+        completedCount: completedPersonaIds.size,
+        questionCount: questions.length,
+      })],
     );
-    const generated = await generateProviderSyntheticInterviews({
-      title: project.title,
-      objective: project.objective,
-      personas,
-      userPublicId: project.user_public_id,
-    });
-    await database.query(
-      `insert into interview_events (project_id, run_id, event_type, payload)
-       values ($1, $2, 'provider.response.received', $3::jsonb)`,
-      [project.project_id, project.run_id, JSON.stringify({ model: generated.model, sessionCount: generated.sessions.length })],
-    );
-    const generatedByPersona = new Map(generated.sessions.map((session) => [session.personaPublicId, session]));
-    const persisted = await database.transaction(async (transaction) => {
-      const activeRun = await transaction.query(
-        "select 1 from interview_runs where id = $1 and status = 'running' for update",
-        [project.run_id],
+    for (const [position, persona] of personasResult.rows.entries()) {
+      if (completedPersonaIds.has(persona.id)) continue;
+      await database.query(
+        `insert into interview_events (project_id, run_id, event_type, payload)
+         values ($1, $2, 'persona.interview.started', $3::jsonb)`,
+        [project.project_id, project.run_id, JSON.stringify({
+          personaPublicId: persona.public_id,
+          personaName: persona.name,
+          position: position + 1,
+          total: personasResult.rows.length,
+        })],
       );
-      if (!activeRun.rowCount) return false;
-      const questionCount = await transaction.query<{ count: number }>(
-        "select count(*)::int as count from interview_questions where project_id = $1",
-        [project.project_id],
-      );
-      if (questionCount.rows[0].count === 0) {
-        const questions = generated.sessions[0]?.messages.filter((message) => message.role === "interviewer") ?? [];
-        for (const [index, question] of questions.entries()) {
-          await transaction.query(
-            `insert into interview_questions (public_id, project_id, position, content)
-             values ($1, $2, $3, $4)`,
-            [createPublicId("inq"), project.project_id, index + 1, question.content],
-          );
-        }
-      }
-      for (const persona of personasResult.rows) {
-        const session = generatedByPersona.get(persona.public_id);
-        if (!session) throw new Error("OPENAI_INVALID_SCHEMA");
+      const generated = await generateProviderSyntheticInterviews({
+        title: project.title,
+        objective: project.objective,
+        questions,
+        personas: [{
+          publicId: persona.public_id,
+          name: persona.name,
+          archetype: persona.archetype,
+          profile: parseJson(persona.profile),
+        }],
+        userPublicId: project.user_public_id,
+      });
+      const session = generated.sessions[0];
+      if (!session || session.personaPublicId !== persona.public_id) throw new Error("OPENAI_INVALID_SCHEMA");
+      await database.transaction(async (transaction) => {
+        const activeRun = await transaction.query(
+          "select 1 from interview_runs where id = $1 and status = 'running' for update",
+          [project.run_id],
+        );
+        if (!activeRun.rowCount) throw new Error("INTERVIEW_RUN_INTERRUPTED");
         const sessionResult = await transaction.query<{ id: string }>(
           `insert into interview_sessions (
-             public_id, project_id, persona_id, status, summary, insights, quotes, provider, provider_model
-           ) values ($1, $2, $3, 'completed', $4, $5::jsonb, $6::jsonb, $7, $8)
+             public_id, project_id, run_id, persona_id, status, summary, insights, quotes, provider, provider_model
+           ) values ($1, $2, $3, $4, 'completed', $5, $6::jsonb, $7::jsonb, $8, $9)
            returning id::text as id`,
-          [createPublicId("ins"), project.project_id, persona.id, session.summary, JSON.stringify(session.insights), JSON.stringify(session.quotes), provider.providerName, generated.model],
+          [
+            createPublicId("ins"), project.project_id, project.run_id, persona.id, session.summary,
+            JSON.stringify(session.insights), JSON.stringify(session.quotes), provider.providerName, generated.model,
+          ],
         );
         for (const [index, message] of session.messages.entries()) {
           await transaction.query(
@@ -1000,12 +1050,31 @@ export async function executeInterviewRun(publicId: string, workspaceId: string)
             [sessionResult.rows[0].id, index, message.role, message.content],
           );
         }
-      }
+        await transaction.query(
+          `update interview_runs set provider_response_id = concat_ws(',', nullif(provider_response_id, ''), $2),
+                  provider_model = $3, prompt_version = $4
+           where id = $1`,
+          [project.run_id, generated.responseId, generated.model, generated.promptVersion],
+        );
+        await transaction.query(
+          `insert into interview_events (project_id, run_id, event_type, payload)
+           values ($1, $2, 'persona.interview.completed', $3::jsonb)`,
+          [project.project_id, project.run_id, JSON.stringify({
+            personaPublicId: persona.public_id,
+            personaName: persona.name,
+            completedCount: completedPersonaIds.size + 1,
+            total: personasResult.rows.length,
+          })],
+        );
+      });
+      completedPersonaIds.add(persona.id);
+    }
+    await database.transaction(async (transaction) => {
       await transaction.query(
-        `update interview_runs set status = 'completed', provider_response_id = $2,
-                provider_model = $3, prompt_version = $4, finished_at = now()
+        `update interview_runs set status = 'completed', provider_model = $2,
+                finished_at = now(), error_message = null
          where id = $1`,
-        [project.run_id, generated.responseId, generated.model, generated.promptVersion],
+        [project.run_id, provider.researchModel],
       );
       await transaction.query(
         "update interview_projects set status = 'completed', updated_at = now() where id = $1",
@@ -1015,28 +1084,17 @@ export async function executeInterviewRun(publicId: string, workspaceId: string)
         `insert into interview_events (project_id, run_id, event_type, payload)
          values ($1, $2, 'sessions.persisted', $3::jsonb),
                 ($1, $2, 'run.completed', $4::jsonb)`,
-        [project.project_id, project.run_id, JSON.stringify({ sessionCount: generated.sessions.length }), JSON.stringify({ sessionCount: generated.sessions.length })],
+        [
+          project.project_id,
+          project.run_id,
+          JSON.stringify({ sessionCount: completedPersonaIds.size }),
+          JSON.stringify({ sessionCount: completedPersonaIds.size }),
+        ],
       );
-      return true;
     });
-    return persisted ? "completed" as const : "interrupted" as const;
+    return "completed" as const;
   } catch (error) {
-    const providerError = describeOpenAIError(error);
-    await database.transaction(async (transaction) => {
-      const failed = await transaction.query(
-        `update interview_runs set status = 'failed', error_message = $2, finished_at = now()
-         where id = $1 and status = 'running'`,
-        [project.run_id, providerError.message],
-      );
-      if (failed.rowCount) {
-        await transaction.query(
-          `insert into interview_events (project_id, run_id, event_type, payload)
-           values ($1, $2, 'run.failed', $3::jsonb)`,
-          [project.project_id, project.run_id, JSON.stringify(providerError)],
-        );
-      }
-    });
-    return "failed" as const;
+    throw error;
   }
 }
 
@@ -1062,7 +1120,10 @@ export async function queueInterviewRun(viewer: Viewer, publicId: string) {
        from interview_projects project
        left join lateral (
          select run.id::text as id, run.status, run.created_at, run.started_at,
-                (select max(event.created_at) from interview_events event where event.run_id = run.id) as last_event_at
+                greatest(
+                  (select max(event.created_at) from interview_events event where event.run_id = run.id),
+                  (select job.updated_at from interview_job_queue job where job.run_id = run.id)
+                ) as last_event_at
          from interview_runs run where run.project_id = project.id
          order by run.created_at desc, run.id desc limit 1
        ) latest_run on true
@@ -1079,29 +1140,147 @@ export async function queueInterviewRun(viewer: Viewer, publicId: string) {
       && activeSince !== null
       && Date.now() - new Date(activeSince).getTime() > 10 * 60 * 1000;
     if ((project.run_status === "queued" || project.run_status === "running") && !expired) return "already_running" as const;
-    if (project.run_id && expired) {
-      const message = "生成任务超过 10 分钟未更新，已记录为中断。";
+    if (project.run_id && (expired || project.run_status === "failed")) {
+      const message = expired ? "生成任务超过 10 分钟未更新，正在从已完成的 Persona 后继续。" : "正在从已完成的 Persona 后继续。";
       await transaction.query(
-        `update interview_runs set status = 'failed', error_message = $2, finished_at = now()
-         where id = $1 and status in ('queued', 'running')`,
-        [project.run_id, message],
+        `update interview_runs set status = 'queued', error_message = null, finished_at = null
+         where id = $1`,
+        [project.run_id],
       );
+      await enqueueInterviewJob(transaction, project.run_id);
       await transaction.query(
         `insert into interview_events (project_id, run_id, event_type, payload)
-         values ($1, $2, 'run.interrupted', $3::jsonb)`,
+         values ($1, $2, 'run.resume_queued', $3::jsonb)`,
         [project.project_id, project.run_id, JSON.stringify({ message, recoverable: true })],
       );
+      return "queued" as const;
     }
+    const questions = await ensureInterviewQuestionSnapshot(transaction, project.project_id);
     const runResult = await transaction.query<{ id: string }>(
-      `insert into interview_runs (public_id, project_id, status, provider, provider_model)
-       values ($1, $2, 'queued', $3, $4) returning id::text as id`,
-      [createPublicId("irn"), project.project_id, provider.providerName, provider.researchModel],
+      `insert into interview_runs (public_id, project_id, status, provider, provider_model, question_snapshot)
+       values ($1, $2, 'queued', $3, $4, $5::jsonb) returning id::text as id`,
+      [createPublicId("irn"), project.project_id, provider.providerName, provider.researchModel, JSON.stringify(questions)],
     );
+    await enqueueInterviewJob(transaction, runResult.rows[0].id);
     await transaction.query(
       `insert into interview_events (project_id, run_id, event_type, payload)
        values ($1, $2, 'run.queued', $3::jsonb)`,
-      [project.project_id, runResult.rows[0].id, JSON.stringify({ provider: provider.providerName, model: provider.researchModel })],
+      [project.project_id, runResult.rows[0].id, JSON.stringify({
+        provider: provider.providerName,
+        model: provider.researchModel,
+        questionCount: questions.length,
+      })],
     );
     return "queued" as const;
   });
+}
+
+async function claimInterviewJob(workerId: string) {
+  const database = await getDatabase();
+  return database.transaction(async (transaction) => {
+    const result = await transaction.query<{ id: string; run_id: string; attempt: number; max_attempts: number }>(
+      `select id::text as id, run_id::text as run_id, attempt, max_attempts
+       from interview_job_queue
+       where available_at <= now()
+         and (status = 'queued' or (status = 'leased' and lease_expires_at < now()))
+       order by available_at, id
+       for update skip locked
+       limit 1`,
+    );
+    const job = result.rows[0];
+    if (!job) return null;
+    await transaction.query(
+      `update interview_job_queue set status = 'leased', lease_owner = $2,
+              lease_expires_at = now() + interval '10 minutes', attempt = attempt + 1,
+              updated_at = now()
+       where id = $1`,
+      [job.id, workerId],
+    );
+    return { ...job, attempt: job.attempt + 1 };
+  });
+}
+
+async function finishInterviewJob(jobId: string, workerId: string) {
+  const database = await getDatabase();
+  await database.query(
+    `update interview_job_queue set status = 'completed', lease_owner = null,
+            lease_expires_at = null, error_message = null, updated_at = now()
+     where id = $1 and status = 'leased' and lease_owner = $2`,
+    [jobId, workerId],
+  );
+}
+
+async function handleInterviewJobFailure(job: {
+  id: string;
+  run_id: string;
+  attempt: number;
+  max_attempts: number;
+}, workerId: string, error: unknown) {
+  const database = await getDatabase();
+  const described = describeOpenAIError(error);
+  const retry = job.attempt < job.max_attempts;
+  await database.transaction(async (transaction) => {
+    const released = await transaction.query<{ id: string }>(
+      `update interview_job_queue set status = $2,
+              available_at = case when $2 = 'queued' then now() + ($3 * interval '1 second') else available_at end,
+              lease_owner = null, lease_expires_at = null, error_message = $4, updated_at = now()
+       where id = $1 and status = 'leased' and lease_owner = $5
+       returning id::text as id`,
+      [job.id, retry ? "queued" : "failed", Math.min(60, 2 ** job.attempt), described.message, workerId],
+    );
+    if (!released.rows[0]) return;
+    const runResult = await transaction.query<{ project_id: string }>(
+      "select project_id::text as project_id from interview_runs where id = $1",
+      [job.run_id],
+    );
+    const projectId = runResult.rows[0]?.project_id;
+    if (!projectId) return;
+    await transaction.query(
+      `update interview_runs set status = $2, error_message = $3,
+              finished_at = case when $2 = 'failed' then now() else null end
+       where id = $1`,
+      [job.run_id, retry ? "queued" : "failed", described.message],
+    );
+    await transaction.query(
+      `insert into interview_events (project_id, run_id, event_type, payload)
+       values ($1, $2, $3, $4::jsonb)`,
+      [
+        projectId,
+        job.run_id,
+        retry ? "run.retry_scheduled" : "run.failed",
+        JSON.stringify({ message: described.message, attempt: job.attempt, retry }),
+      ],
+    );
+  });
+}
+
+export async function processInterviewJobQueue(options: {
+  workerId?: string;
+  maxJobs?: number;
+} = {}) {
+  const workerId = options.workerId ?? `interview-${createPublicId("wrk")}`;
+  const maxJobs = options.maxJobs ?? 1;
+  let processed = 0;
+  while (processed < maxJobs) {
+    const job = await claimInterviewJob(workerId);
+    if (!job) break;
+    const database = await getDatabase();
+    const heartbeat = setInterval(() => {
+      void database.query(
+        `update interview_job_queue set lease_expires_at = now() + interval '10 minutes', updated_at = now()
+         where id = $1 and status = 'leased' and lease_owner = $2`,
+        [job.id, workerId],
+      ).catch(() => undefined);
+    }, 60_000);
+    try {
+      await executeInterviewRunById(job.run_id);
+      await finishInterviewJob(job.id, workerId);
+    } catch (error) {
+      await handleInterviewJobFailure(job, workerId, error);
+    } finally {
+      clearInterval(heartbeat);
+    }
+    processed += 1;
+  }
+  return processed;
 }

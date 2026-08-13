@@ -77,7 +77,7 @@ const reportSchema = z.object({
 
 const followupAnswerSchema = z.object({
   answer: z.string().min(40),
-  citations: z.array(z.string().url()).max(5),
+  citations: z.array(z.string()).max(5),
   caveat: z.string().min(10),
 });
 
@@ -90,7 +90,7 @@ const syntheticInterviewSchema = z.object({
     messages: z.array(z.object({
       role: z.enum(["interviewer", "persona"]),
       content: z.string().min(8),
-    })).min(6).max(12),
+    })).min(2).max(24),
   })).min(1).max(8),
 });
 
@@ -120,8 +120,8 @@ const syntheticInterviewJsonSchema = {
           },
           messages: {
             type: "array",
-            minItems: 6,
-            maxItems: 12,
+            minItems: 2,
+            maxItems: 24,
             items: {
               type: "object",
               properties: {
@@ -298,7 +298,7 @@ const followupAnswerJsonSchema = {
     citations: {
       type: "array",
       maxItems: 5,
-      items: { type: "string", format: "uri", maxLength: 500 },
+      items: { type: "string", maxLength: 500 },
     },
     caveat: { type: "string", minLength: 10, maxLength: 1000 },
   },
@@ -624,6 +624,12 @@ export type ProviderFollowupAnswer = z.infer<typeof followupAnswerSchema> & {
 export type SyntheticInterviewResult = z.infer<typeof syntheticInterviewSchema>;
 
 let client: OpenAI | null = null;
+let deepSeekClient: OpenAI | null = null;
+
+type ConversationMessage = {
+  role: "user" | "assistant" | "system" | "developer";
+  content: string;
+};
 
 type StructuredResponseRequest = {
   model: string;
@@ -632,7 +638,7 @@ type StructuredResponseRequest = {
   store?: boolean;
   metadata?: Record<string, string>;
   instructions: string;
-  input: string;
+  input: string | ConversationMessage[];
   text: {
     format: {
       type: "json_schema";
@@ -664,12 +670,30 @@ function getClient() {
   return client;
 }
 
+function getDeepSeekClient() {
+  const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
+
+  if (!apiKey) {
+    throw new Error("DEEPSEEK_API_KEY_MISSING");
+  }
+
+  deepSeekClient ??= new OpenAI({
+    apiKey,
+    baseURL: process.env.DEEPSEEK_BASE_URL?.trim() || "https://api.deepseek.com",
+  });
+  return deepSeekClient;
+}
+
 function getPlanModel() {
   return process.env.OPENAI_PLAN_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
 }
 
 function getResearchModel() {
   return process.env.OPENAI_RESEARCH_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+}
+
+function getFollowupModel() {
+  return process.env.DEEPSEEK_FOLLOWUP_MODEL?.trim() || "deepseek-v4-flash";
 }
 
 function getApiProtocol() {
@@ -680,14 +704,16 @@ function getApiProtocol() {
 
 async function createStructuredResponse(
   request: StructuredResponseRequest,
-  options?: { timeout?: number; maxRetries?: number },
+  options?: { timeout?: number; maxRetries?: number; signal?: AbortSignal },
 ): Promise<StructuredResponse> {
   if (getApiProtocol() === "chat_completions") {
     const completion = await getClient().chat.completions.create({
       model: request.model,
       messages: [
         { role: "system", content: request.instructions },
-        { role: "user", content: request.input },
+        ...(typeof request.input === "string"
+          ? [{ role: "user" as const, content: request.input }]
+          : request.input),
       ],
       reasoning_effort: request.reasoning?.effort,
       response_format: {
@@ -771,23 +797,52 @@ async function createStructuredResponse(
   };
 }
 
+async function createDeepSeekStructuredResponse(
+  request: StructuredResponseRequest,
+  options?: { timeout?: number; maxRetries?: number },
+): Promise<StructuredResponse> {
+  const response = await getDeepSeekClient().responses.create({
+    model: request.model,
+    reasoning: request.reasoning,
+    instructions: request.instructions,
+    input: request.input,
+    text: request.text,
+  }, options);
+  return {
+    id: response.id,
+    model: response.model,
+    output_text: response.output_text,
+    usage: response.usage,
+  };
+}
+
 function safetyIdentifier(userPublicId: string) {
   return createHash("sha256").update(userPublicId).digest("hex");
 }
 
 function parseOutput<T>(outputText: string, schema: z.ZodType<T>) {
   let parsed: unknown;
+  const normalized = outputText.trim().replace(/^```(?:json)?\s*|\s*```$/g, "");
+  const objectStart = normalized.indexOf("{");
+  const objectEnd = normalized.lastIndexOf("}");
+  const jsonText = objectStart >= 0 && objectEnd > objectStart
+    ? normalized.slice(objectStart, objectEnd + 1)
+    : normalized;
 
   try {
-    parsed = JSON.parse(outputText);
+    parsed = JSON.parse(jsonText);
   } catch {
-    throw new Error("OPENAI_INVALID_JSON");
+    throw new Error(`OPENAI_INVALID_JSON:${normalized.slice(0, 240)}`);
   }
 
   const result = schema.safeParse(parsed);
 
   if (!result.success) {
-    throw new Error("OPENAI_INVALID_SCHEMA");
+    const issues = result.error.issues
+      .slice(0, 4)
+      .map((issue) => `${issue.path.join(".") || "root"}:${issue.code}`)
+      .join(",");
+    throw new Error(`OPENAI_INVALID_SCHEMA:${issues}`);
   }
 
   return result.data;
@@ -826,7 +881,53 @@ export function getOpenAIProviderStatus() {
   };
 }
 
+export function getFollowupProviderStatus() {
+  return {
+    providerName: "deepseek",
+    configured: Boolean(process.env.DEEPSEEK_API_KEY?.trim()),
+    model: getFollowupModel(),
+    protocol: "responses" as const,
+    stateMode: "application_managed" as const,
+  };
+}
+
 export function describeOpenAIError(error: unknown) {
+  if (error instanceof Error && error.name === "AbortError") {
+    const timedOut = error.message === "RUNTIME_TASK_TIMEOUT" || error.message === "RUNTIME_RUN_TIMEOUT";
+    return {
+      message: timedOut ? "研究任务超过执行时限，系统将按重试策略处理。" : "研究任务已取消。",
+      status: null,
+      code: timedOut ? "RUNTIME_TIMEOUT" : "RUNTIME_ABORTED",
+      requestId: null,
+    };
+  }
+
+  if (error instanceof Error && error.message === "RUNTIME_RATE_LIMITED") {
+    return {
+      message: "模型服务请求速率已达到当前工作区上限，任务将稍后继续。",
+      status: 429,
+      code: error.message,
+      requestId: null,
+    };
+  }
+  if (error instanceof Error && error.message === "DEEPSEEK_API_KEY_MISSING") {
+    return {
+      message: "服务器尚未配置 DEEPSEEK_API_KEY，报告追问暂不可用。",
+      status: null,
+      code: error.message,
+      requestId: null,
+    };
+  }
+
+  if (error instanceof Error && error.message === "OPENAI_API_KEY_MISSING") {
+    return {
+      message: "模型服务尚未配置，无法执行访谈。",
+      status: null,
+      code: error.message,
+      requestId: null,
+    };
+  }
+
   if (error instanceof OpenAI.APIConnectionTimeoutError) {
     return {
       message: "上游模型服务响应超时，请稍后重试。",
@@ -873,7 +974,7 @@ export function describeOpenAIError(error: unknown) {
     };
   }
 
-  if (error instanceof Error && error.message === "OPENAI_INVALID_JSON") {
+  if (error instanceof Error && error.message.startsWith("OPENAI_INVALID_JSON")) {
     return {
       message: "模型返回的内容无法解析，请重新执行。",
       status: null,
@@ -959,6 +1060,7 @@ export async function generateProviderStudyPlan(
 export async function generateProviderSyntheticInterviews(input: {
   title: string;
   objective: string;
+  questions: string[];
   personas: Array<{
     publicId: string;
     name: string;
@@ -971,7 +1073,8 @@ export async function generateProviderSyntheticInterviews(input: {
   const instructions = [
     "你是专业的用户研究访谈员，负责基于结构化 AI Persona 进行假设探索访谈。",
     "为输入 Persona 生成一场独立的中文模拟访谈，逐轮交替使用 interviewer 和 persona 角色，第一轮必须是 interviewer。",
-    "问题应围绕访谈目标，由浅入深并包含追问；回答必须符合 Persona 的背景、目标、痛点和决策方式，不得声称是真人经历或真实招募样本。",
+    "必须逐字、按顺序使用输入的固定访谈问题；每个问题后只生成一条 persona 回答，不得改写、跳过或增加 interviewer 问题。",
+    "回答必须符合 Persona 的背景、目标、痛点和决策方式，不得声称是真人经历或真实招募样本。",
     "summary、insights 和 quotes 只能概括本次合成对话。不得推断人群占比、统计显著性或市场普遍性。",
     "personaPublicId 必须逐字使用输入提供的 ID，只生成一个 session。",
   ].join("\n");
@@ -990,6 +1093,7 @@ export async function generateProviderSyntheticInterviews(input: {
       input: [
         `访谈项目：${input.title}`,
         `访谈目标：${input.objective}`,
+        `固定访谈问题：\n${JSON.stringify(input.questions)}`,
         `AI Persona：\n${JSON.stringify(persona)}`,
       ].join("\n\n"),
       text: {
@@ -1004,7 +1108,12 @@ export async function generateProviderSyntheticInterviews(input: {
   }
 
   const sessions = responses.flatMap((response) => (
-    parseOutput(response.output_text, syntheticInterviewSchema).sessions
+    parseOutput(response.output_text, syntheticInterviewSchema).sessions.map((session) => ({
+      ...session,
+      messages: session.messages.map((message, index) => message.role === "interviewer"
+        ? { ...message, content: input.questions[Math.floor(index / 2)] ?? message.content }
+        : message),
+    }))
   ));
   const result = syntheticInterviewSchema.parse({ sessions });
   const expectedIds = new Set(input.personas.map((persona) => persona.publicId));
@@ -1015,6 +1124,7 @@ export async function generateProviderSyntheticInterviews(input: {
   const validTurns = result.sessions.every((session) => (
     session.messages[0]?.role === "interviewer"
     && session.messages.every((message, index) => index === 0 || message.role !== session.messages[index - 1].role)
+    && session.messages.filter((message) => message.role === "interviewer").length === input.questions.length
   ));
   if (!validIds || !validTurns) throw new Error("OPENAI_INVALID_SCHEMA");
   return {
@@ -1033,31 +1143,31 @@ export async function generateProviderFollowupAnswer(input: {
   userPublicId: string;
   studyPublicId: string;
 }): Promise<ProviderFollowupAnswer> {
-  const model = getResearchModel();
+  const model = getFollowupModel();
   const allowedUrls = new Set(input.citations.map((citation) => citation.url));
-  const response = await createStructuredResponse({
+  const response = await retryProviderRequest(() => createDeepSeekStructuredResponse({
     model,
     reasoning: { effort: "low" },
-    safety_identifier: safetyIdentifier(input.userPublicId),
-    store: true,
-    metadata: {
-      surface: "report_followup",
-      prompt_version: FOLLOWUP_PROMPT_VERSION,
-      study_id: input.studyPublicId,
-    },
     instructions: [
       "你是研究报告问答助手，只能依据输入的报告、局限和公开来源回答。",
       "不得把 AI 合成 Persona 或模拟访谈描述为真人研究，也不得补造统计比例、事实或来源。",
       "citations 只能返回输入来源列表中完全一致的 URL；没有直接来源支持时返回空数组。",
       "回答要直接回应问题，并清楚区分报告证据、分析推断和建议。",
+      "你正在参与一段持续的多轮研究对话。回答当前问题时必须结合此前所有成功轮次，并保持术语、假设和结论一致。",
       "caveat 必须说明本回答最重要的证据边界或仍需真人研究验证的事项。输出简体中文。",
     ].join("\n"),
     input: [
-      `当前问题：${input.question}`,
-      `最近对话：${JSON.stringify(input.conversation.slice(-6))}`,
-      `报告：${JSON.stringify(input.report)}`,
-      `允许引用的公开来源：${JSON.stringify(input.citations)}`,
-    ].join("\n\n"),
+      {
+        role: "developer",
+        content: [
+          `研究 ID：${input.studyPublicId}`,
+          `报告：${JSON.stringify(input.report)}`,
+          `允许引用的公开来源：${JSON.stringify(input.citations)}`,
+        ].join("\n\n"),
+      },
+      ...input.conversation,
+      { role: "user", content: input.question },
+    ],
     text: {
       format: {
         type: "json_schema",
@@ -1066,7 +1176,7 @@ export async function generateProviderFollowupAnswer(input: {
         schema: followupAnswerJsonSchema,
       },
     },
-  }, { timeout: 90_000, maxRetries: 0 });
+  }, { timeout: 90_000, maxRetries: 0 }));
   const result = parseOutput(response.output_text, followupAnswerSchema);
 
   return {
@@ -1210,6 +1320,7 @@ export async function researchPublicWeb(input: {
   framework: string;
   userPublicId: string;
   studyPublicId: string;
+  signal?: AbortSignal;
 }): Promise<ProviderResearchSources> {
   const model = getResearchModel();
   const queryResponse = await createStructuredResponse({
@@ -1239,7 +1350,7 @@ export async function researchPublicWeb(input: {
         schema: searchSourcePlanJsonSchema,
       },
     },
-  });
+  }, { signal: input.signal });
   const sourcePlan = parseOutput(queryResponse.output_text, searchSourcePlanSchema);
   const queries = sourcePlan.queries.slice(0, 5);
   const collected = await collectPublicWebSources(queries, sourcePlan.seedUrls);
@@ -1275,6 +1386,7 @@ export async function buildProviderPersonaPanel(input: {
     goals: string[];
     painPoints: string[];
   }>;
+  signal?: AbortSignal;
 }): Promise<ProviderPersonaPanel> {
   const model = getResearchModel();
   const sources = input.sources;
@@ -1316,7 +1428,7 @@ export async function buildProviderPersonaPanel(input: {
         schema: personaPanelJsonSchema,
       },
     },
-  }, { timeout: 180_000 });
+  }, { timeout: 180_000, signal: input.signal });
   return {
     ...parseOutput(panelResponse.output_text, personaPanelSchema),
     responseId: panelResponse.id,
@@ -1358,6 +1470,7 @@ export async function generateProviderResearchInterviews(input: {
   studyPublicId: string;
   personas: ProviderPersonaPanel["personas"];
   batch: 1 | 2;
+  signal?: AbortSignal;
 }): Promise<ProviderResearchInterviews> {
   const splitIndex = Math.ceil(input.personas.length / 2);
   const selected = input.batch === 1 ? input.personas.slice(0, splitIndex) : input.personas.slice(splitIndex);
@@ -1388,7 +1501,7 @@ export async function generateProviderResearchInterviews(input: {
       `请仅为以上 ${selected.length} 位 Persona 生成 batch=${input.batch} 的访谈结果。`,
     ].join("\n\n"),
     text: { format: { type: "json_schema", name: "research_harness_interviews", strict: true, schema: harnessInterviewJsonSchema } },
-  }, { timeout: 180_000 });
+  }, { timeout: 180_000, signal: input.signal });
   return parseOutput(response.output_text, harnessInterviewSchema).interviews;
 }
 
@@ -1418,6 +1531,7 @@ export async function runProviderAudienceCall(input: {
   studyPublicId: string;
   personas: ProviderPersonaPanel["personas"];
   interviews: ProviderResearchInterviews;
+  signal?: AbortSignal;
 }): Promise<ProviderDeepResearchValidation> {
   const selected = input.personas.slice(0, Math.min(3, input.personas.length));
   const response = await createStructuredResponse({
@@ -1444,7 +1558,7 @@ export async function runProviderAudienceCall(input: {
       "请围绕最关键的产品选择、阻力和机会进行一轮深度 Audience Call。",
     ].join("\n\n"),
     text: { format: { type: "json_schema", name: "research_harness_audience_call", strict: true, schema: audienceCallJsonSchema } },
-  }, { timeout: 180_000 });
+  }, { timeout: 180_000, signal: input.signal });
   return parseOutput(response.output_text, audienceCallSchema);
 }
 
@@ -1458,6 +1572,7 @@ export async function runProviderDiscussionChat(input: {
   validation?: ProviderDeepResearchValidation;
   instruction: string;
   timelineToken: string;
+  signal?: AbortSignal;
 }): Promise<ProviderResearchDiscussion> {
   const participants = input.personas.slice(0, 10);
   const response = await createStructuredResponse({
@@ -1486,7 +1601,7 @@ export async function runProviderDiscussionChat(input: {
       `Audience Call：${input.validation ? JSON.stringify(input.validation) : "未执行"}`,
     ].join("\n\n"),
     text: { format: { type: "json_schema", name: "research_harness_discussion", strict: true, schema: researchDiscussionJsonSchema } },
-  }, { timeout: 240_000 });
+  }, { timeout: 240_000, signal: input.signal });
   const parsed = parseOutput(response.output_text, researchDiscussionSchema);
   const messages = [...parsed.messages];
   const messageCounts = new Map<string, number>();
@@ -1534,6 +1649,7 @@ export async function synthesizeProviderResearchReport(input: {
   sources: PublicWebSource[];
   panelResearch?: SyntheticPanelResearch;
   discussion?: ProviderResearchDiscussion;
+  signal?: AbortSignal;
 }): Promise<{
   report: ResearchReport;
   responseId: string;
@@ -1585,7 +1701,7 @@ export async function synthesizeProviderResearchReport(input: {
         schema: reportJsonSchema,
       },
     },
-  });
+  }, { timeout: 180_000, signal: input.signal });
 
   return {
     report: parseOutput(response.output_text, reportSchema),

@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import type { Viewer } from "@/lib/auth";
 import { getDatabase, type Queryable } from "@/lib/db";
 import { createPublicId } from "@/lib/identifiers";
+import {
+  formatContextForPrompt,
+  retrieveContext,
+  type ContextSnapshot,
+} from "@/lib/context-system";
 import {
   buildProviderPersonaPanel,
   describeOpenAIError,
@@ -18,6 +24,17 @@ import {
   type ResearchReport,
 } from "@/lib/openai-provider";
 import type { StudyMethod } from "@/lib/studies";
+import { resolveBuiltInSkill, type SkillSummary } from "@/lib/skill-gateway";
+import {
+  acquireProviderRuntimeSlot,
+  assignActiveStrategy,
+  consumeProviderRateToken,
+  getRuntimeLimits,
+  recordStrategyMetric,
+  releaseProviderRuntimeSlot,
+  renewProviderRuntimeSlot,
+  type StrategyAssignment,
+} from "@/lib/runtime-control";
 
 type TaskStatus = "pending" | "running" | "completed" | "failed" | "skipped" | "waiting_input";
 
@@ -58,6 +75,7 @@ type StoredTask = {
   input: Record<string, unknown>;
   output: Record<string, unknown>;
   attempt: number;
+  timeoutSeconds: number;
 };
 
 type HarnessState = Record<string, unknown>;
@@ -72,14 +90,33 @@ type ToolResult<Output> = {
 type ToolContext = {
   study: HarnessStudy;
   state: HarnessState;
+  context: ContextSnapshot;
+  signal: AbortSignal;
+  strategy: StrategyAssignment;
 };
 
 type ResearchTool<Input, Output> = {
   name: ResearchToolName;
+  version: number;
+  displayName: string;
+  description: string;
+  capabilities: string[];
   inputSchema: z.ZodType<Input>;
   outputSchema: z.ZodType<Output>;
   execute(context: ToolContext, input: Input): Promise<ToolResult<Output>>;
 };
+
+function contextualBrief(study: HarnessStudy, context: ContextSnapshot, strategy?: StrategyAssignment) {
+  const contextText = formatContextForPrompt(context);
+  const instructionSuffix = typeof strategy?.config.instructionSuffix === "string"
+    ? strategy.config.instructionSuffix.trim().slice(0, 2000)
+    : "";
+  return [
+    study.brief,
+    contextText ? `以下是当前工作区中与本研究相关的版本化上下文。只在相关时使用，并保留其引用标识：\n${contextText}` : "",
+    instructionSuffix ? `本次实验分组的研究策略补充要求：\n${instructionSuffix}` : "",
+  ].filter(Boolean).join("\n\n");
+}
 
 const sourceSchema = z.object({
   title: z.string(),
@@ -235,6 +272,10 @@ function mergedResearchState(state: HarnessState): ProviderResearchSources {
 
 const designStudyTool: ResearchTool<Record<string, never>, Record<string, unknown>> = {
   name: "designStudy",
+  version: 1,
+  displayName: "研究设计",
+  description: "将确认后的研究计划转换为可执行任务。",
+  capabilities: ["research.plan"],
   inputSchema: z.object({}),
   outputSchema: z.record(z.string(), z.unknown()),
   async execute({ study }) {
@@ -260,14 +301,19 @@ const researchInputSchema = z.object({
 
 const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, ProviderResearchSources> = {
   name: "deepResearch",
+  version: 1,
+  displayName: "公开资料研究",
+  description: "检索并整理公开网页证据。",
+  capabilities: ["web.search", "research.sources"],
   inputSchema: researchInputSchema,
   outputSchema: webResearchSchema,
-  async execute({ study }, input) {
+  async execute({ study, context, signal, strategy }, input) {
     const output = await researchPublicWeb({
-      brief: [study.brief, input.platform ? `重点平台：${input.platform}` : "", input.focus ? `研究焦点：${input.focus}` : ""].filter(Boolean).join("\n"),
+      brief: [contextualBrief(study, context, strategy), input.platform ? `重点平台：${input.platform}` : "", input.focus ? `研究焦点：${input.focus}` : ""].filter(Boolean).join("\n"),
       framework: study.framework,
       userPublicId: study.userPublicId,
       studyPublicId: study.publicId,
+      signal,
     });
     return {
       output,
@@ -289,10 +335,17 @@ const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, Provide
 const scoutResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, ProviderResearchSources> = {
   ...webResearchTool,
   name: "scoutSocialTrends",
+  displayName: "社交趋势扫描",
+  description: "扫描指定社交平台的趋势、场景和用户表达。",
+  capabilities: ["web.search", "social.scout", "research.sources"],
 };
 
 const searchPersonasTool: ResearchTool<Record<string, never>, z.infer<typeof personaSearchSchema>> = {
   name: "searchPersonas",
+  version: 1,
+  displayName: "Persona 检索",
+  description: "在工作区 Persona 资产中检索可复用样本。",
+  capabilities: ["persona.search"],
   inputSchema: z.object({}),
   outputSchema: personaSearchSchema,
   async execute({ study }) {
@@ -333,7 +386,7 @@ const searchPersonasTool: ResearchTool<Record<string, never>, z.infer<typeof per
           return score + (searchable.includes(keyword) ? Math.max(1, keyword.length - 1) : 0);
         }, 0),
       }] : [];
-    }).sort((left, right) => right.score - left.score).slice(0, 10).map((match) => ({
+    }).filter((match) => match.score > 0).sort((left, right) => right.score - left.score).slice(0, 10).map((match) => ({
       publicId: match.publicId,
       name: match.name,
       archetype: match.archetype,
@@ -360,13 +413,17 @@ const searchPersonasTool: ResearchTool<Record<string, never>, z.infer<typeof per
 
 const buildPersonaTool: ResearchTool<Record<string, never>, HarnessPersonaPanel> = {
   name: "buildPersona",
+  version: 1,
+  displayName: "Persona 构建",
+  description: "结合研究证据和已有 Persona 构建合成样本。",
+  capabilities: ["persona.generate", "context.consume"],
   inputSchema: z.object({}),
   outputSchema: personaPanelSchema,
-  async execute({ study, state }) {
+  async execute({ study, state, context, signal, strategy }) {
     const research = mergedResearchState(state);
     const personaSearch = personaSearchSchema.safeParse(state.persona_search);
     const generated = await buildProviderPersonaPanel({
-      brief: study.brief,
+      brief: contextualBrief(study, context, strategy),
       framework: study.framework,
       methods: study.methods,
       audience: study.audience,
@@ -381,6 +438,7 @@ const buildPersonaTool: ResearchTool<Record<string, never>, HarnessPersonaPanel>
         goals: match.profile.goals,
         painPoints: match.profile.painPoints,
       })) : [],
+      signal,
     });
     const total = Math.max(6, Math.min(12, study.personaCount));
     const reusable = personaSearch.success
@@ -420,6 +478,10 @@ const buildPersonaTool: ResearchTool<Record<string, never>, HarnessPersonaPanel>
 
 const createPanelTool: ResearchTool<Record<string, never>, HarnessPersonaPanel["panel"]> = {
   name: "createPanel",
+  version: 1,
+  displayName: "Panel 创建",
+  description: "将 Persona 集合物化为研究 Panel。",
+  capabilities: ["panel.create"],
   inputSchema: z.object({}),
   outputSchema: personaPanelSchema.shape.panel,
   async execute({ state }) {
@@ -436,17 +498,22 @@ const createPanelTool: ResearchTool<Record<string, never>, HarnessPersonaPanel["
 function interviewTool(batch: 1 | 2): ResearchTool<{ batch: 1 | 2; objective?: string }, ProviderResearchInterviews> {
   return {
     name: batch === 1 ? "interviewChatBatchOne" : "interviewChatBatchTwo",
+    version: 1,
+    displayName: batch === 1 ? "合成访谈：决策路径" : "合成访谈：体验与阻力",
+    description: "对合成 Persona 执行结构化批量访谈。",
+    capabilities: ["interview.synthetic", "context.consume"],
     inputSchema: z.object({ batch: z.union([z.literal(1), z.literal(2)]), objective: z.string().optional() }),
     outputSchema: z.array(interviewSchema),
-    async execute({ study, state }) {
+    async execute({ study, state, context, signal, strategy }) {
       const personaPanel = readState(state, "personas", personaPanelSchema);
       const output = await generateProviderResearchInterviews({
-        brief: study.brief,
+        brief: contextualBrief(study, context, strategy),
         audience: study.audience,
         userPublicId: study.userPublicId,
         studyPublicId: study.publicId,
         personas: personaPanel.personas,
         batch,
+        signal,
       });
       return {
         output,
@@ -463,19 +530,24 @@ function interviewTool(batch: 1 | 2): ResearchTool<{ batch: 1 | 2; objective?: s
 
 const validateDirectionsTool: ResearchTool<Record<string, never>, ProviderDeepResearchValidation> = {
   name: "audienceCall",
+  version: 1,
+  displayName: "方向验证",
+  description: "用合成受众对候选方向进行压力测试。",
+  capabilities: ["audience.validate", "context.consume"],
   inputSchema: z.object({}),
   outputSchema: validationSchema,
-  async execute({ study, state }) {
+  async execute({ study, state, context, signal, strategy }) {
     const personaPanel = readState(state, "personas", personaPanelSchema);
     const batchOne = z.array(interviewSchema).safeParse(state.interviews_one);
     const batchTwo = z.array(interviewSchema).safeParse(state.interviews_two);
     const output = await runProviderAudienceCall({
-      brief: study.brief,
+      brief: contextualBrief(study, context, strategy),
       audience: study.audience,
       userPublicId: study.userPublicId,
       studyPublicId: study.publicId,
       personas: personaPanel.personas,
       interviews: [...(batchOne.success ? batchOne.data : []), ...(batchTwo.success ? batchTwo.data : [])],
+      signal,
     });
     return {
       output,
@@ -494,15 +566,19 @@ const discussionInputSchema = z.object({ instruction: z.string(), timelineToken:
 
 const discussionChatTool: ResearchTool<z.infer<typeof discussionInputSchema>, ProviderResearchDiscussion> = {
   name: "discussionChat",
+  version: 1,
+  displayName: "合成焦点讨论",
+  description: "主持多 Persona 焦点讨论并提取共识与分歧。",
+  capabilities: ["discussion.synthetic", "context.consume"],
   inputSchema: discussionInputSchema,
   outputSchema: discussionSchema,
-  async execute({ study, state }, input) {
+  async execute({ study, state, context, signal, strategy }, input) {
     const personaPanel = readState(state, "personas", personaPanelSchema);
     const validation = validationSchema.safeParse(state.validation);
     const batchOne = z.array(interviewSchema).safeParse(state.interviews_one);
     const batchTwo = z.array(interviewSchema).safeParse(state.interviews_two);
     const output = await runProviderDiscussionChat({
-      brief: study.brief,
+      brief: contextualBrief(study, context, strategy),
       audience: study.audience,
       userPublicId: study.userPublicId,
       studyPublicId: study.publicId,
@@ -511,6 +587,7 @@ const discussionChatTool: ResearchTool<z.infer<typeof discussionInputSchema>, Pr
       validation: validation.success ? validation.data : undefined,
       instruction: input.instruction,
       timelineToken: input.timelineToken,
+      signal,
     });
     return {
       output,
@@ -528,9 +605,13 @@ const discussionChatTool: ResearchTool<z.infer<typeof discussionInputSchema>, Pr
 
 const generateReportTool: ResearchTool<Record<string, never>, z.infer<typeof reportSchema>> = {
   name: "generateReport",
+  version: 1,
+  displayName: "研究报告生成",
+  description: "综合证据、访谈和讨论生成带来源的研究报告。",
+  capabilities: ["report.generate", "context.consume"],
   inputSchema: z.object({}),
   outputSchema: reportSchema,
-  async execute({ study, state }) {
+  async execute({ study, state, context, signal, strategy }) {
     const research = mergedResearchState(state);
     const personaResult = personaPanelSchema.safeParse(state.personas);
     const batchOne = z.array(interviewSchema).safeParse(state.interviews_one);
@@ -549,7 +630,7 @@ const generateReportTool: ResearchTool<Record<string, never>, z.infer<typeof rep
         }
       : undefined;
     const generated = await synthesizeProviderResearchReport({
-      brief: study.brief,
+      brief: contextualBrief(study, context, strategy),
       framework: study.framework,
       methods: study.methods,
       audience: study.audience,
@@ -559,6 +640,7 @@ const generateReportTool: ResearchTool<Record<string, never>, z.infer<typeof rep
       sources: research.sources,
       panelResearch,
       discussion: discussion.success ? discussion.data : undefined,
+      signal,
     });
     const output = {
       ...generated,
@@ -592,6 +674,20 @@ const researchTools = {
 };
 
 export type ResearchToolName = keyof typeof researchTools;
+
+export function listResearchSkills(): SkillSummary[] {
+  return Object.values(researchTools).map((tool) => ({
+    publicId: null,
+    slug: tool.name,
+    version: tool.version,
+    name: tool.displayName,
+    description: tool.description,
+    capabilities: tool.capabilities,
+    source: "builtin",
+    status: "active",
+    executable: true,
+  }));
+}
 
 export function createResearchTaskPlan(input: {
   studyType: string;
@@ -789,12 +885,12 @@ async function ensureTasks(study: HarnessStudy) {
       for (const [position, definition] of definitions.entries()) {
         await transaction.query(
           `insert into study_tasks (
-             public_id, study_id, run_id, position, task_key, title, tool_name, depends_on, input
-           ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb)`,
+             public_id, study_id, run_id, position, task_key, title, tool_name, depends_on, input, timeout_seconds
+           ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)`,
           [
             createPublicId("tsk"), study.studyId, study.runId, position, definition.key,
             definition.title, definition.toolName, JSON.stringify(definition.dependsOn),
-            JSON.stringify(definition.input ?? {}),
+            JSON.stringify(definition.input ?? {}), getRuntimeLimits().taskTimeoutSeconds,
           ],
         );
       }
@@ -822,9 +918,10 @@ async function loadTasks(runId: string): Promise<StoredTask[]> {
     input: Record<string, unknown> | string;
     output: Record<string, unknown> | string;
     attempt: number;
+    timeout_seconds: number;
   }>(
     `select id::text as id, public_id, position, task_key, title, tool_name, status,
-            depends_on, input, output, attempt
+            depends_on, input, output, attempt, timeout_seconds
      from study_tasks where run_id = $1 order by position, id`,
     [runId],
   );
@@ -840,6 +937,7 @@ async function loadTasks(runId: string): Promise<StoredTask[]> {
     input: parseJson(row.input),
     output: parseJson(row.output),
     attempt: row.attempt,
+    timeoutSeconds: row.timeout_seconds,
   }));
 }
 
@@ -852,7 +950,142 @@ async function loadCheckpoint(runId: string): Promise<HarnessState> {
   return result.rows[0] ? parseJson(result.rows[0].state) : {};
 }
 
-async function beginInvocation(study: HarnessStudy, task: StoredTask) {
+async function isRunCancellationRequested(runId: string) {
+  const database = await getDatabase();
+  const result = await database.query<{ cancelled: boolean }>(
+    `select (cancel_requested_at is not null or status = 'cancelled') as cancelled
+     from study_runs where id = $1 limit 1`,
+    [runId],
+  );
+  return result.rows[0]?.cancelled ?? true;
+}
+
+async function markRunCancelled(study: HarnessStudy) {
+  const database = await getDatabase();
+  await database.transaction(async (transaction) => {
+    await transaction.query(
+      `update study_runs set status = 'cancelled', cancelled_at = coalesce(cancelled_at, now()),
+              finished_at = coalesce(finished_at, now()), error_message = null
+       where id = $1`,
+      [study.runId],
+    );
+    await transaction.query(
+      "update studies set status = 'cancelled', updated_at = now() where id = $1",
+      [study.studyId],
+    );
+    await transaction.query(
+      `update study_tasks set status = case when status = 'running' then 'failed' else 'skipped' end,
+              error_message = 'RUNTIME_CANCELLED', finished_at = coalesce(finished_at, now()), updated_at = now()
+       where run_id = $1 and status in ('pending', 'running', 'waiting_input')`,
+      [study.runId],
+    );
+    await transaction.query(
+      `update study_job_queue set status = 'cancelled', lease_owner = null, lease_expires_at = null, updated_at = now()
+       where run_id = $1 and status in ('queued', 'leased')`,
+      [study.runId],
+    );
+    await transaction.query(
+      `insert into study_events (study_id, run_id, event_type, payload)
+       values ($1, $2, 'run.cancelled', '{}'::jsonb)`,
+      [study.studyId, study.runId],
+    );
+  });
+}
+
+function abortError(message: string) {
+  return new DOMException(message, "AbortError");
+}
+
+async function executeTask(input: {
+  study: HarnessStudy;
+  task: StoredTask;
+  state: HarnessState;
+  context: ContextSnapshot;
+  strategy: StrategyAssignment;
+  runSignal: AbortSignal;
+}) {
+  if (input.runSignal.aborted || await isRunCancellationRequested(input.study.runId)) {
+    throw abortError("RUNTIME_CANCELLED");
+  }
+  const tool = resolveBuiltInSkill(researchTools, input.task.toolName) as ResearchTool<unknown, unknown>;
+  const database = await getDatabase();
+  const providerBacked = tool.capabilities.some((capability) => [
+    "web.search", "persona.generate", "interview.synthetic", "audience.validate",
+    "discussion.synthetic", "report.generate",
+  ].includes(capability));
+  if (providerBacked) {
+    const rateAccepted = await consumeProviderRateToken(database, getOpenAIProviderStatus().providerName, input.study.workspaceId);
+    if (!rateAccepted) throw new Error("RUNTIME_RATE_LIMITED");
+  }
+  const timeoutSeconds = Number(input.strategy.config.taskTimeoutSeconds ?? input.task.timeoutSeconds);
+  const timeout = Math.max(15, Math.min(3600, timeoutSeconds)) * 1000;
+  const controller = new AbortController();
+  const abortFromRun = () => controller.abort(input.runSignal.reason ?? abortError("RUNTIME_CANCELLED"));
+  input.runSignal.addEventListener("abort", abortFromRun, { once: true });
+  const timer = setTimeout(() => controller.abort(abortError("RUNTIME_TASK_TIMEOUT")), timeout);
+  const invocation = await beginInvocation(input.study, input.task, tool.version, input.context.retrievalId);
+  await appendEvent(database, input.study.studyId, input.study.runId, `task.${input.task.key}.started`, {
+    taskKey: input.task.key,
+    taskPublicId: input.task.publicId,
+    toolName: input.task.toolName,
+    skillVersion: tool.version,
+    contextRetrievalId: input.context.retrievalPublicId,
+    invocationId: invocation.public_id,
+    strategyVersion: input.strategy.strategyVersion,
+  });
+  await appendEvent(database, input.study.studyId, input.study.runId, "tool.call.started", {
+    taskKey: input.task.key,
+    taskPublicId: input.task.publicId,
+    toolName: input.task.toolName,
+    skillVersion: tool.version,
+    contextRetrievalId: input.context.retrievalPublicId,
+    invocationId: invocation.public_id,
+    arguments: input.task.input,
+  });
+  try {
+    const parsedInput = tool.inputSchema.parse(input.task.input);
+    const result = await tool.execute({
+      study: input.study,
+      state: input.state,
+      context: input.context,
+      signal: controller.signal,
+      strategy: input.strategy,
+    }, parsedInput);
+    if (controller.signal.aborted || await isRunCancellationRequested(input.study.runId)) {
+      throw controller.signal.reason ?? abortError("RUNTIME_CANCELLED");
+    }
+    const output = tool.outputSchema.parse(result.output);
+    await completeInvocation({
+      study: input.study,
+      task: input.task,
+      invocationId: invocation.id,
+      output,
+      artifactType: result.artifactType,
+      artifactTitle: result.artifactTitle,
+      eventPayload: result.eventPayload,
+    });
+    return { key: input.task.key, output };
+  } catch (error) {
+    const described = describeOpenAIError(error);
+    await failInvocation({
+      study: input.study,
+      task: input.task,
+      invocationId: invocation.id,
+      message: described.message,
+    });
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    input.runSignal.removeEventListener("abort", abortFromRun);
+  }
+}
+
+async function beginInvocation(
+  study: HarnessStudy,
+  task: StoredTask,
+  skillVersion: number,
+  contextRetrievalId: string | null,
+) {
   const database = await getDatabase();
   const idempotencyKey = `${study.runId}:${task.key}`;
   return database.transaction(async (transaction) => {
@@ -864,15 +1097,18 @@ async function beginInvocation(study: HarnessStudy, task: StoredTask) {
     );
     const invocation = await transaction.query<{ id: string; public_id: string }>(
       `insert into study_tool_invocations (
-         public_id, study_id, run_id, task_id, tool_name, idempotency_key, arguments
-       ) values ($1, $2, $3, $4, $5, $6, $7::jsonb)
+         public_id, study_id, run_id, task_id, tool_name, idempotency_key, arguments,
+         skill_slug, skill_version, context_retrieval_id
+       ) values ($1, $2, $3, $4, $5, $6, $7::jsonb, $5, $8, $9)
        on conflict (idempotency_key) do update set
          status = 'running', arguments = excluded.arguments, error_message = null,
+         skill_slug = excluded.skill_slug, skill_version = excluded.skill_version,
+         context_retrieval_id = excluded.context_retrieval_id,
          attempt = study_tool_invocations.attempt + 1, started_at = now(), finished_at = null
        returning id::text as id, public_id`,
       [
         createPublicId("inv"), study.studyId, study.runId, task.id, task.toolName,
-        idempotencyKey, JSON.stringify(task.input),
+        idempotencyKey, JSON.stringify(task.input), skillVersion, contextRetrievalId,
       ],
     );
     return invocation.rows[0];
@@ -1131,6 +1367,25 @@ export async function runStudyHarness(runId: string) {
   await ensureTasks(study);
   const database = await getDatabase();
   const provider = getOpenAIProviderStatus();
+  const strategy = await database.transaction(async (transaction) => {
+    const assigned = await assignActiveStrategy({
+      queryable: transaction,
+      workspaceId: study.workspaceId,
+      studyId: study.studyId,
+      runId: study.runId,
+      subjectKey: `study:${study.publicId}`,
+      workflowType: "batch_research",
+    });
+    const runTimeoutSeconds = Number(assigned.config.runTimeoutSeconds ?? getRuntimeLimits().runTimeoutSeconds);
+    await transaction.query(
+      `update study_runs set workflow_type = 'batch_research', workflow_version = 'research-dag-v2',
+              strategy_key = $2, strategy_version = $3, experiment_assignment_id = $4,
+              timeout_seconds = $5
+       where id = $1`,
+      [study.runId, assigned.variantKey, assigned.strategyVersion, assigned.assignmentId, runTimeoutSeconds],
+    );
+    return assigned;
+  });
   await database.transaction(async (transaction) => {
     await transaction.query(
       `update study_runs set status = 'running', provider = $2, provider_model = $3,
@@ -1146,62 +1401,120 @@ export async function runStudyHarness(runId: string) {
   await appendEvent(database, study.studyId, study.runId, resuming ? "run.resumed" : "run.started", {
     provider: provider.providerName,
     model: provider.researchModel,
-    harness: "plan-and-execute-v1",
+    harness: "research-dag-v2",
+    strategy: {
+      experimentKey: strategy.experimentKey,
+      variantKey: strategy.variantKey,
+      strategyVersion: strategy.strategyVersion,
+      assignmentId: strategy.assignmentPublicId,
+    },
   });
 
-  const tasks = await loadTasks(runId);
-  const state = await loadCheckpoint(runId);
-  for (const task of tasks) {
-    if (task.status === "completed") {
-      if (!(task.key in state)) state[task.key] = task.output;
-      continue;
-    }
-    const missingDependency = task.dependsOn.find((dependency) => !(dependency in state));
-    if (missingDependency) throw new Error(`HARNESS_DEPENDENCY_MISSING:${task.key}:${missingDependency}`);
-    const tool = researchTools[task.toolName] as ResearchTool<unknown, unknown> | undefined;
-    if (!tool) throw new Error(`HARNESS_TOOL_NOT_FOUND:${task.toolName}`);
-    const invocation = await beginInvocation(study, task);
-    await appendEvent(database, study.studyId, study.runId, `task.${task.key}.started`, {
-      taskKey: task.key,
-      taskPublicId: task.publicId,
-      toolName: task.toolName,
-      invocationId: invocation.public_id,
-    });
-    await appendEvent(database, study.studyId, study.runId, "tool.call.started", {
-      taskKey: task.key,
-      taskPublicId: task.publicId,
-      toolName: task.toolName,
-      invocationId: invocation.public_id,
-      arguments: task.input,
-    });
-    try {
-      const parsedInput = tool.inputSchema.parse(task.input);
-      const result = await tool.execute({ study, state }, parsedInput);
-      const output = tool.outputSchema.parse(result.output);
-      await completeInvocation({
-        study,
-        task,
-        invocationId: invocation.id,
-        output,
-        artifactType: result.artifactType,
-        artifactTitle: result.artifactTitle,
-        eventPayload: result.eventPayload,
-      });
-      state[task.key] = output;
-    } catch (error) {
-      const described = describeOpenAIError(error);
-      await failInvocation({
-        study,
-        task,
-        invocationId: invocation.id,
-        message: described.message,
-      });
-      throw error;
-    }
-  }
+  const runController = new AbortController();
+  const runTimeoutSeconds = Number(strategy.config.runTimeoutSeconds ?? getRuntimeLimits().runTimeoutSeconds);
+  const runTimer = setTimeout(
+    () => runController.abort(abortError("RUNTIME_RUN_TIMEOUT")),
+    Math.max(30, Math.min(14400, runTimeoutSeconds)) * 1000,
+  );
+  const cancellationPoll = setInterval(() => {
+    void isRunCancellationRequested(study.runId).then((cancelled) => {
+      if (cancelled && !runController.signal.aborted) runController.abort(abortError("RUNTIME_CANCELLED"));
+    }).catch(() => undefined);
+  }, 1_000);
 
-  await materializeStudy(study, state);
-  return "completed" as const;
+  const state = await loadCheckpoint(runId);
+  const context = await retrieveContext({
+    workspaceId: study.workspaceId,
+    userId: study.createdBy,
+    studyId: study.studyId,
+    runId: study.runId,
+    query: `${study.brief}\n${study.audience}\n${study.framework}`,
+    limit: 8,
+  });
+  await appendEvent(database, study.studyId, study.runId, resuming ? "context.reused" : "context.retrieved", {
+    retrievalId: context.retrievalPublicId,
+    strategy: context.strategy,
+    citationCount: context.citations.length,
+    citations: context.citations.map((citation) => ({
+      assetPublicId: citation.assetPublicId,
+      assetVersionPublicId: citation.assetVersionPublicId,
+      chunkPublicId: citation.chunkPublicId,
+      title: citation.title,
+      score: citation.score,
+    })),
+  });
+  const startedAt = Date.now();
+  try {
+    for (;;) {
+      if (runController.signal.aborted || await isRunCancellationRequested(study.runId)) {
+        throw runController.signal.reason ?? abortError("RUNTIME_CANCELLED");
+      }
+      const tasks = await loadTasks(runId);
+      for (const task of tasks) {
+        if (task.status === "completed" && !(task.key in state)) state[task.key] = task.output;
+      }
+      const unfinished = tasks.filter((task) => task.status !== "completed" && task.status !== "skipped");
+      if (!unfinished.length) break;
+      const ready = unfinished.filter((task) => (
+        (task.status === "pending" || task.status === "failed")
+        && task.dependsOn.every((dependency) => dependency in state)
+      ));
+      if (!ready.length) {
+        const blocked = unfinished.map((task) => `${task.key}<-${task.dependsOn.filter((dependency) => !(dependency in state)).join(",")}`).join(";");
+        throw new Error(`HARNESS_DAG_STALLED:${blocked}`);
+      }
+      const configuredConcurrency = Number(strategy.config.taskConcurrency ?? getRuntimeLimits().taskConcurrency);
+      const wave = ready.slice(0, Math.max(1, Math.min(8, configuredConcurrency)));
+      await appendEvent(database, study.studyId, study.runId, "dag.wave.started", {
+        taskKeys: wave.map((task) => task.key),
+        concurrency: wave.length,
+      });
+      const settled = await Promise.allSettled(wave.map((task) => executeTask({
+        study,
+        task,
+        state: { ...state },
+        context,
+        strategy,
+        runSignal: runController.signal,
+      })));
+      const failures = settled.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+      for (const result of settled) {
+        if (result.status === "fulfilled") state[result.value.key] = result.value.output;
+      }
+      await appendEvent(database, study.studyId, study.runId, "dag.wave.completed", {
+        taskKeys: wave.map((task) => task.key),
+        completed: settled.filter((result) => result.status === "fulfilled").length,
+        failed: failures.length,
+      });
+      if (failures.length) throw failures[0].reason;
+    }
+    await materializeStudy(study, state);
+    const runTokens = Object.values(state).reduce<number>((sum, item) => {
+      if (!item || typeof item !== "object" || !("usage" in item)) return sum;
+      return sum + totalTokens(item.usage);
+    }, 0);
+    await recordStrategyMetric(database, strategy.assignmentId, "run_completed", 1);
+    await recordStrategyMetric(database, strategy.assignmentId, "run_duration_ms", Date.now() - startedAt);
+    await recordStrategyMetric(database, strategy.assignmentId, "run_tokens", runTokens);
+    await recordStrategyMetric(database, strategy.assignmentId, "task_count", Object.keys(state).length);
+    return "completed" as const;
+  } catch (error) {
+    const cancellationRequested = await isRunCancellationRequested(study.runId);
+    if (cancellationRequested || (error instanceof DOMException && error.name === "AbortError" && error.message === "RUNTIME_CANCELLED")) {
+      await markRunCancelled(study);
+      await recordStrategyMetric(database, strategy.assignmentId, "run_cancelled", 1);
+      return "cancelled" as const;
+    }
+    if (!(error instanceof Error && error.message === "RUNTIME_RATE_LIMITED")) {
+      await recordStrategyMetric(database, strategy.assignmentId, "run_failed", 1, {
+      error: error instanceof Error ? error.message.slice(0, 200) : "unknown",
+      });
+    }
+    throw error;
+  } finally {
+    clearTimeout(runTimer);
+    clearInterval(cancellationPoll);
+  }
 }
 
 export async function enqueueStudyJob(queryable: Queryable, runId: string) {
@@ -1239,14 +1552,22 @@ export async function enqueueLatestStudyRun(publicId: string, workspaceId: strin
 async function claimStudyJob(workerId: string) {
   const database = await getDatabase();
   return database.transaction(async (transaction) => {
-    const result = await transaction.query<{ id: string; run_id: string; attempt: number; max_attempts: number }>(
-      `select id::text as id, run_id::text as run_id, attempt, max_attempts
-       from study_job_queue
-       where available_at <= now()
-         and (status = 'queued' or (status = 'leased' and lease_expires_at < now()))
-       order by available_at, id
+    const result = await transaction.query<{
+      id: string; run_id: string; attempt: number; max_attempts: number;
+      workspace_id: string; provider_name: string;
+    }>(
+      `select job.id::text as id, job.run_id::text as run_id, job.attempt, job.max_attempts,
+              study.workspace_id::text as workspace_id,
+              coalesce(run.provider, $1) as provider_name
+       from study_job_queue job
+       join study_runs run on run.id = job.run_id
+       join studies study on study.id = run.study_id
+       where job.available_at <= now()
+         and (job.status = 'queued' or (job.status = 'leased' and job.lease_expires_at < now()))
+       order by job.available_at, job.id
        for update skip locked
        limit 1`,
+      [getOpenAIProviderStatus().providerName],
     );
     const job = result.rows[0];
     if (!job) return null;
@@ -1259,6 +1580,17 @@ async function claimStudyJob(workerId: string) {
     );
     return { ...job, attempt: job.attempt + 1 };
   });
+}
+
+async function deferStudyJob(jobId: string, workerId: string, reason: string, delaySeconds = 3) {
+  const database = await getDatabase();
+  await database.query(
+    `update study_job_queue set status = 'queued', available_at = now() + ($3 * interval '1 second'),
+            attempt = greatest(0, attempt - 1), lease_owner = null, lease_expires_at = null,
+            error_message = $4, updated_at = now()
+     where id = $1 and status = 'leased' and lease_owner = $2`,
+    [jobId, workerId, delaySeconds, reason],
+  );
 }
 
 async function finishStudyJob(jobId: string, workerId: string) {
@@ -1325,27 +1657,112 @@ export async function processStudyJobQueue(options: {
 } = {}) {
   const workerId = options.workerId ?? `research-${randomUUID()}`;
   const maxJobs = options.maxJobs ?? 1;
-  let processed = 0;
-  while (processed < maxJobs) {
+  const jobs: Array<NonNullable<Awaited<ReturnType<typeof claimStudyJob>>>> = [];
+  let claims = 0;
+  while (jobs.length < maxJobs && claims < maxJobs * 3) {
+    claims += 1;
     const job = await claimStudyJob(workerId);
     if (!job) break;
+    const slot = await acquireProviderRuntimeSlot({
+      runId: job.run_id,
+      workspaceId: job.workspace_id,
+      providerName: job.provider_name,
+      workerId,
+    });
+    if (!slot.acquired) {
+      await deferStudyJob(job.id, workerId, slot.reason, 3);
+      continue;
+    }
+    jobs.push(job);
+  }
+  await Promise.all(jobs.map(async (job) => {
     const database = await getDatabase();
     const heartbeat = setInterval(() => {
       void database.query(
         `update study_job_queue set lease_expires_at = now() + interval '10 minutes', updated_at = now()
          where id = $1 and status = 'leased' and lease_owner = $2`,
         [job.id, workerId],
-      ).catch(() => undefined);
+      ).then(() => renewProviderRuntimeSlot(job.run_id, workerId)).catch(() => undefined);
     }, 60_000);
     try {
-      await runStudyHarness(job.run_id);
-      await finishStudyJob(job.id, workerId);
+      const result = await runStudyHarness(job.run_id);
+      if (result === "cancelled") {
+        await database.query(
+          `update study_job_queue set status = 'cancelled', lease_owner = null,
+                  lease_expires_at = null, updated_at = now()
+           where id = $1 and lease_owner = $2`,
+          [job.id, workerId],
+        );
+      } else {
+        await finishStudyJob(job.id, workerId);
+      }
     } catch (error) {
-      await handleStudyJobFailure(job, workerId, error);
+      if (error instanceof Error && error.message === "RUNTIME_RATE_LIMITED") {
+        await deferStudyJob(job.id, workerId, error.message, 5);
+      } else {
+        await handleStudyJobFailure(job, workerId, error);
+      }
     } finally {
       clearInterval(heartbeat);
+      await releaseProviderRuntimeSlot(job.run_id, workerId);
     }
-    processed += 1;
-  }
-  return processed;
+  }));
+  return jobs.length;
+}
+
+export async function cancelStudyRun(viewer: Viewer, publicId: string) {
+  if (viewer.role === "viewer") return "forbidden" as const;
+  const database = await getDatabase();
+  return database.transaction(async (transaction) => {
+    const result = await transaction.query<{
+      study_id: string; run_id: string | null; run_status: string | null; job_status: string | null;
+    }>(
+      `select study.id::text as study_id, run.id::text as run_id, run.status as run_status,
+              job.status as job_status
+       from studies study
+       left join lateral (
+         select id, status from study_runs where study_id = study.id order by created_at desc, id desc limit 1
+       ) run on true
+       left join study_job_queue job on job.run_id = run.id
+       where study.public_id = $1 and study.workspace_id = $2
+       for update of study`,
+      [publicId, viewer.workspaceId],
+    );
+    const study = result.rows[0];
+    if (!study) return "not_found" as const;
+    if (!study.run_id || !study.run_status) return "not_running" as const;
+    if (["completed", "failed", "cancelled"].includes(study.run_status)) return "not_running" as const;
+    const immediate = study.run_status !== "running" && study.job_status !== "leased";
+    await transaction.query(
+      `update study_runs set cancel_requested_at = coalesce(cancel_requested_at, now()),
+              status = case when $2 then 'cancelled' else status end,
+              cancelled_at = case when $2 then coalesce(cancelled_at, now()) else cancelled_at end,
+              finished_at = case when $2 then coalesce(finished_at, now()) else finished_at end
+       where id = $1`,
+      [study.run_id, immediate],
+    );
+    if (immediate) {
+      await transaction.query(
+        `update study_job_queue set status = 'cancelled', lease_owner = null, lease_expires_at = null, updated_at = now()
+         where run_id = $1 and status in ('queued', 'leased')`,
+        [study.run_id],
+      );
+      await transaction.query(
+        `update study_tasks set status = 'skipped', error_message = 'RUNTIME_CANCELLED',
+                finished_at = coalesce(finished_at, now()), updated_at = now()
+         where run_id = $1 and status in ('pending', 'waiting_input')`,
+        [study.run_id],
+      );
+      await transaction.query("update studies set status = 'cancelled', updated_at = now() where id = $1", [study.study_id]);
+    }
+    await transaction.query(
+      `insert into study_events (study_id, run_id, event_type, payload)
+       values ($1, $2, $3, $4::jsonb)`,
+      [
+        study.study_id, study.run_id, immediate ? "run.cancelled" : "run.cancel.requested",
+        JSON.stringify({ requestedBy: viewer.userPublicId }),
+      ],
+    );
+    return immediate ? "cancelled" as const : "requested" as const;
+  });
 }

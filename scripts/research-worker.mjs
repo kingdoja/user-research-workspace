@@ -11,9 +11,21 @@ async function loadHarness() {
   return import("../src/lib/research-harness.ts");
 }
 
+async function loadInterviews() {
+  return import("../src/lib/interviews.ts");
+}
+
 async function poll() {
-  const { processStudyJobQueue } = await loadHarness();
-  return processStudyJobQueue({ workerId, maxJobs: once ? 1 : 10 });
+  const [{ processStudyJobQueue }, { processInterviewJobQueue }] = await Promise.all([
+    loadHarness(),
+    loadInterviews(),
+  ]);
+  const maxJobs = once ? 1 : 5;
+  const [studies, interviews] = await Promise.all([
+    processStudyJobQueue({ workerId: `${workerId}:study`, maxJobs }),
+    processInterviewJobQueue({ workerId: `${workerId}:interview`, maxJobs }),
+  ]);
+  return studies + interviews;
 }
 
 do {

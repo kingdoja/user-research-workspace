@@ -927,48 +927,43 @@ export async function submitStudyFollowup(viewer: Viewer, publicId: string, ques
   const conversationResult = await database.query<{
     role: "user" | "assistant";
     content: string | null;
+    payload: Record<string, unknown> | string;
   }>(
-    `select role, content from study_messages
+    `select role, content, payload from study_messages
      where study_id = $1 and part_type in ('followup_question', 'followup_answer')
-     order by created_at desc, id desc limit 6`,
+     order by created_at asc, id asc`,
     [study.study_id],
   );
 
-  let providerFailure: ReturnType<typeof describeOpenAIError> | null = null;
+  const conversation: Array<{ role: "user" | "assistant"; content: string }> = [];
+  let pendingQuestion: string | null = null;
+  for (const message of conversationResult.rows) {
+    if (message.role === "user") {
+      pendingQuestion = message.content ?? "";
+      continue;
+    }
+    const payload = typeof message.payload === "string" ? JSON.parse(message.payload) : message.payload;
+    if (pendingQuestion && payload.model !== "local-report-fallback") {
+      conversation.push(
+        { role: "user", content: pendingQuestion },
+        { role: "assistant", content: message.content ?? "" },
+      );
+    }
+    pendingQuestion = null;
+  }
+
   let answer: Awaited<ReturnType<typeof generateProviderFollowupAnswer>>;
   try {
     answer = await generateProviderFollowupAnswer({
       question,
       report: reportContent,
       citations,
-      conversation: conversationResult.rows.reverse().map((message) => ({
-        role: message.role,
-        content: message.content ?? "",
-      })),
+      conversation,
       userPublicId: viewer.userPublicId,
       studyPublicId: publicId,
     });
   } catch (error) {
-    providerFailure = describeOpenAIError(error);
-    const evidence = reportContent.findings.slice(0, 3).map((finding, index) => (
-      `${index + 1}. ${finding.title}：${finding.insight} 报告中的证据说明为：${finding.evidence}`
-    ));
-    const recommendations = reportContent.recommendations.slice(0, 3).map((recommendation, index) => (
-      `${index + 1}. ${recommendation.title}：${recommendation.action}`
-    ));
-    answer = {
-      answer: [
-        `针对“${question}”，当前只能依据这份已生成报告回答。`,
-        `报告证据：\n${evidence.join("\n")}`,
-        `分析与建议：\n${recommendations.join("\n")}`,
-        `仍需验证：\n${reportContent.limitations.join("\n")}`,
-      ].join("\n\n"),
-      citations: citations.map((citation) => citation.url).slice(0, 5),
-      caveat: `上游模型暂时不可用，本回答由报告内容自动整理，没有新增检索、真人访谈或统计证据。${providerFailure.message}`,
-      responseId: `local_${createPublicId("rsp")}`,
-      model: "local-report-fallback",
-      promptVersion: "report-followup-fallback-v1",
-    };
+    return { status: "provider_failed" as const, error: describeOpenAIError(error) };
   }
 
   const citationDetails = answer.citations.flatMap((url) => {
@@ -987,7 +982,6 @@ export async function submitStudyFollowup(viewer: Viewer, publicId: string, ques
         responseId: answer.responseId,
         model: answer.model,
         promptVersion: answer.promptVersion,
-        providerFailure,
       })],
     );
     await transaction.query(
@@ -998,7 +992,7 @@ export async function submitStudyFollowup(viewer: Viewer, publicId: string, ques
     await transaction.query("update studies set updated_at = now() where id = $1", [study.study_id]);
   });
 
-  return "completed" as const;
+  return { status: "completed" as const };
 }
 
 export async function updateStudyShare(viewer: Viewer, publicId: string, enabled: boolean) {
@@ -1491,7 +1485,10 @@ export async function queueStudyRun(viewer: Viewer, publicId: string) {
        join study_plans on study_plans.study_id = studies.id
        left join lateral (
          select study_runs.id::text as id, study_runs.status, study_runs.created_at, study_runs.started_at,
-                (select max(study_events.created_at) from study_events where study_events.run_id = study_runs.id) as last_event_at
+                greatest(
+                  (select max(study_events.created_at) from study_events where study_events.run_id = study_runs.id),
+                  (select job.updated_at from study_job_queue job where job.run_id = study_runs.id)
+                ) as last_event_at
          from study_runs
          where study_runs.study_id = studies.id
          order by study_runs.created_at desc, study_runs.id desc
@@ -1525,6 +1522,12 @@ export async function queueStudyRun(viewer: Viewer, publicId: string) {
     }
 
     if (study.run_id && activeRunExpired) {
+      const liveSlot = await transaction.query<{ id: string }>(
+        `select id::text as id from provider_runtime_slots
+         where run_id = $1 and lease_expires_at > now() limit 1`,
+        [study.run_id],
+      );
+      if (liveSlot.rows[0]) return "already_running" as const;
       const interruptionMessage = "执行进程超过 10 分钟未更新，已作为中断记录保留。";
       await transaction.query(
         `update study_runs
@@ -1689,7 +1692,10 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
      left join lateral (
        select study_runs.id, study_runs.status, study_runs.provider, study_runs.provider_model,
               study_runs.error_message, study_runs.created_at, study_runs.started_at, study_runs.finished_at,
-              (select max(study_events.created_at) from study_events where study_events.run_id = study_runs.id) as last_event_at,
+              greatest(
+                (select max(study_events.created_at) from study_events where study_events.run_id = study_runs.id),
+                (select job.updated_at from study_job_queue job where job.run_id = study_runs.id)
+              ) as last_event_at,
               count(*) over ()::int as attempt
        from study_runs
        where study_runs.study_id = studies.id

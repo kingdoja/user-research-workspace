@@ -68,7 +68,13 @@ function filteredSessions(sessions: InterviewSessionDetail[], source: InterviewS
 export function buildInterviewThemes(project: InterviewProjectDetail, source: InterviewSourceFilter = "all") {
   const grouped = new Map<string, InterviewTheme>();
   for (const session of filteredSessions(project.sessions, source)) {
-    for (const insight of session.insights) {
+    const insights = session.insights.length
+      ? session.insights
+      : session.messages
+        .filter((message) => message.role === "persona")
+        .map((message) => excerpt(message.content, 240))
+        .filter(Boolean);
+    for (const insight of insights) {
       const rule = resolveTheme(insight);
       const current = grouped.get(rule.id) ?? {
         id: rule.id,

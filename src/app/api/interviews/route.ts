@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { after } from "next/server";
 import { getViewer } from "@/lib/auth";
-import { createInterviewProject, executeInterviewRun, listInterviewProjects } from "@/lib/interviews";
+import { createInterviewProject, listInterviewProjects, processInterviewJobQueue } from "@/lib/interviews";
 import { createInterviewProjectSchema } from "@/lib/interview-schema";
 import { describeOpenAIError } from "@/lib/openai-provider";
 import { isSameOriginRequest } from "@/lib/request-security";
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "访谈项目信息无效" }, { status: 400 });
   try {
     const result = await createInterviewProject(viewer, parsed.data);
-    if (result.queued) after(() => executeInterviewRun(result.publicId, viewer.workspaceId));
+    if (result.queued) after(() => processInterviewJobQueue({ maxJobs: 1 }));
     return NextResponse.json({
       publicId: result.publicId,
       queued: result.queued,

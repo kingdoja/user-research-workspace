@@ -72,7 +72,7 @@ export async function GET(
             cursor = BigInt(event.id);
           }
 
-          if (result.rows.some((event) => event.type === "research.completed" || event.type === "run.failed")) {
+          if (result.rows.some((event) => ["research.completed", "run.failed", "run.cancelled"].includes(event.type))) {
             break;
           }
           if (result.rows.length === 0) {

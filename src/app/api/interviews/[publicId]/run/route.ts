@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { NextResponse } from "next/server";
 import { getViewer } from "@/lib/auth";
-import { executeInterviewRun, queueInterviewRun } from "@/lib/interviews";
+import { processInterviewJobQueue, queueInterviewRun } from "@/lib/interviews";
 import { isSameOriginRequest } from "@/lib/request-security";
 
 export const maxDuration = 300;
@@ -20,6 +20,6 @@ export async function POST(request: Request, context: RouteContext) {
   if (result === "no_personas") return NextResponse.json({ error: "该项目没有可生成的 AI Persona" }, { status: 409 });
   if (result === "completed") return NextResponse.json({ error: "该项目的 AI 访谈已经生成" }, { status: 409 });
   if (result === "already_running") return NextResponse.json({ error: "生成任务仍在执行中" }, { status: 409 });
-  after(() => executeInterviewRun(publicId, viewer.workspaceId));
+  after(() => processInterviewJobQueue({ maxJobs: 1 }));
   return NextResponse.json({ status: "queued" }, { status: 202 });
 }

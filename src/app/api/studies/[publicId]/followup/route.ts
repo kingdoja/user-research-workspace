@@ -29,5 +29,9 @@ export async function POST(
   const result = await submitStudyFollowup(viewer, publicId, parsed.data.question);
   if (result === "not_found") return NextResponse.json({ error: "已完成的研究不存在" }, { status: 404 });
   if (result === "report_missing") return NextResponse.json({ error: "研究报告尚未生成" }, { status: 409 });
-  return NextResponse.json({ status: result });
+  if (result.status === "provider_failed") {
+    const status = result.error.code === "DEEPSEEK_API_KEY_MISSING" ? 503 : 502;
+    return NextResponse.json({ error: result.error.message, code: result.error.code }, { status });
+  }
+  return NextResponse.json({ status: result.status });
 }
