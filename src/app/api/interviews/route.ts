@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
+import { after } from "next/server";
 import { getViewer } from "@/lib/auth";
-import { createInterviewProject, listInterviewProjects } from "@/lib/interviews";
+import { createInterviewProject, executeInterviewRun, listInterviewProjects } from "@/lib/interviews";
 import { createInterviewProjectSchema } from "@/lib/interview-schema";
 import { describeOpenAIError } from "@/lib/openai-provider";
 import { isSameOriginRequest } from "@/lib/request-security";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 export async function GET() {
   const viewer = await getViewer();
@@ -20,12 +21,18 @@ export async function POST(request: Request) {
   const parsed = createInterviewProjectSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "访谈项目信息无效" }, { status: 400 });
   try {
-    const publicId = await createInterviewProject(viewer, parsed.data);
-    return NextResponse.json({ publicId, redirectTo: `/interview/projects/${publicId}` }, { status: 201 });
+    const result = await createInterviewProject(viewer, parsed.data);
+    if (result.queued) after(() => executeInterviewRun(result.publicId, viewer.workspaceId));
+    return NextResponse.json({
+      publicId: result.publicId,
+      queued: result.queued,
+      redirectTo: `/interview/projects/${result.publicId}`,
+    }, { status: 201 });
   } catch (error) {
     if (error instanceof Error && error.message === "PERSONA_NOT_FOUND") return NextResponse.json({ error: "所选 Persona 不存在或不可见" }, { status: 404 });
     if (error instanceof Error && error.message === "PANEL_NOT_FOUND") return NextResponse.json({ error: "所选 Panel 不存在" }, { status: 404 });
     if (error instanceof Error && error.message === "STUDY_NOT_FOUND") return NextResponse.json({ error: "所选研究不存在" }, { status: 404 });
+    if (error instanceof Error && error.message === "PROVIDER_NOT_CONFIGURED") return NextResponse.json({ error: "模型服务尚未配置" }, { status: 503 });
     const providerError = describeOpenAIError(error);
     return NextResponse.json({ error: providerError.message }, { status: 502 });
   }
