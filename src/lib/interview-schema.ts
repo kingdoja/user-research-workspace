@@ -49,4 +49,5 @@ export const submitPublicInterviewSchema = z.object({
 export const citeInterviewInsightSchema = z.object({
   sessionPublicId: z.string().trim().min(8).max(120),
   insight: z.string().trim().min(10).max(1000),
+  attribution: z.enum(["session", "synthesis"]).default("session"),
 });

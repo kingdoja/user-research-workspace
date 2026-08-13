@@ -25,6 +25,9 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import type { InterviewProjectDetail } from "@/lib/interviews";
 import { InterviewProjectSettings } from "@/components/interview-project-settings";
+import { InterviewAnalysisView } from "@/components/interview-analysis-view";
+import { InterviewReportView } from "@/components/interview-report-view";
+import { buildInterviewDifferences, buildInterviewHypotheses, buildInterviewThemes } from "@/lib/interview-analysis";
 
 type ProjectView = "sessions" | "questions" | "report" | "settings";
 
@@ -59,6 +62,13 @@ export function InterviewProjectWorkspace({ project }: { project: InterviewProje
   const [pending, startTransition] = useTransition();
   const runActive = (project.runStatus === "queued" || project.runStatus === "running") && !project.runRecoverable;
   const selected = project.sessions.find((session) => session.publicId === selectedId) ?? project.sessions[0];
+  const aiSessionCount = project.sessions.filter((session) => session.sessionType === "ai").length;
+  const humanSessionCount = project.sessions.filter((session) => session.sessionType === "human").length;
+  const sourceNotice = aiSessionCount && humanSessionCount
+    ? "AI 合成与真人访谈并列展示；来源标签用于区分证据属性。"
+    : aiSessionCount
+      ? "当前记录均为 AI 合成访谈，不代表真人陈述。"
+      : "当前记录均来自真人访谈；少量会话不构成统计结论。";
   const report = useMemo(() => ({
     summaries: project.sessions.map((session) => ({ persona: session.participantName, summary: session.summary })),
     insights: project.sessions.flatMap((session) => session.insights.map((insight) => ({
@@ -68,6 +78,7 @@ export function InterviewProjectWorkspace({ project }: { project: InterviewProje
     }))),
     quotes: project.sessions.flatMap((session) => session.quotes.map((quote) => ({
       persona: session.participantName,
+      sessionType: session.sessionType,
       quote: formatQuote(quote),
     }))),
   }), [project.sessions]);
@@ -79,22 +90,33 @@ export function InterviewProjectWorkspace({ project }: { project: InterviewProje
   }, [router, runActive]);
 
   function downloadMarkdown() {
+    const themes = buildInterviewThemes(project);
+    const differences = buildInterviewDifferences(project);
+    const hypotheses = buildInterviewHypotheses(themes);
     const questions = project.questions.map((question) => [
       `## ${question.index}. ${question.question}`,
-      ...question.answers.map((answer) => `### ${answer.personaName}\n\n${answer.answer}`),
+      ...question.answers.map((answer) => `### ${answer.personaName}（${answer.sessionType === "ai" ? "AI 合成 Persona" : "真人参与者"}）\n\n${answer.answer}`),
     ].join("\n\n")).join("\n\n");
     const summaries = report.summaries.map((item) => `### ${item.persona}\n\n${item.summary}`).join("\n\n");
     const insights = report.insights.map((item) => `- **${item.persona}**：${item.insight}`).join("\n");
-    const quotes = report.quotes.map((item) => `> “${item.quote}”\n>\n> — AI 合成 Persona ${item.persona}`).join("\n\n");
+    const quotes = report.quotes.map((item) => `> “${item.quote}”\n>\n> — ${item.sessionType === "ai" ? "AI 合成 Persona" : "真人参与者"} ${item.persona}`).join("\n\n");
+    const exportNotice = aiSessionCount && humanSessionCount
+      ? "本记录同时包含 AI 合成与真人访谈，具体来源见每条标签；AI 内容不代表真人陈述，少量真人会话不构成统计结论。"
+      : aiSessionCount
+        ? "本记录由 AI 合成 Persona 模拟生成，不代表真人陈述、真实引语或统计结论。"
+        : "本记录来自真人访谈；少量会话不构成统计结论。";
     const markdown = [
       `# ${project.title}`,
       `**访谈目标**：${project.objective}`,
-      `**参与 Persona**：${project.sessionCount} 个  \n**状态**：${project.status}`,
+      `**访谈会话**：${project.sessionCount} 场（AI ${aiSessionCount} / 真人 ${humanSessionCount}）  \n**状态**：${project.status}`,
       `## 项目摘要\n\n${summaries}`,
       `## 关键洞察\n\n${insights}`,
-      `## 合成引用\n\n${quotes}`,
+      `## 跨会话主题\n\n${themes.map((theme) => `- **${theme.label}**：${theme.insight}`).join("\n")}`,
+      `## 关注差异\n\n${differences.map((difference) => `### ${difference.question}\n\n${difference.answers.map((answer) => `- **${answer.participantName}**：${answer.excerpt}`).join("\n")}`).join("\n\n")}`,
+      `## 待验证假设\n\n${hypotheses.map((hypothesis) => `- ${hypothesis.statement}\n  - 验证方式：${hypothesis.validation}`).join("\n")}`,
+      `## 代表性表达\n\n${quotes}`,
       `# 逐题访谈记录\n\n${questions}`,
-      "---\n本记录由 AI 合成 Persona 模拟生成，不代表真人陈述、真实引语或统计结论。",
+      `---\n${exportNotice}`,
     ].join("\n\n");
     const url = URL.createObjectURL(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
     const anchor = document.createElement("a");
@@ -184,7 +206,7 @@ export function InterviewProjectWorkspace({ project }: { project: InterviewProje
               <i>{String(index + 1).padStart(2, "0")}</i><span><strong>{session.participantName}</strong><small>{session.persona?.profile.occupation ?? "真人参与者"}</small></span>
             </button>
           ))}</nav>
-          <footer><Bot size={14} /><span>所有参与者和对话均为 AI 合成，不代表真人陈述。</span></footer>
+          <footer><Bot size={14} /><span>{sourceNotice}</span></footer>
         </aside>
         <main className="interview-transcript-pane">
           <header><div><span>{selected.persona?.archetype ?? "真人参与者"}</span><h2>{selected.participantName}</h2><p>{selected.persona ? `${selected.persona.profile.city} · ${selected.persona.profile.age} 岁 · ${selected.persona.profile.occupation}` : selected.participantEmail ?? "通过邀请链接参与"}</p></div><span>{selected.messages.length} 轮对话</span></header>
@@ -201,7 +223,7 @@ export function InterviewProjectWorkspace({ project }: { project: InterviewProje
         <aside className="interview-insight-pane">
           <section><header><FileText size={16} /><h2>会话摘要</h2></header><p>{selected.summary}</p></section>
           <section><header><Lightbulb size={16} /><h2>关键洞察</h2></header><ol>{selected.insights.map((insight, index) => <li key={insight}><span>{String(index + 1).padStart(2, "0")}</span><div><p>{insight}</p>{project.study ? <button type="button" disabled={pending || citedInsights.includes(insight)} onClick={() => citeInsight(selected.publicId, insight)}>{citedInsights.includes(insight) ? <><Check size={11} />已引用</> : "加入研究报告"}</button> : null}</div></li>)}</ol></section>
-          <section><header><Quote size={16} /><h2>合成引用</h2></header>{selected.quotes.map((quote) => <blockquote key={quote}>“{formatQuote(quote)}”</blockquote>)}</section>
+          <section><header><Quote size={16} /><h2>{selected.sessionType === "ai" ? "合成引用" : "访谈引用"}</h2></header>{selected.quotes.map((quote) => <blockquote key={quote}>“{formatQuote(quote)}”</blockquote>)}</section>
           <section className="interview-links"><header><UsersRound size={16} /><h2>研究关联</h2></header>{project.panel ? <Link href={`/panel/${project.panel.publicId}`}>Panel<span>{project.panel.title}</span></Link> : null}{project.study ? <Link href={`/study/${project.study.publicId}`}>研究<span>{project.study.title}</span></Link> : null}{!project.panel && !project.study ? <p>该项目暂未关联 Panel 或研究。</p> : null}</section>
         </aside>
       </div> : null}
@@ -231,19 +253,8 @@ export function InterviewProjectWorkspace({ project }: { project: InterviewProje
 
       {view === "sessions" && !selected && !project.runStatus ? <main className="interview-empty-sessions"><MessageCircleMore size={26} /><h2>还没有访谈会话</h2><p>请前往“配置与邀请”添加问题并生成真人访谈链接。</p><button type="button" onClick={() => setView("settings")}><Settings2 size={15} />配置访谈</button></main> : null}
 
-      {view === "questions" ? <main className="interview-analysis-view">
-        <header><div><span>QUESTION ANALYSIS</span><h2>逐题分析</h2><p>横向比较所有 AI Persona 与真人参与者对同一问题的回答。</p></div><strong>{project.questions.length} 个问题 · {project.sessionCount} 个会话</strong></header>
-        <div className="interview-question-list">{project.questions.map((question) => <section key={question.index}><header><span>{String(question.index).padStart(2, "0")}</span><h3>{question.question}</h3></header><div>{question.answers.map((answer) => <article key={answer.personaPublicId}><strong>{answer.personaName}</strong><p>{answer.answer}</p></article>)}</div></section>)}</div>
-      </main> : null}
-
-      {view === "report" ? <main className="interview-report-view">
-        <header><div><span>AI SYNTHETIC INTERVIEW REPORT</span><h2>{project.title}</h2><p>{project.objective}</p></div><button type="button" onClick={downloadMarkdown}><Download size={15} />导出完整记录</button></header>
-        <dl className="interview-report-metrics"><div><dt>{project.sessionCount}</dt><dd>访谈会话</dd></div><div><dt>{project.questions.length}</dt><dd>访谈问题</dd></div><div><dt>{report.insights.length}</dt><dd>关键洞察</dd></div><div><dt>{report.quotes.length}</dt><dd>合成引用</dd></div></dl>
-        <section><h3>会话摘要</h3><div className="interview-report-summaries">{report.summaries.map((item) => <article key={item.persona}><strong>{item.persona}</strong><p>{item.summary}</p></article>)}</div></section>
-        <section><h3>跨会话洞察</h3><ol className="interview-report-insights">{report.insights.map((item, index) => <li key={`${item.persona}-${item.insight}`}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{item.persona}</strong><p>{item.insight}</p>{project.study ? <button type="button" disabled={pending || citedInsights.includes(item.insight)} onClick={() => citeInsight(item.sessionPublicId, item.insight)}>{citedInsights.includes(item.insight) ? <><Check size={12} />已加入</> : "加入研究报告"}</button> : null}</div></li>)}</ol></section>
-        <section><h3>代表性合成引用</h3><div className="interview-report-quotes">{report.quotes.map((item) => <blockquote key={`${item.persona}-${item.quote}`}>“{item.quote}”<footer>AI 合成 Persona · {item.persona}</footer></blockquote>)}</div></section>
-        <footer><Bot size={15} />本报告仅用于假设探索与研究设计，不代表真人样本、真实引语或统计结论。</footer>
-      </main> : null}
+      {view === "questions" ? <InterviewAnalysisView project={project} /> : null}
+      {view === "report" ? <InterviewReportView project={project} onDownload={downloadMarkdown} onOpenSession={(sessionPublicId) => { setSelectedId(sessionPublicId); setView("sessions"); }} /> : null}
       {view === "settings" ? <InterviewProjectSettings project={project} /> : null}
     </div>
   );

@@ -2,13 +2,20 @@ import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import { z } from "zod";
 import type { StudyMethod } from "@/lib/studies";
-import { collectPublicWebSources } from "@/lib/public-web-search";
+import {
+  collectPublicWebSources,
+  type PublicWebSearchMetadata,
+  type PublicWebSource,
+} from "@/lib/public-web-search";
 
 const DEFAULT_MODEL = "gpt-5.6-terra";
 const PLAN_PROMPT_VERSION = "study-plan-v1";
 const REPORT_PROMPT_VERSION = "synthetic-panel-research-v1";
 const FOLLOWUP_PROMPT_VERSION = "report-followup-v1";
 const INTERVIEW_PROMPT_VERSION = "synthetic-interview-v1";
+const HARNESS_INTERVIEW_PROMPT_VERSION = "research-harness-interview-v2";
+const AUDIENCE_CALL_PROMPT_VERSION = "research-harness-audience-call-v2";
+const DISCUSSION_PROMPT_VERSION = "research-harness-discussion-v2";
 
 const searchSourcePlanSchema = z.object({
   queries: z.array(z.string().min(3)).min(3),
@@ -132,6 +139,155 @@ const syntheticInterviewJsonSchema = {
     },
   },
   required: ["sessions"],
+  additionalProperties: false,
+} as const;
+
+const harnessInterviewSchema = z.object({
+  interviews: z.array(z.object({
+    personaName: z.string().min(2),
+    batch: z.number().int().min(1).max(2),
+    objective: z.string().min(10),
+    summary: z.string().min(80),
+    quotes: z.array(z.string().min(20)).min(2).max(4),
+    insights: z.array(z.string().min(15)).min(2).max(5),
+  })).min(1).max(10),
+});
+
+const harnessInterviewJsonSchema = {
+  type: "object",
+  properties: {
+    interviews: {
+      type: "array",
+      minItems: 1,
+      maxItems: 10,
+      items: {
+        type: "object",
+        properties: {
+          personaName: { type: "string", minLength: 2, maxLength: 40 },
+          batch: { type: "integer", minimum: 1, maximum: 2 },
+          objective: { type: "string", minLength: 10, maxLength: 300 },
+          summary: { type: "string", minLength: 80, maxLength: 1800 },
+          quotes: { type: "array", minItems: 2, maxItems: 4, items: { type: "string", minLength: 20, maxLength: 600 } },
+          insights: { type: "array", minItems: 2, maxItems: 5, items: { type: "string", minLength: 15, maxLength: 500 } },
+        },
+        required: ["personaName", "batch", "objective", "summary", "quotes", "insights"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["interviews"],
+  additionalProperties: false,
+} as const;
+
+const audienceCallSchema = z.object({
+  calls: z.array(z.object({
+    personaName: z.string().min(2),
+    archetype: z.string().min(2),
+    objective: z.string().min(10),
+    response: z.string().min(180),
+    quotes: z.array(z.string().min(20)).min(2).max(4),
+    signals: z.array(z.string().min(12)).min(2).max(5),
+  })).min(1).max(4),
+  directions: z.array(z.object({
+    title: z.string().min(4),
+    appeal: z.string().min(20),
+    resistance: z.string().min(20),
+    verdict: z.enum(["strong", "mixed", "weak"]),
+  })).min(2).max(4),
+  summary: z.string().min(60),
+});
+
+const audienceCallJsonSchema = {
+  type: "object",
+  properties: {
+    calls: {
+      type: "array",
+      minItems: 1,
+      maxItems: 4,
+      items: {
+        type: "object",
+        properties: {
+          personaName: { type: "string", minLength: 2, maxLength: 40 },
+          archetype: { type: "string", minLength: 2, maxLength: 100 },
+          objective: { type: "string", minLength: 10, maxLength: 300 },
+          response: { type: "string", minLength: 180, maxLength: 3000 },
+          quotes: { type: "array", minItems: 2, maxItems: 4, items: { type: "string", minLength: 20, maxLength: 600 } },
+          signals: { type: "array", minItems: 2, maxItems: 5, items: { type: "string", minLength: 12, maxLength: 500 } },
+        },
+        required: ["personaName", "archetype", "objective", "response", "quotes", "signals"],
+        additionalProperties: false,
+      },
+    },
+    directions: {
+      type: "array",
+      minItems: 2,
+      maxItems: 4,
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string", minLength: 4, maxLength: 120 },
+          appeal: { type: "string", minLength: 20, maxLength: 700 },
+          resistance: { type: "string", minLength: 20, maxLength: 700 },
+          verdict: { type: "string", enum: ["strong", "mixed", "weak"] },
+        },
+        required: ["title", "appeal", "resistance", "verdict"],
+        additionalProperties: false,
+      },
+    },
+    summary: { type: "string", minLength: 60, maxLength: 1600 },
+  },
+  required: ["calls", "directions", "summary"],
+  additionalProperties: false,
+} as const;
+
+const researchDiscussionSchema = z.object({
+  title: z.string().min(4),
+  topic: z.string().min(10),
+  participants: z.array(z.string().min(2)).min(2).max(10),
+  messages: z.array(z.object({
+    id: z.string().min(2),
+    speaker: z.string().min(2),
+    archetype: z.string().min(2),
+    round: z.number().int().min(1).max(5),
+    content: z.string().min(40),
+  })).min(6).max(40),
+  findings: z.array(z.string().min(20)).min(3).max(8),
+  consensus: z.array(z.string().min(15)).min(1).max(5),
+  disagreements: z.array(z.string().min(15)).min(1).max(5),
+  positionShifts: z.array(z.string().min(15)).max(5),
+  unexpectedThemes: z.array(z.string().min(15)).max(5),
+});
+
+const researchDiscussionJsonSchema = {
+  type: "object",
+  properties: {
+    title: { type: "string", minLength: 4, maxLength: 120 },
+    topic: { type: "string", minLength: 10, maxLength: 1000 },
+    participants: { type: "array", minItems: 2, maxItems: 10, items: { type: "string", minLength: 2, maxLength: 40 } },
+    messages: {
+      type: "array",
+      minItems: 6,
+      maxItems: 40,
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string", minLength: 2, maxLength: 80 },
+          speaker: { type: "string", minLength: 2, maxLength: 40 },
+          archetype: { type: "string", minLength: 2, maxLength: 100 },
+          round: { type: "integer", minimum: 1, maximum: 5 },
+          content: { type: "string", minLength: 40, maxLength: 1200 },
+        },
+        required: ["id", "speaker", "archetype", "round", "content"],
+        additionalProperties: false,
+      },
+    },
+    findings: { type: "array", minItems: 3, maxItems: 8, items: { type: "string", minLength: 20, maxLength: 700 } },
+    consensus: { type: "array", minItems: 1, maxItems: 5, items: { type: "string", minLength: 15, maxLength: 600 } },
+    disagreements: { type: "array", minItems: 1, maxItems: 5, items: { type: "string", minLength: 15, maxLength: 600 } },
+    positionShifts: { type: "array", maxItems: 5, items: { type: "string", minLength: 15, maxLength: 600 } },
+    unexpectedThemes: { type: "array", maxItems: 5, items: { type: "string", minLength: 15, maxLength: 600 } },
+  },
+  required: ["title", "topic", "participants", "messages", "findings", "consensus", "disagreements", "positionShifts", "unexpectedThemes"],
   additionalProperties: false,
 } as const;
 
@@ -407,6 +563,58 @@ export type ProviderResearchReport = {
   usage: unknown;
 };
 
+export type ProviderResearchSources = {
+  queries: string[];
+  sources: PublicWebSource[];
+  metadata: PublicWebSearchMetadata;
+  responseId: string;
+  model: string;
+  usage: unknown;
+};
+
+export type ProviderPersonaPanel = z.infer<typeof personaPanelSchema> & {
+  responseId: string;
+  model: string;
+  usage: unknown;
+};
+
+export type ProviderResearchInterviews = SyntheticPanelResearch["interviews"];
+export type ProviderResearchValidation = SyntheticPanelResearch["validation"];
+export type ProviderResearchDiscussion = {
+  title: string;
+  topic: string;
+  participantCount: number;
+  participants: string[];
+  messages: Array<{
+    id: string;
+    speaker: string;
+    archetype: string;
+    round: number;
+    content: string;
+  }>;
+  findings: string[];
+  consensus: string[];
+  disagreements: string[];
+  positionShifts: string[];
+  unexpectedThemes: string[];
+  instruction: string;
+  timelineToken: string;
+  disclaimer: string;
+};
+
+export type ProviderAudienceCall = {
+  personaName: string;
+  archetype: string;
+  objective: string;
+  response: string;
+  quotes: string[];
+  signals: string[];
+};
+
+export type ProviderDeepResearchValidation = ProviderResearchValidation & {
+  calls: ProviderAudienceCall[];
+};
+
 export type ProviderFollowupAnswer = z.infer<typeof followupAnswerSchema> & {
   responseId: string;
   model: string;
@@ -585,6 +793,29 @@ function parseOutput<T>(outputText: string, schema: z.ZodType<T>) {
   return result.data;
 }
 
+function isRetryableProviderError(error: unknown) {
+  if (
+    error instanceof OpenAI.APIConnectionError
+    || error instanceof OpenAI.APIConnectionTimeoutError
+  ) return true;
+
+  return error instanceof OpenAI.APIError
+    && (error.status === 408 || error.status === 429 || error.status === 666 || (error.status ?? 0) >= 500);
+}
+
+async function retryProviderRequest<T>(request: () => Promise<T>) {
+  const delays = [750, 2_000];
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await request();
+    } catch (error) {
+      if (attempt >= delays.length || !isRetryableProviderError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    }
+  }
+}
+
 export function getOpenAIProviderStatus() {
   return {
     providerName: process.env.OPENAI_PROVIDER_NAME?.trim() || "openai",
@@ -606,6 +837,16 @@ export function describeOpenAIError(error: unknown) {
   }
 
   if (error instanceof OpenAI.APIError) {
+    if (error.status === 666) {
+      const requestHint = error.requestID ? `请求编号：${error.requestID}` : "";
+      return {
+        message: `上游模型网关暂时拒绝了生成请求，请重新执行。${requestHint}`,
+        status: error.status,
+        code: error.code ?? "UPSTREAM_GATEWAY_REJECTED",
+        requestId: error.requestID ?? null,
+      };
+    }
+
     if (error.status === 524) {
       return {
         message: "上游模型服务响应超时，请稍后重新执行。",
@@ -727,34 +968,45 @@ export async function generateProviderSyntheticInterviews(input: {
   userPublicId: string;
 }) {
   const model = getResearchModel();
-  const response = await createStructuredResponse({
-    model,
-    reasoning: { effort: "medium" },
-    safety_identifier: safetyIdentifier(input.userPublicId),
-    store: true,
-    metadata: { surface: "synthetic_interview", prompt_version: INTERVIEW_PROMPT_VERSION },
-    instructions: [
-      "你是专业的用户研究访谈员，负责基于结构化 AI Persona 进行假设探索访谈。",
-      "为每个输入 Persona 生成一场独立的中文模拟访谈，逐轮交替使用 interviewer 和 persona 角色，第一轮必须是 interviewer。",
-      "问题应围绕访谈目标，由浅入深并包含追问；回答必须符合 Persona 的背景、目标、痛点和决策方式，不得声称是真人经历或真实招募样本。",
-      "summary、insights 和 quotes 只能概括本次合成对话。不得推断人群占比、统计显著性或市场普遍性。",
-      "personaPublicId 必须逐字使用输入提供的 ID，每个 Persona 恰好生成一个 session。",
-    ].join("\n"),
-    input: [
-      `访谈项目：${input.title}`,
-      `访谈目标：${input.objective}`,
-      `AI Persona：\n${JSON.stringify(input.personas)}`,
-    ].join("\n\n"),
-    text: {
-      format: {
-        type: "json_schema",
-        name: "synthetic_interview_sessions",
-        strict: true,
-        schema: syntheticInterviewJsonSchema,
+  const instructions = [
+    "你是专业的用户研究访谈员，负责基于结构化 AI Persona 进行假设探索访谈。",
+    "为输入 Persona 生成一场独立的中文模拟访谈，逐轮交替使用 interviewer 和 persona 角色，第一轮必须是 interviewer。",
+    "问题应围绕访谈目标，由浅入深并包含追问；回答必须符合 Persona 的背景、目标、痛点和决策方式，不得声称是真人经历或真实招募样本。",
+    "summary、insights 和 quotes 只能概括本次合成对话。不得推断人群占比、统计显著性或市场普遍性。",
+    "personaPublicId 必须逐字使用输入提供的 ID，只生成一个 session。",
+  ].join("\n");
+  const responses: StructuredResponse[] = [];
+
+  // Some OpenAI-compatible gateways intermittently return a non-standard 666
+  // response. Independent Persona requests keep retries small and isolated.
+  for (const persona of input.personas) {
+    responses.push(await retryProviderRequest(() => createStructuredResponse({
+      model,
+      reasoning: { effort: "medium" },
+      safety_identifier: safetyIdentifier(input.userPublicId),
+      store: true,
+      metadata: { surface: "synthetic_interview", prompt_version: INTERVIEW_PROMPT_VERSION },
+      instructions,
+      input: [
+        `访谈项目：${input.title}`,
+        `访谈目标：${input.objective}`,
+        `AI Persona：\n${JSON.stringify(persona)}`,
+      ].join("\n\n"),
+      text: {
+        format: {
+          type: "json_schema",
+          name: "synthetic_interview_session",
+          strict: true,
+          schema: syntheticInterviewJsonSchema,
+        },
       },
-    },
-  });
-  const result = parseOutput(response.output_text, syntheticInterviewSchema);
+    }, { timeout: 180_000, maxRetries: 0 })));
+  }
+
+  const sessions = responses.flatMap((response) => (
+    parseOutput(response.output_text, syntheticInterviewSchema).sessions
+  ));
+  const result = syntheticInterviewSchema.parse({ sessions });
   const expectedIds = new Set(input.personas.map((persona) => persona.publicId));
   const resultIds = new Set(result.sessions.map((session) => session.personaPublicId));
   const validIds = result.sessions.length === input.personas.length
@@ -767,8 +1019,8 @@ export async function generateProviderSyntheticInterviews(input: {
   if (!validIds || !validTurns) throw new Error("OPENAI_INVALID_SCHEMA");
   return {
     ...result,
-    responseId: response.id,
-    model: response.model,
+    responseId: responses.map((response) => response.id).join(","),
+    model: responses[0]?.model ?? model,
     promptVersion: INTERVIEW_PROMPT_VERSION,
   };
 }
@@ -838,8 +1090,128 @@ export async function generateProviderResearchReport(input: {
   const emit = async (type: string, payload: Record<string, unknown> = {}) => {
     await input.onProgress?.({ type, payload });
   };
-  const model = getResearchModel();
   await emit("trend.scan.started", { focus: "category_and_charging" });
+  const sourceResult = await researchPublicWeb({
+    brief: input.brief,
+    framework: input.framework,
+    userPublicId: input.userPublicId,
+    studyPublicId: input.studyPublicId,
+  });
+  const { queries, sources } = sourceResult;
+  await emit("search.plan.completed", { queryCount: queries.length, queries });
+  const sourceSummary = sources.map(({ title, url }) => ({ title, url }));
+  const firstThird = Math.max(1, Math.ceil(sources.length / 3));
+  const secondThird = Math.max(firstThird + 1, Math.ceil(sources.length * 2 / 3));
+  await emit("trend.scan.completed", {
+    focus: "category_and_charging",
+    sourceCount: firstThird,
+    sources: sourceSummary.slice(0, firstThird),
+    provider: sourceResult.metadata.primaryProvider,
+  });
+  await emit("upgrade.scan.started", {
+    focus: "replacement_and_brand_upgrade",
+    evidenceCount: sources.length,
+  });
+  await emit("upgrade.scan.completed", {
+    focus: "replacement_and_brand_upgrade",
+    sourceCount: secondThird - firstThird,
+    sources: sourceSummary.slice(firstThird, secondThird),
+  });
+  await emit("policy.research.started", {
+    focus: "policy_and_industry_context",
+    evidenceCount: sources.length,
+  });
+  await emit("policy.research.completed", {
+    focus: "policy_and_industry_context",
+    sourceCount: sources.length - secondThird,
+    sources: sourceSummary.slice(secondThird),
+    fallbackUsed: sourceResult.metadata.fallbackUsed,
+  });
+
+  await emit("personas.generate.started", { targetCount: 8 });
+  const personaPanel = await buildProviderPersonaPanel({
+    brief: input.brief,
+    framework: input.framework,
+    methods: input.methods,
+    audience: input.audience,
+    userPublicId: input.userPublicId,
+    studyPublicId: input.studyPublicId,
+    sources,
+  });
+  await emit("personas.generated", {
+    count: personaPanel.personas.length,
+    names: personaPanel.personas.map((persona) => persona.name),
+  });
+  await emit("panel.create.started", { personaCount: personaPanel.personas.length });
+  await emit("panel.created", { title: personaPanel.panel.title, count: personaPanel.personas.length });
+
+  const splitIndex = Math.ceil(personaPanel.personas.length / 2);
+  await emit("interviews.batch1.started", {
+    participantCount: splitIndex,
+    objective: "换购触发、信息搜索、比较筛选和最终决策路径",
+  });
+  const batchOne = simulateProviderResearchInterviews(personaPanel.personas, 1);
+  await emit("interviews.batch1.completed", {
+    participantCount: batchOne.length,
+    participants: batchOne.map((interview) => interview.personaName),
+  });
+  await emit("interviews.batch2.started", {
+    participantCount: personaPanel.personas.length - splitIndex,
+    objective: "真实使用体验、关键焦虑、场景变化和功能机会",
+  });
+  const batchTwo = simulateProviderResearchInterviews(personaPanel.personas, 2);
+  await emit("interviews.batch2.completed", {
+    participantCount: batchTwo.length,
+    participants: batchTwo.map((interview) => interview.personaName),
+  });
+
+  await emit("validation.started", { candidateCount: 3 });
+  const validation = validateProviderResearchDirections(personaPanel.personas);
+  await emit("validation.completed", {
+    directionCount: validation.directions.length,
+    directions: validation.directions.map(({ title, verdict }) => ({ title, verdict })),
+  });
+  const panelResearch = panelResearchSchema.parse({
+    panel: personaPanel.panel,
+    personas: personaPanel.personas,
+    interviews: [...batchOne, ...batchTwo],
+    validation,
+  });
+  await emit("report.synthesis.started", {
+    evidenceCharacters: sources.reduce((total, source) => total + source.excerpt.length, 0),
+    personaCount: panelResearch.personas.length,
+    interviewCount: panelResearch.interviews.length,
+  });
+  const reportResult = await synthesizeProviderResearchReport({
+    brief: input.brief,
+    framework: input.framework,
+    methods: input.methods,
+    audience: input.audience,
+    userPublicId: input.userPublicId,
+    studyPublicId: input.studyPublicId,
+    queries,
+    sources,
+    panelResearch,
+  });
+
+  return {
+    report: reportResult.report,
+    panelResearch,
+    citations: sources.map(({ title, url }) => ({ title, url })),
+    responseId: reportResult.responseId,
+    model: reportResult.model,
+    promptVersion: REPORT_PROMPT_VERSION,
+    usage: reportResult.usage,
+  };
+}
+
+export async function researchPublicWeb(input: {
+  brief: string;
+  framework: string;
+  userPublicId: string;
+  studyPublicId: string;
+}): Promise<ProviderResearchSources> {
+  const model = getResearchModel();
   const queryResponse = await createStructuredResponse({
     model,
     reasoning: { effort: "low" },
@@ -870,47 +1242,42 @@ export async function generateProviderResearchReport(input: {
   });
   const sourcePlan = parseOutput(queryResponse.output_text, searchSourcePlanSchema);
   const queries = sourcePlan.queries.slice(0, 5);
-  await emit("search.plan.completed", { queryCount: queries.length, queries });
-  const sourceResult = await collectPublicWebSources(queries, sourcePlan.seedUrls);
-  const sources = sourceResult.sources;
+  const collected = await collectPublicWebSources(queries, sourcePlan.seedUrls);
+  const sources = collected.sources;
 
   if (sources.length < 3) {
     throw new Error("PUBLIC_WEB_SOURCES_INSUFFICIENT");
   }
 
-  const sourceSummary = sources.map(({ title, url }) => ({ title, url }));
-  const firstThird = Math.max(1, Math.ceil(sources.length / 3));
-  const secondThird = Math.max(firstThird + 1, Math.ceil(sources.length * 2 / 3));
-  await emit("trend.scan.completed", {
-    focus: "category_and_charging",
-    sourceCount: firstThird,
-    sources: sourceSummary.slice(0, firstThird),
-    provider: sourceResult.metadata.primaryProvider,
-  });
-  await emit("upgrade.scan.started", {
-    focus: "replacement_and_brand_upgrade",
-    evidenceCount: sources.length,
-  });
-  await emit("upgrade.scan.completed", {
-    focus: "replacement_and_brand_upgrade",
-    sourceCount: secondThird - firstThird,
-    sources: sourceSummary.slice(firstThird, secondThird),
-  });
-  await emit("policy.research.started", {
-    focus: "policy_and_industry_context",
-    evidenceCount: sources.length,
-  });
-  await emit("policy.research.completed", {
-    focus: "policy_and_industry_context",
-    sourceCount: sources.length - secondThird,
-    sources: sourceSummary.slice(secondThird),
-    fallbackUsed: sourceResult.metadata.fallbackUsed,
-  });
+  return {
+    queries,
+    sources,
+    metadata: collected.metadata,
+    responseId: queryResponse.id,
+    model: queryResponse.model,
+    usage: queryResponse.usage,
+  };
+}
 
-  const evidencePacket = sources.map((source, index) => (
-    `[S${index + 1}] ${source.title}\nURL: ${source.url}\n公开网页摘录：${source.excerpt}`
-  )).join("\n\n");
-  await emit("personas.generate.started", { targetCount: 8 });
+export async function buildProviderPersonaPanel(input: {
+  brief: string;
+  framework: string;
+  methods: StudyMethod[];
+  audience: string;
+  userPublicId: string;
+  studyPublicId: string;
+  sources: PublicWebSource[];
+  existingPersonas?: Array<{
+    name: string;
+    archetype: string;
+    city: string;
+    occupation: string;
+    goals: string[];
+    painPoints: string[];
+  }>;
+}): Promise<ProviderPersonaPanel> {
+  const model = getResearchModel();
+  const sources = input.sources;
   const panelEvidencePacket = sources.map((source, index) => (
     `[S${index + 1}] ${source.title}\n${source.excerpt.slice(0, 1200)}`
   )).join("\n\n");
@@ -935,6 +1302,10 @@ export async function generateProviderResearchReport(input: {
       `研究框架：${input.framework}`,
       `目标受众：${input.audience}`,
       `计划方法：${input.methods.join("、") || "AI 合成 Persona 模拟"}`,
+      `工作区已检索 Persona：\n${input.existingPersonas?.length
+        ? JSON.stringify(input.existingPersonas)
+        : "没有匹配到可复用画像。请从当前证据生成完整的差异化 Persona 集合。"}`,
+      "已检索 Persona 只用于保持命名、场景和痛点差异；不要声称这些画像是真人样本，也不要机械复制。",
       `公开网页证据摘要：\n${panelEvidencePacket}`,
     ].join("\n\n"),
     text: {
@@ -946,25 +1317,25 @@ export async function generateProviderResearchReport(input: {
       },
     },
   }, { timeout: 180_000 });
-  const personaPanel = parseOutput(panelResponse.output_text, personaPanelSchema);
-  await emit("personas.generated", {
-    count: personaPanel.personas.length,
-    names: personaPanel.personas.map((persona) => persona.name),
-  });
-  await emit("panel.create.started", {
-    personaCount: personaPanel.personas.length,
-  });
-  await emit("panel.created", {
-    title: personaPanel.panel.title,
-    count: personaPanel.personas.length,
-  });
+  return {
+    ...parseOutput(panelResponse.output_text, personaPanelSchema),
+    responseId: panelResponse.id,
+    model: panelResponse.model,
+    usage: panelResponse.usage,
+  };
+}
 
-  function generateInterviewBatch(
-    batch: 1 | 2,
-    personas: typeof personaPanel.personas,
-    focus: string,
-  ) {
-    return personas.map((persona) => ({
+export function simulateProviderResearchInterviews(
+  personas: ProviderPersonaPanel["personas"],
+  batch: 1 | 2,
+): ProviderResearchInterviews {
+  const splitIndex = Math.ceil(personas.length / 2);
+  const selected = batch === 1 ? personas.slice(0, splitIndex) : personas.slice(splitIndex);
+  const focus = batch === 1
+    ? "换购触发、信息搜索、比较筛选和最终决策路径"
+    : "真实使用体验、关键焦虑、场景变化和功能机会";
+
+  return selected.map((persona) => ({
       personaName: persona.name,
       batch,
       objective: focus,
@@ -978,41 +1349,54 @@ export async function generateProviderResearchReport(input: {
         `${persona.painPoints[0]}与${persona.painPoints[1]}会共同构成决策阻力。`,
       ],
     }));
-  }
+}
 
-  const splitIndex = Math.ceil(personaPanel.personas.length / 2);
-  await emit("interviews.batch1.started", {
-    participantCount: splitIndex,
-    objective: "换购触发、信息搜索、比较筛选和最终决策路径",
-  });
-  const batchOne = generateInterviewBatch(
-    1,
-    personaPanel.personas.slice(0, splitIndex),
-    "换购触发、信息搜索、比较筛选和最终决策路径",
-  );
-  await emit("interviews.batch1.completed", {
-    participantCount: batchOne.length,
-    participants: batchOne.map((interview) => interview.personaName),
-  });
-  await emit("interviews.batch2.started", {
-    participantCount: personaPanel.personas.length - splitIndex,
-    objective: "真实使用体验、关键焦虑、场景变化和功能机会",
-  });
-  const batchTwo = generateInterviewBatch(
-    2,
-    personaPanel.personas.slice(splitIndex),
-    "真实使用体验、关键焦虑、场景变化和功能机会",
-  );
-  await emit("interviews.batch2.completed", {
-    participantCount: batchTwo.length,
-    participants: batchTwo.map((interview) => interview.personaName),
-  });
+export async function generateProviderResearchInterviews(input: {
+  brief: string;
+  audience: string;
+  userPublicId: string;
+  studyPublicId: string;
+  personas: ProviderPersonaPanel["personas"];
+  batch: 1 | 2;
+}): Promise<ProviderResearchInterviews> {
+  const splitIndex = Math.ceil(input.personas.length / 2);
+  const selected = input.batch === 1 ? input.personas.slice(0, splitIndex) : input.personas.slice(splitIndex);
+  const objective = input.batch === 1
+    ? "换购触发、信息搜索、比较筛选和最终决策路径"
+    : "真实使用体验、关键焦虑、场景变化和功能机会";
+  const response = await createStructuredResponse({
+    model: getResearchModel(),
+    reasoning: { effort: "medium" },
+    safety_identifier: safetyIdentifier(input.userPublicId),
+    store: true,
+    metadata: {
+      surface: "research_harness_interviews",
+      prompt_version: HARNESS_INTERVIEW_PROMPT_VERSION,
+      study_id: input.studyPublicId,
+    },
+    instructions: [
+      "你是定性研究模拟器，依据结构化 AI 合成 Persona 生成深度访谈记录。",
+      "每位 Persona 必须保持其年龄、城市、职业、预算、场景、目标、痛点和决策方式的一致性。",
+      "summary 要呈现触发事件、取舍过程、情绪、反例和条件变化；quotes 使用第一人称自然表达。",
+      "不得把模拟内容写成真人访谈、真实比例或统计结论。输出简体中文。",
+    ].join("\n"),
+    input: [
+      `研究 Brief：${input.brief}`,
+      `目标受众：${input.audience}`,
+      `本批研究目标：${objective}`,
+      `Persona：${JSON.stringify(selected)}`,
+      `请仅为以上 ${selected.length} 位 Persona 生成 batch=${input.batch} 的访谈结果。`,
+    ].join("\n\n"),
+    text: { format: { type: "json_schema", name: "research_harness_interviews", strict: true, schema: harnessInterviewJsonSchema } },
+  }, { timeout: 180_000 });
+  return parseOutput(response.output_text, harnessInterviewSchema).interviews;
+}
 
-  const recurringGoals = personaPanel.personas.flatMap((persona) => persona.goals).slice(0, 3);
-  const recurringPainPoints = personaPanel.personas.flatMap((persona) => persona.painPoints).slice(0, 3);
-  await emit("validation.started", {
-    candidateCount: recurringGoals.length,
-  });
+export function validateProviderResearchDirections(
+  personas: ProviderPersonaPanel["personas"],
+): ProviderResearchValidation {
+  const recurringGoals = personas.flatMap((persona) => persona.goals).slice(0, 3);
+  const recurringPainPoints = personas.flatMap((persona) => persona.painPoints).slice(0, 3);
   const validation = validationResultSchema.parse({
     validation: {
       directions: recurringGoals.map((goal, index) => ({
@@ -1024,20 +1408,142 @@ export async function generateProviderResearchReport(input: {
       summary: "方向验证来自公开证据与 AI 合成 Persona 的结构化推演，用于发现假设与压力测试，不代表真实用户占比、购买意愿或统计显著性。",
     },
   }).validation;
-  const panelResearch = panelResearchSchema.parse({
-    ...personaPanel,
-    interviews: [...batchOne, ...batchTwo],
-    validation,
-  });
-  await emit("validation.completed", {
-    directionCount: panelResearch.validation.directions.length,
-    directions: panelResearch.validation.directions.map(({ title, verdict }) => ({ title, verdict })),
-  });
-  await emit("report.synthesis.started", {
-    evidenceCharacters: evidencePacket.length,
-    personaCount: panelResearch.personas.length,
-    interviewCount: panelResearch.interviews.length,
-  });
+  return validation;
+}
+
+export async function runProviderAudienceCall(input: {
+  brief: string;
+  audience: string;
+  userPublicId: string;
+  studyPublicId: string;
+  personas: ProviderPersonaPanel["personas"];
+  interviews: ProviderResearchInterviews;
+}): Promise<ProviderDeepResearchValidation> {
+  const selected = input.personas.slice(0, Math.min(3, input.personas.length));
+  const response = await createStructuredResponse({
+    model: getResearchModel(),
+    reasoning: { effort: "medium" },
+    safety_identifier: safetyIdentifier(input.userPublicId),
+    store: true,
+    metadata: {
+      surface: "research_harness_audience_call",
+      prompt_version: AUDIENCE_CALL_PROMPT_VERSION,
+      study_id: input.studyPublicId,
+    },
+    instructions: [
+      "你是 Audience Call 模拟工具。先让每位选中 Persona 以第一人称完整回答，再跨回答提炼候选方向。",
+      "response 必须包含具体经历、犹豫、权衡、触发条件、不可接受条件和最终判断，不能只是摘要或标签。",
+      "directions 只代表合成 Persona 的压力测试，不代表真人偏好、市场占比或统计显著性。",
+      "保持 Persona 设定一致，输出简体中文。",
+    ].join("\n"),
+    input: [
+      `研究 Brief：${input.brief}`,
+      `目标受众：${input.audience}`,
+      `Persona：${JSON.stringify(selected)}`,
+      `已有模拟访谈：${JSON.stringify(input.interviews)}`,
+      "请围绕最关键的产品选择、阻力和机会进行一轮深度 Audience Call。",
+    ].join("\n\n"),
+    text: { format: { type: "json_schema", name: "research_harness_audience_call", strict: true, schema: audienceCallJsonSchema } },
+  }, { timeout: 180_000 });
+  return parseOutput(response.output_text, audienceCallSchema);
+}
+
+export async function runProviderDiscussionChat(input: {
+  brief: string;
+  audience: string;
+  userPublicId: string;
+  studyPublicId: string;
+  personas: ProviderPersonaPanel["personas"];
+  interviews: ProviderResearchInterviews;
+  validation?: ProviderDeepResearchValidation;
+  instruction: string;
+  timelineToken: string;
+}): Promise<ProviderResearchDiscussion> {
+  const participants = input.personas.slice(0, 10);
+  const response = await createStructuredResponse({
+    model: getResearchModel(),
+    reasoning: { effort: "high" },
+    safety_identifier: safetyIdentifier(input.userPublicId),
+    store: true,
+    metadata: {
+      surface: "research_harness_discussion",
+      prompt_version: DISCUSSION_PROMPT_VERSION,
+      study_id: input.studyPublicId,
+    },
+    instructions: [
+      "你是焦点小组主持与多角色对话模拟器。严格遵守主持 instruction，让 Persona 互相回应，而不是各自独立陈述。",
+      "至少包含三轮：初始立场、相互追问或反驳、听取他人后的修正或坚持。",
+      "messages 要体现分歧、共识、误解澄清、立场变化和意外主题；每条发言保持对应 Persona 的约束。",
+      "不得把合成讨论表述为真人焦点小组或统计证据。输出简体中文。",
+    ].join("\n"),
+    input: [
+      `研究 Brief：${input.brief}`,
+      `目标受众：${input.audience}`,
+      `主持 instruction：${input.instruction}`,
+      `timelineToken：${input.timelineToken}`,
+      `Persona：${JSON.stringify(participants)}`,
+      `已有模拟访谈：${JSON.stringify(input.interviews)}`,
+      `Audience Call：${input.validation ? JSON.stringify(input.validation) : "未执行"}`,
+    ].join("\n\n"),
+    text: { format: { type: "json_schema", name: "research_harness_discussion", strict: true, schema: researchDiscussionJsonSchema } },
+  }, { timeout: 240_000 });
+  const parsed = parseOutput(response.output_text, researchDiscussionSchema);
+  const messages = [...parsed.messages];
+  const messageCounts = new Map<string, number>();
+  for (const message of messages) messageCounts.set(message.speaker, (messageCounts.get(message.speaker) ?? 0) + 1);
+  for (const [index, persona] of participants.entries()) {
+    const count = messageCounts.get(persona.name) ?? 0;
+    if (count < 1) {
+      messages.push({
+        id: `panel-round-1-${index + 1}`,
+        speaker: persona.name,
+        archetype: persona.archetype,
+        round: 1,
+        content: `以我的处境而言，${persona.goals[0]}是判断方案价值的起点，但${persona.painPoints[0]}会让我保持谨慎。我需要方案适配${persona.commute}，并在${persona.budget}的预算约束内证明实际价值。`,
+      });
+    }
+    if (count < 2) {
+      messages.push({
+        id: `panel-round-3-${index + 1}`,
+        speaker: persona.name,
+        archetype: persona.archetype,
+        round: 3,
+        content: `听取其他人的分歧后，我会坚持用“${persona.decisionStyle}”做最终判断。若产品不能降低${persona.painPoints[1] ?? persona.painPoints[0]}带来的不确定性，我不会仅因为新增智能功能而改变选择。`,
+      });
+    }
+  }
+  return {
+    ...parsed,
+    participantCount: participants.length,
+    participants: participants.map((persona) => persona.name),
+    messages: messages.toSorted((left, right) => left.round - right.round),
+    instruction: input.instruction,
+    timelineToken: input.timelineToken,
+    disclaimer: "本讨论由结构化 AI 合成 Persona 推演生成，不是现实受访者陈述，也不具备统计代表性。",
+  };
+}
+
+export async function synthesizeProviderResearchReport(input: {
+  brief: string;
+  framework: string;
+  methods: StudyMethod[];
+  audience: string;
+  userPublicId: string;
+  studyPublicId: string;
+  queries: string[];
+  sources: PublicWebSource[];
+  panelResearch?: SyntheticPanelResearch;
+  discussion?: ProviderResearchDiscussion;
+}): Promise<{
+  report: ResearchReport;
+  responseId: string;
+  model: string;
+  usage: unknown;
+}> {
+  const model = getResearchModel();
+  const evidencePacket = input.sources.map((source, index) => (
+    `[S${index + 1}] ${source.title}\nURL: ${source.url}\n公开网页摘录：${source.excerpt}`
+  )).join("\n\n");
   const response = await createStructuredResponse({
     model,
     reasoning: { effort: "medium" },
@@ -1061,9 +1567,14 @@ export async function generateProviderResearchReport(input: {
       `研究框架：${input.framework}`,
       `计划方法：${input.methods.join("、") || "公开网页研究"}`,
       `目标受众：${input.audience}`,
-      `实际检索词：${queries.join("；")}`,
+      `实际检索词：${input.queries.join("；")}`,
       `公开网页证据包：\n${evidencePacket}`,
-      `AI 合成 Panel 模拟：\n${JSON.stringify(panelResearch)}`,
+      `AI 合成 Panel 模拟：\n${input.panelResearch
+        ? JSON.stringify(input.panelResearch)
+        : "本次未执行 Persona 或模拟访谈，不得补造相关证据。"}`,
+      `AI 合成焦点讨论：\n${input.discussion
+        ? JSON.stringify(input.discussion)
+        : "本次未执行焦点讨论，不得补造讨论结论。"}`,
       "请给出关键发现、证据、业务含义、行动建议、局限与下一步问题。",
     ].join("\n\n"),
     text: {
@@ -1078,11 +1589,8 @@ export async function generateProviderResearchReport(input: {
 
   return {
     report: parseOutput(response.output_text, reportSchema),
-    panelResearch,
-    citations: sources.map(({ title, url }) => ({ title, url })),
     responseId: response.id,
     model: response.model,
-    promptVersion: REPORT_PROMPT_VERSION,
     usage: response.usage,
   };
 }

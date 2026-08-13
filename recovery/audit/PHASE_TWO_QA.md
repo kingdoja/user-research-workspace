@@ -12,7 +12,7 @@ Observed product flow:
 4. Execution appends tool events and todo progress to the conversation.
 5. The completed study exposes a report, Panel, Personas, follow-up research, and optional podcast.
 
-The local reconstruction implements steps 1-3 and persists the step-4 provider-waiting state. It does not claim that real research was executed.
+The local reconstruction now implements steps 1-5 for public-web research and explicitly labeled AI-synthetic participants. Tool calls, dynamic tasks, artifacts, checkpoints, queue state, and progress events are persisted. It does not represent simulated Persona interviews as real recruited-participant evidence.
 
 ## Fidelity ledger
 
@@ -31,6 +31,9 @@ Above-the-fold copy intentionally follows the authenticated live workflow rather
 
 - `pnpm lint`: passed
 - `pnpm build`: passed with clean output
+- `pnpm exec tsc --noEmit --pretty false`: passed
+- Durable research schema rollback smoke test: five tables present and task, invocation, artifact, checkpoint, and queue writes passed
+- `pnpm research:worker:once`: passed and exited cleanly with an empty queue
 - Isolated production server and temporary PGlite directory: passed
 - Register account and receive session cookie: passed
 - Create study and load detail route: passed

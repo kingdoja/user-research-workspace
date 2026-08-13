@@ -86,6 +86,33 @@ export type StudyDetail = StudySummary & {
     finishedAt: string | null;
     eventCount: number;
     completedSteps: number;
+    totalSteps: number;
+  }>;
+  tasks: Array<{
+    publicId: string;
+    runId: string;
+    key: string;
+    title: string;
+    toolName: string;
+    status: "pending" | "running" | "completed" | "failed" | "skipped" | "waiting_input";
+    position: number;
+    dependsOn: string[];
+    input: Record<string, unknown>;
+    output: Record<string, unknown>;
+    error: string | null;
+    attempt: number;
+    startedAt: string | null;
+    finishedAt: string | null;
+  }>;
+  artifacts: Array<{
+    publicId: string;
+    runId: string;
+    taskKey: string | null;
+    type: string;
+    title: string;
+    content: Record<string, unknown> | unknown[];
+    createdAt: string;
+    updatedAt: string;
   }>;
   clarification: {
     status: "not_required" | "pending" | "completed";
@@ -1679,7 +1706,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
     return null;
   }
 
-  const [messagesResult, eventsResult, personasResult, panelResult, interviewsResult, runsResult] = await Promise.all([
+  const [messagesResult, eventsResult, personasResult, panelResult, interviewsResult, runsResult, tasksResult, artifactsResult] = await Promise.all([
     database.query<{
     id: string;
     role: StudyDetail["messages"][number]["role"];
@@ -1713,10 +1740,19 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
       archetype: string;
       profile: SyntheticPanelResearch["personas"][number] | string;
     }>(
-      `select public_id, name, archetype, profile
-       from study_personas
-       where study_id = $1 and ($2::bigint is null or run_id = $2)
-       order by created_at asc, id asc`,
+      `select persona.public_id, persona.name, persona.archetype, persona.profile
+       from study_personas persona
+       where (
+         persona.study_id = $1 and ($2::bigint is null or persona.run_id = $2)
+       ) or exists (
+         select 1
+         from study_panel_members member
+         join study_panels panel on panel.id = member.panel_id
+         where member.persona_id = persona.id
+           and panel.study_id = $1
+           and ($2::bigint is null or panel.run_id = $2)
+       )
+       order by persona.created_at asc, persona.id asc`,
       [row.id, row.run_id],
     ),
     database.query<{
@@ -1757,22 +1793,76 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
       finished_at: string | null;
       event_count: number;
       completed_steps: number;
+      total_steps: number;
     }>(
       `select r.id::text as id, r.status, r.provider, r.provider_model, r.error_message,
               r.created_at::text as created_at, r.started_at::text as started_at,
               r.finished_at::text as finished_at,
               count(e.id)::int as event_count,
-              count(distinct e.event_type) filter (where e.event_type in (
-                'trend.scan.completed', 'upgrade.scan.completed', 'policy.research.completed',
-                'personas.generated', 'panel.created', 'interviews.batch1.completed',
-                'interviews.batch2.completed', 'validation.completed', 'report.generated'
-              ))::int as completed_steps
+              case when task_counts.total_steps > 0
+                then task_counts.completed_steps
+                else count(distinct e.event_type) filter (where e.event_type in (
+                  'trend.scan.completed', 'upgrade.scan.completed', 'policy.research.completed',
+                  'personas.generated', 'panel.created', 'interviews.batch1.completed',
+                  'interviews.batch2.completed', 'validation.completed', 'report.generated'
+                ))::int
+              end as completed_steps,
+              case when task_counts.total_steps > 0 then task_counts.total_steps else 9 end as total_steps
        from study_runs r
        left join study_events e on e.run_id = r.id
+       left join lateral (
+         select count(*)::int as total_steps,
+                count(*) filter (where task.status in ('completed', 'skipped'))::int as completed_steps
+         from study_tasks task
+         where task.run_id = r.id
+       ) task_counts on true
        where r.study_id = $1
-       group by r.id
+       group by r.id, task_counts.total_steps, task_counts.completed_steps
        order by r.created_at asc, r.id asc`,
       [row.id],
+    ),
+    database.query<{
+      public_id: string;
+      run_id: string;
+      task_key: string;
+      title: string;
+      tool_name: string;
+      status: StudyDetail["tasks"][number]["status"];
+      position: number;
+      depends_on: string[] | string;
+      input: Record<string, unknown> | string;
+      output: Record<string, unknown> | string;
+      error_message: string | null;
+      attempt: number;
+      started_at: string | null;
+      finished_at: string | null;
+    }>(
+      `select public_id, run_id::text as run_id, task_key, title, tool_name, status,
+              position, depends_on, input, output, error_message, attempt,
+              started_at::text as started_at, finished_at::text as finished_at
+       from study_tasks
+       where study_id = $1 and ($2::bigint is null or run_id = $2)
+       order by position, id`,
+      [row.id, row.run_id],
+    ),
+    database.query<{
+      public_id: string;
+      run_id: string;
+      task_key: string | null;
+      artifact_type: string;
+      title: string;
+      content: Record<string, unknown> | string;
+      created_at: string;
+      updated_at: string;
+    }>(
+      `select artifact.public_id, artifact.run_id::text as run_id,
+              task.task_key, artifact.artifact_type, artifact.title, artifact.content,
+              artifact.created_at::text as created_at, artifact.updated_at::text as updated_at
+       from study_artifacts artifact
+       left join study_tasks task on task.id = artifact.task_id
+       where artifact.study_id = $1 and ($2::bigint is null or artifact.run_id = $2)
+       order by artifact.created_at asc, artifact.id asc`,
+      [row.id, row.run_id],
     ),
   ]);
 
@@ -1847,6 +1937,33 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
       finishedAt: run.finished_at,
       eventCount: run.event_count,
       completedSteps: run.completed_steps,
+      totalSteps: run.total_steps,
+    })),
+    tasks: tasksResult.rows.map((task) => ({
+      publicId: task.public_id,
+      runId: task.run_id,
+      key: task.task_key,
+      title: task.title,
+      toolName: task.tool_name,
+      status: task.status,
+      position: task.position,
+      dependsOn: typeof task.depends_on === "string" ? JSON.parse(task.depends_on) : task.depends_on,
+      input: typeof task.input === "string" ? JSON.parse(task.input) : task.input,
+      output: typeof task.output === "string" ? JSON.parse(task.output) : task.output,
+      error: task.error_message,
+      attempt: task.attempt,
+      startedAt: task.started_at,
+      finishedAt: task.finished_at,
+    })),
+    artifacts: artifactsResult.rows.map((artifact) => ({
+      publicId: artifact.public_id,
+      runId: artifact.run_id,
+      taskKey: artifact.task_key,
+      type: artifact.artifact_type,
+      title: artifact.title,
+      content: typeof artifact.content === "string" ? JSON.parse(artifact.content) : artifact.content,
+      createdAt: artifact.created_at,
+      updatedAt: artifact.updated_at,
     })),
     clarification: clarificationRequested
       ? {

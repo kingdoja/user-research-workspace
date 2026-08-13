@@ -1,7 +1,8 @@
 import { after, NextResponse } from "next/server";
 import { getViewer } from "@/lib/auth";
 import { isSameOriginRequest } from "@/lib/request-security";
-import { executeStudyRun, queueStudyRun } from "@/lib/studies";
+import { enqueueLatestStudyRun, processStudyJobQueue } from "@/lib/research-harness";
+import { queueStudyRun } from "@/lib/studies";
 
 export const maxDuration = 300;
 
@@ -35,7 +36,8 @@ export async function POST(request: Request, context: RouteContext<"/api/studies
   }
 
   if (result === "queued") {
-    after(() => executeStudyRun(publicId, viewer.workspaceId));
+    await enqueueLatestStudyRun(publicId, viewer.workspaceId);
+    after(() => processStudyJobQueue({ maxJobs: 1 }));
   }
 
   return NextResponse.json({ status: result });

@@ -24,6 +24,28 @@ export type StudyProgressItem = {
   status: "done" | "active" | "waiting" | "failed";
 };
 
+function getArtifactPersonas(study: StudyDetail): StudyDetail["personas"] {
+  if (study.personas.length) return study.personas;
+  const artifact = study.artifacts.findLast((item) => item.type === "persona_set");
+  if (!artifact || Array.isArray(artifact.content) || !Array.isArray(artifact.content.personas)) return [];
+  return artifact.content.personas.flatMap((item, index) => {
+    if (!item || typeof item !== "object") return [];
+    const profile = item as StudyDetail["personas"][number]["profile"];
+    return typeof profile.name === "string" && typeof profile.archetype === "string"
+      ? [{ publicId: `${artifact.publicId}-${index}`, name: profile.name, archetype: profile.archetype, profile }]
+      : [];
+  });
+}
+
+function getArtifactPanel(study: StudyDetail): StudyDetail["panel"] {
+  if (study.panel) return study.panel;
+  const artifact = study.artifacts.findLast((item) => item.type === "panel");
+  if (!artifact || Array.isArray(artifact.content)) return null;
+  const title = typeof artifact.content.title === "string" ? artifact.content.title : artifact.title;
+  const description = typeof artifact.content.description === "string" ? artifact.content.description : "由 AI 合成 Persona 组成的研究 Panel。";
+  return { publicId: artifact.publicId, title, description };
+}
+
 function ProgressPanel({ items, onClose }: { items: StudyProgressItem[]; onClose: () => void }) {
   return (
     <section className="agent-status-popover agent-progress-popover" aria-label="研究进度">
@@ -41,39 +63,42 @@ function ProgressPanel({ items, onClose }: { items: StudyProgressItem[]; onClose
 }
 
 function OutputPanel({ study, onClose }: { study: StudyDetail; onClose: () => void }) {
+  const outputCount = study.report ? 1 : 0;
   return (
     <section className="agent-status-popover agent-output-popover" aria-label="研究产出">
-      <header><div><FileText size={20} /><h2>报告</h2></div><strong>{study.report ? 1 : 0}</strong><button type="button" onClick={onClose} aria-label="关闭"><X size={17} /></button></header>
+      <header><div><FileText size={20} /><h2>研究产出</h2></div><strong>{outputCount}</strong><button type="button" onClick={onClose} aria-label="关闭"><X size={17} /></button></header>
       {study.report ? (
-        <button type="button" className="output-report-card" onClick={() => document.getElementById("research-output")?.scrollIntoView({ behavior: "smooth" })}>
+        <button type="button" className="output-report-card" onClick={() => { document.getElementById("research-output")?.scrollIntoView({ behavior: "smooth" }); onClose(); }}>
           <span className="output-report-cover"><small>RESEARCH</small><strong>{study.title.slice(0, 18)}</strong></span>
           <span className="output-report-meta"><strong>{study.report.title}</strong><small>{new Date(study.report.generatedAt).toLocaleDateString("zh-CN")}</small></span>
           <ArrowRight size={18} />
         </button>
-      ) : <p className="status-empty">报告将在第 9 项研究任务完成后生成。</p>}
+      ) : <p className="status-empty">最终报告生成后会出现在这里；Persona、Panel、访谈与讨论过程通过对应工具卡查看。</p>}
     </section>
   );
 }
 
 function PanelView({ study, onClose }: { study: StudyDetail; onClose: () => void }) {
-  const [selectedId, setSelectedId] = useState(study.personas[0]?.publicId ?? "");
+  const personas = getArtifactPersonas(study);
+  const panel = getArtifactPanel(study);
+  const [selectedId, setSelectedId] = useState(personas[0]?.publicId ?? "");
   const [view, setView] = useState<"profile" | "interviews">("profile");
-  const selected = study.personas.find((persona) => persona.publicId === selectedId);
+  const selected = personas.find((persona) => persona.publicId === selectedId);
   const interviews = study.interviews.filter((item) => item.personaPublicId === selectedId);
 
   return (
     <section className="agent-status-popover agent-panel-popover" aria-label="AI 合成 Panel">
       <header><div><UsersRound size={21} /><h2>Panel</h2></div><strong>{study.personas.length}</strong><button type="button" onClick={onClose} aria-label="关闭"><X size={17} /></button></header>
-      {study.panel ? (
+      {panel ? (
         <>
-          <div className="panel-intro"><h3>{study.panel.title}</h3><p>{study.panel.description}</p><small>AI 合成参与者，不代表真人样本或统计结论</small></div>
+          <div className="panel-intro"><h3>{panel.title}</h3><p>{panel.description}</p><small>AI 合成参与者，不代表真人样本或统计结论</small></div>
           <div className="panel-view-tabs" role="tablist" aria-label="Panel 详情视图">
             <button type="button" role="tab" aria-selected={view === "profile"} className={view === "profile" ? "active" : ""} onClick={() => setView("profile")}>Persona 画像</button>
             <button type="button" role="tab" aria-selected={view === "interviews"} className={view === "interviews" ? "active" : ""} onClick={() => setView("interviews")}>模拟访谈 <span>{study.interviews.length}</span></button>
           </div>
           <div className="panel-persona-layout">
             <nav aria-label="选择 Persona">
-              {study.personas.map((persona, index) => (
+              {personas.map((persona, index) => (
                 <button type="button" className={persona.publicId === selectedId ? "active" : ""} onClick={() => setSelectedId(persona.publicId)} key={persona.publicId}>
                   <span>{index + 1}</span><div><strong>{persona.name}</strong><small>{persona.archetype}</small></div>
                 </button>
@@ -125,6 +150,8 @@ export function StudyAgentControls({
   const [activeTab, setActiveTab] = useState<"progress" | "output" | "panel" | null>(null);
   const [pending, startTransition] = useTransition();
   const completedSteps = progressItems.filter((item) => item.status === "done").length;
+  const outputCount = study.report ? 1 : 0;
+  const panelCount = getArtifactPersonas(study).length;
 
   useEffect(() => {
     function useSuggestion(event: Event) {
@@ -190,10 +217,10 @@ export function StudyAgentControls({
           <ListChecks size={17} />进度 <strong>{completedSteps}/{progressItems.length}</strong><span>›</span>
         </button>
         <button type="button" className={activeTab === "output" ? "active" : ""} onClick={() => toggleTab("output")}>
-          <Workflow size={17} />研究产出 <strong>{study.report ? 1 : 0}</strong><span>›</span>
+          <Workflow size={17} />研究产出 <strong>{outputCount}</strong><span>›</span>
         </button>
         <button type="button" className={activeTab === "panel" ? "active" : ""} onClick={() => toggleTab("panel")}>
-          <UsersRound size={17} />Panel <strong>{study.personas.length}</strong><span>›</span>
+          <UsersRound size={17} />Panel <strong>{panelCount}</strong><span>›</span>
         </button>
       </nav>
       <form className="agent-followup-composer" onSubmit={submitStudy}>

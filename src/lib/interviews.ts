@@ -77,6 +77,8 @@ export type InterviewProjectDetail = InterviewProjectSummary & {
     imagePaths: string[];
     imageUrls: string[];
     answers: Array<{
+      sessionPublicId: string;
+      sessionType: "ai" | "human";
       personaPublicId: string | null;
       personaName: string;
       answer: string;
@@ -323,6 +325,8 @@ export async function getInterviewProject(viewer: Viewer, publicId: string): Pro
         ? session.messages.slice(questionMessageIndex + 1).find((candidate) => candidate.role === "persona")
         : null;
       return answer ? [{
+        sessionPublicId: session.publicId,
+        sessionType: session.sessionType,
         personaPublicId: session.persona?.publicId ?? null,
         personaName: session.participantName,
         answer: answer.content,
@@ -746,18 +750,20 @@ export async function deleteInterviewProject(viewer: Viewer, publicId: string) {
 export async function citeInterviewInsight(viewer: Viewer, publicId: string, input: {
   sessionPublicId: string;
   insight: string;
+  attribution?: "session" | "synthesis";
 }) {
   if (viewer.role === "viewer") return "forbidden" as const;
   const database = await getDatabase();
   const result = await database.query<{
     report_id: string | null;
     content_json: Record<string, unknown> | string | null;
-    persona_name: string;
+    participant_name: string;
   }>(
-    `select reports.id::text as report_id, reports.content_json, persona.name as persona_name
+    `select reports.id::text as report_id, reports.content_json,
+            coalesce(session.participant_name, persona.name, '匿名参与者') as participant_name
      from interview_projects project
      join interview_sessions session on session.project_id = project.id
-     join study_personas persona on persona.id = session.persona_id
+     left join study_personas persona on persona.id = session.persona_id
      left join reports on reports.study_id = project.source_study_id
      where project.public_id = $1 and project.workspace_id = $2 and session.public_id = $3
      limit 1`,
@@ -772,10 +778,13 @@ export async function citeInterviewInsight(viewer: Viewer, publicId: string, inp
   };
   const findings = Array.isArray(content.findings) ? content.findings : [];
   if (findings.some((finding) => finding.insight.trim() === input.insight)) return "duplicate" as const;
+  const isSynthesis = input.attribution === "synthesis";
   content.findings = [...findings, {
-    title: `模拟访谈洞察：${row.persona_name}`,
+    title: isSynthesis ? "访谈项目归纳" : `访谈洞察：${row.participant_name}`,
     insight: input.insight,
-    evidence: `来自 AI 合成 Persona「${row.persona_name}」的结构化模拟访谈，不代表真人陈述或统计证据。`,
+    evidence: isSynthesis
+      ? "来自该访谈项目的跨会话归纳；AI 合成内容不代表真人陈述，少量真人会话也不构成统计证据。"
+      : `来自访谈参与者「${row.participant_name}」的项目记录；AI 合成会话不代表真人陈述，单场真人访谈也不构成统计证据。`,
     implication: "将该洞察作为待验证假设，并结合真人访谈或行为数据进一步验证后再用于决策。",
   }];
   await database.query(

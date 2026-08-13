@@ -5,6 +5,7 @@ import {
   ChevronRight,
   CircleHelp,
   FileCheck2,
+  Files,
   FileText,
   Link2,
   LoaderCircle,
@@ -15,12 +16,17 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { StudyAgentControls, type StudyProgressItem } from "@/components/study-agent-controls";
+import {
+  StudyAgentConsole,
+  StudyArtifactConsoleProvider,
+  StudyArtifactOpenButton,
+} from "@/components/study-agent-console";
 import { StudyClarificationForm } from "@/components/study-clarification-form";
 import { StudyDetailActions } from "@/components/study-detail-actions";
 import { StudyFollowupSuggestions } from "@/components/study-followup-suggestions";
 import { StudyPanelOpenButton } from "@/components/study-panel-open-button";
-import { StudyReportPreview } from "@/components/study-report-preview";
 import { StudyRunActions } from "@/components/study-run-actions";
+import { StudyReplayControls } from "@/components/study-replay-controls";
 import { StudyShareControls } from "@/components/study-share-controls";
 import type { Viewer } from "@/lib/auth";
 import { getOpenAIProviderStatus } from "@/lib/openai-provider";
@@ -70,6 +76,10 @@ function directionList(value: unknown) {
     const verdict = "verdict" in item && typeof item.verdict === "string" ? item.verdict : "";
     return [{ title: item.title, verdict }];
   });
+}
+
+function JsonBlock({ value }: { value: unknown }) {
+  return <pre className="agent-json-block">{JSON.stringify(value, null, 2)}</pre>;
 }
 
 function TracePayloadDetails({
@@ -131,6 +141,44 @@ function ToolCall({
       <summary><ChevronRight size={15} /><span>exec</span><strong>{name}</strong>{children ? <small>查看过程</small> : null}</summary>
       {children ? <div className="agent-tool-body">{children}</div> : null}
     </details>
+  );
+}
+
+function ArtifactResultCard({ artifact }: { artifact: StudyDetail["artifacts"][number] }) {
+  const content = Array.isArray(artifact.content) ? {} : artifact.content;
+  const count = Array.isArray(artifact.content)
+    ? artifact.content.length
+    : typeof content.count === "number"
+    ? content.count
+    : typeof content.matchCount === "number"
+      ? content.matchCount
+      : typeof content.participantCount === "number"
+        ? content.participantCount
+        : Array.isArray(content.personas)
+          ? content.personas.length
+          : Array.isArray(content.sources)
+            ? content.sources.length
+            : Array.isArray(content.messages)
+              ? content.messages.length
+              : null;
+  const typeLabel: Record<string, string> = {
+    research_plan: "研究计划",
+    public_sources: "证据包",
+    persona_search: "Persona 检索",
+    persona_set: "Persona",
+    panel: "Panel",
+    synthetic_interviews_batch_1: "访谈记录",
+    synthetic_interviews_batch_2: "访谈记录",
+    direction_validation: "方向验证",
+    discussion_transcript: "讨论记录",
+    research_report: "研究报告",
+  };
+  return (
+    <article className="agent-artifact-card">
+      <span><Files size={17} /></span>
+      <div><small>{typeLabel[artifact.type] ?? "研究产物"}{count !== null ? ` · ${count}` : ""}</small><strong>{artifact.title}</strong><p>已写入当前 Run，可回放并作为后续工具输入。</p></div>
+      <StudyArtifactOpenButton artifactId={artifact.publicId} />
+    </article>
   );
 }
 
@@ -202,6 +250,7 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
   const steps = createProgressItems(study);
   const activeStep = steps.find((step) => step.status === "active");
   const latestEvent = events.at(-1);
+  const tasksByKey = new Map(study.tasks.map((task) => [task.key, task]));
 
   return (
     <article className="agent-message agent-execution-message">
@@ -211,6 +260,7 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
           <strong>研究执行</strong>
           {study.runAttempt ? <span>第 {study.runAttempt} 次执行</span> : null}
         </div>
+        {study.runId && study.tasks.length > 0 && study.runStatus === "completed" ? <StudyReplayControls runId={study.runId} stepCount={steps.length} /> : null}
         <p>计划已锁定。执行记录包含公开网页证据、AI 合成 Persona、模拟访谈与报告生成；模拟参与者不会被标记为真人样本。</p>
         {activeStep ? (
           <div className="agent-live-update" role="status" aria-live="polite">
@@ -225,14 +275,17 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
             <div><strong>上次执行已中断</strong><p>运行超过 10 分钟未更新。重新执行会创建新的尝试并从头开始，旧时间线会完整保留。</p></div>
           </div>
         ) : null}
-        <section className="agent-execution-timeline">
+        <section className="agent-execution-timeline" data-replay-run={study.runId ?? undefined}>
           {steps.map((step, index) => {
+            const task = tasksByKey.get(step.key);
             const startedEvent = events.findLast((event) => step.startedTypes.includes(event.type));
             const completedEvent = events.findLast((event) => step.completedTypes.includes(event.type));
             const relatedEvent = completedEvent ?? startedEvent;
-            const payload = relatedEvent?.payload ?? {};
-            const startedAt = startedEvent ? new Date(startedEvent.createdAt) : null;
-            const completedAt = completedEvent ? new Date(completedEvent.createdAt) : null;
+            const artifact = study.artifacts.findLast((item) => item.taskKey === step.key);
+            const todoEvent = events.findLast((event) => event.type === "todo.updated" && event.payload.taskKey === step.key);
+            const payload = task?.output && Object.keys(task.output).length ? task.output : relatedEvent?.payload ?? {};
+            const startedAt = task?.startedAt ? new Date(task.startedAt) : startedEvent ? new Date(startedEvent.createdAt) : null;
+            const completedAt = task?.finishedAt ? new Date(task.finishedAt) : completedEvent ? new Date(completedEvent.createdAt) : null;
             const elapsedSeconds = startedAt && completedAt ? Math.max(0, Math.round((completedAt.getTime() - startedAt.getTime()) / 1000)) : null;
             const stepSummary = step.status === "done"
               ? step.completedSummary
@@ -241,28 +294,36 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
                 : step.status === "failed"
                   ? "任务未完成，错误详情已记录在当前步骤。"
                   : "等待前序研究任务完成。";
-            return (
-              <ToolCall key={step.key} name={step.toolName} status={step.status}>
-                <p className="agent-tool-message"><strong>{index + 1}. {step.label}</strong></p>
-                <p className="agent-step-summary">{stepSummary}</p>
-                <dl className="agent-tool-fields">
-                  <div><dt>status</dt><dd>{step.status}</dd></div>
-                  {startedAt ? <div><dt>started</dt><dd>{startedAt.toLocaleTimeString("zh-CN")}</dd></div> : null}
-                  {completedAt ? <div><dt>completed</dt><dd>{completedAt.toLocaleTimeString("zh-CN")}</dd></div> : null}
-                  {elapsedSeconds !== null ? <div><dt>duration</dt><dd>{elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`}</dd></div> : null}
-                  {typeof payload.sourceCount === "number" ? <div><dt>sources</dt><dd>{payload.sourceCount}</dd></div> : null}
-                  {typeof payload.count === "number" ? <div><dt>personas</dt><dd>{payload.count}</dd></div> : null}
-                  {typeof payload.participantCount === "number" ? <div><dt>participants</dt><dd>{payload.participantCount}</dd></div> : null}
-                  {typeof payload.directionCount === "number" ? <div><dt>directions</dt><dd>{payload.directionCount}</dd></div> : null}
-                  {typeof payload.citationCount === "number" ? <div><dt>sources</dt><dd>{payload.citationCount}</dd></div> : null}
-                  {typeof payload.findingCount === "number" ? <div><dt>findings</dt><dd>{payload.findingCount}</dd></div> : null}
-                  {typeof payload.recommendationCount === "number" ? <div><dt>recommendations</dt><dd>{payload.recommendationCount}</dd></div> : null}
-                  {index === 0 ? <><div><dt>provider</dt><dd>{study.runProvider ?? provider.providerName}</dd></div><div><dt>model</dt><dd>{study.runModel ?? provider.researchModel}</dd></div></> : null}
-                  {step.status === "failed" && study.runError ? <div><dt>error</dt><dd>{study.runError}</dd></div> : null}
-                </dl>
-                <TracePayloadDetails stepKey={step.key} payload={payload} events={events} />
+            return <div className="agent-task-event" key={step.key}>
+              <ToolCall name={step.toolName} status={step.status}>
+                  <p className="agent-tool-message"><strong>{index + 1}. {step.label}</strong></p>
+                  <p className="agent-step-summary">{stepSummary}</p>
+                  <dl className="agent-tool-fields">
+                    <div><dt>status</dt><dd>{step.status}</dd></div>
+                    {startedAt ? <div><dt>started</dt><dd>{startedAt.toLocaleTimeString("zh-CN")}</dd></div> : null}
+                    {completedAt ? <div><dt>completed</dt><dd>{completedAt.toLocaleTimeString("zh-CN")}</dd></div> : null}
+                    {elapsedSeconds !== null ? <div><dt>duration</dt><dd>{elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`}</dd></div> : null}
+                    {typeof payload.sourceCount === "number" ? <div><dt>sources</dt><dd>{payload.sourceCount}</dd></div> : null}
+                    {typeof payload.count === "number" ? <div><dt>personas</dt><dd>{payload.count}</dd></div> : null}
+                    {typeof payload.participantCount === "number" ? <div><dt>participants</dt><dd>{payload.participantCount}</dd></div> : null}
+                    {typeof payload.directionCount === "number" ? <div><dt>directions</dt><dd>{payload.directionCount}</dd></div> : null}
+                    {typeof payload.citationCount === "number" ? <div><dt>sources</dt><dd>{payload.citationCount}</dd></div> : null}
+                    {typeof payload.findingCount === "number" ? <div><dt>findings</dt><dd>{payload.findingCount}</dd></div> : null}
+                    {typeof payload.recommendationCount === "number" ? <div><dt>recommendations</dt><dd>{payload.recommendationCount}</dd></div> : null}
+                    {index === 0 ? <><div><dt>provider</dt><dd>{study.runProvider ?? provider.providerName}</dd></div><div><dt>model</dt><dd>{study.runModel ?? provider.researchModel}</dd></div></> : null}
+                    {task && task.attempt > 0 ? <div><dt>attempt</dt><dd>{task.attempt}</dd></div> : null}
+                    {step.status === "failed" && (task?.error ?? study.runError) ? <div><dt>error</dt><dd>{task?.error ?? study.runError}</dd></div> : null}
+                  </dl>
+                  <TracePayloadDetails stepKey={step.key} payload={payload} events={events} />
+                  {task ? <div className="agent-tool-log">
+                    <details><summary>args</summary><JsonBlock value={task.input} /></details>
+                    <details><summary>result</summary><JsonBlock value={task.output} /></details>
+                    <details open><summary>message</summary><p>{stepSummary}</p></details>
+                  </div> : null}
               </ToolCall>
-            );
+              {artifact ? <ArtifactResultCard artifact={artifact} /> : null}
+              {todoEvent ? <ToolCall name="updateTodo" status="done" /> : null}
+            </div>;
           })}
         </section>
         {study.runHistory.length > 0 ? (
@@ -276,7 +337,7 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
               return (
                 <li key={run.id} className={`run-history-${run.status}`}>
                   <span className="run-history-marker" />
-                  <div><strong>第 {run.attempt} 次执行 · {statusLabel}</strong><p>{run.completedSteps}/9 个步骤 · {run.eventCount} 条事件{duration !== null ? ` · ${duration < 60 ? `${duration}s` : `${Math.floor(duration / 60)}m ${duration % 60}s`}` : ""}</p>{run.error ? <small>{run.error}</small> : null}</div>
+                  <div><strong>第 {run.attempt} 次执行 · {statusLabel}</strong><p>{run.completedSteps}/{run.totalSteps} 个步骤 · {run.eventCount} 条事件{duration !== null ? ` · ${duration < 60 ? `${duration}s` : `${Math.floor(duration / 60)}m ${duration % 60}s`}` : ""}</p>{run.error ? <small>{run.error}</small> : null}</div>
                   <time>{started.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time>
                 </li>
               );
@@ -363,8 +424,10 @@ export function StudyAgentWorkspace({
   provider: OpenAIProviderStatus;
 }) {
   const progressItems = createProgressItems(study);
+  const initialArtifactId = study.artifacts.findLast((artifact) => artifact.type === "research_report")?.publicId ?? null;
 
   return (
+    <StudyArtifactConsoleProvider initialArtifactId={initialArtifactId}>
     <main className="agent-workspace-shell">
       <section className="agent-conversation-pane">
         <header className="agent-workspace-header">
@@ -387,12 +450,32 @@ export function StudyAgentWorkspace({
         </div>
         <StudyAgentControls study={study} progressItems={progressItems} />
       </section>
-      <StudyReportPreview study={study} />
+      <StudyAgentConsole study={study} />
     </main>
+    </StudyArtifactConsoleProvider>
   );
 }
 
 function createProgressItems(study: StudyDetail): ProgressDefinition[] {
+  if (study.tasks.length > 0) {
+    return study.tasks.map((task) => ({
+      key: task.key,
+      label: task.title,
+      toolName: task.toolName,
+      startedTypes: [`task.${task.key}.started`],
+      completedTypes: [`task.${task.key}.completed`],
+      activeSummary: `正在执行 ${task.title}。工具输出和进度会持久化到当前研究运行。`,
+      completedSummary: `${task.title}已完成，结果已写入研究 checkpoint。`,
+      status: task.status === "completed" || task.status === "skipped"
+        ? "done"
+        : task.status === "running"
+          ? "active"
+          : task.status === "failed"
+            ? "failed"
+            : "waiting",
+    }));
+  }
+
   const runEvents = study.events.filter((event) => !study.runId || event.runId === study.runId || event.runId === null);
   const eventTypes = new Set(runEvents.map((event) => event.type));
   const failed = study.runStatus === "failed" || study.runRecoverable;

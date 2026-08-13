@@ -23,7 +23,7 @@ export default async function StudyDetailPage({ params }: PageProps<"/study/[pub
 
   return (
     <>
-      {executionActive ? <StudyAutoRefresh publicId={study.publicId} /> : null}
+      {executionActive ? <StudyAutoRefresh publicId={study.publicId} after={study.events.at(-1)?.id ?? "0"} /> : null}
       <StudyAgentWorkspace
         study={study}
         viewer={viewer}

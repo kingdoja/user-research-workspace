@@ -1,6 +1,6 @@
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 
-type Queryable = {
+export type Queryable = {
   query<Row extends QueryResultRow = QueryResultRow>(
     text: string,
     values?: unknown[],
@@ -58,4 +58,11 @@ export async function getDatabase() {
 
   databaseGlobals.atypicaDatabase ??= createDatabase(databaseGlobals.atypicaPool);
   return databaseGlobals.atypicaDatabase;
+}
+
+export async function closeDatabase() {
+  const pool = databaseGlobals.atypicaPool;
+  databaseGlobals.atypicaDatabase = undefined;
+  databaseGlobals.atypicaPool = undefined;
+  await pool?.end();
 }
