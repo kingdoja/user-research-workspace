@@ -8,8 +8,10 @@ import {
   Eye,
   FileSearch,
   FileText,
+  Hash,
   MessagesSquare,
   Search,
+  ShieldCheck,
   UserRound,
   UsersRound,
 } from "lucide-react";
@@ -254,11 +256,35 @@ function SourcesConsole({ artifact }: { artifact: Artifact }) {
   const content = asRecord(artifact.content);
   const sources = asRecords(content.sources);
   const queries = asStrings(content.queries);
+  const audit = asRecord(content.audit);
+  const candidates = asRecords(audit.candidates);
+  const rejectedCandidates = candidates.filter((candidate) => textValue(candidate.status) !== "collected");
   return (
     <section className="console-sources">
       <header className="console-section-heading"><div><FileSearch size={18} /><span>SCOUT AGENT</span></div><h2>{artifact.title}</h2><p>公开网页证据按实际检索词归档，供后续 Persona、验证和报告工具读取。</p></header>
       <div className="console-query-list">{queries.map((query) => <span key={query}>{query}</span>)}</div>
-      <ol>{sources.map((source, index) => <li key={textValue(source.url, String(index))}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{textValue(source.title, "公开来源")}</strong><p>{textValue(source.excerpt)}</p></div>{textValue(source.url) ? <a href={textValue(source.url)} target="_blank" rel="noreferrer" aria-label="打开公开来源"><ExternalLink size={15} /></a> : null}</li>)}</ol>
+      {Object.keys(audit).length ? <dl className="console-source-audit-summary">
+        <div><dt>Connector</dt><dd>{textValue(audit.provider, "public-web")}</dd></div>
+        <div><dt>候选</dt><dd>{numberValue(audit.candidateCount)}</dd></div>
+        <div><dt>已快照</dt><dd>{numberValue(audit.collectedCount)}</dd></div>
+        <div><dt>拒绝 / 不可用</dt><dd>{numberValue(audit.rejectedCount) + numberValue(audit.unavailableCount)}</dd></div>
+      </dl> : null}
+      <ol>{sources.map((source, index) => <li key={textValue(source.url, String(index))}>
+        <span>{String(index + 1).padStart(2, "0")}</span>
+        <div>
+          <strong>{textValue(source.title, "公开来源")}</strong>
+          <p>{textValue(source.excerpt)}</p>
+          {textValue(source.snapshotPublicId) ? <small className="console-source-snapshot"><ShieldCheck size={12} />{textValue(source.snapshotPublicId)}<Hash size={11} />{textValue(source.contentHash).slice(0, 12)}</small> : null}
+        </div>
+        {textValue(source.url) ? <a href={textValue(source.url)} target="_blank" rel="noreferrer" aria-label="打开公开来源"><ExternalLink size={15} /></a> : null}
+      </li>)}</ol>
+      {rejectedCandidates.length ? <details className="console-source-rejections">
+        <summary>查看 {rejectedCandidates.length} 条未采用候选</summary>
+        <ul>{rejectedCandidates.map((candidate, index) => <li key={textValue(candidate.publicId, String(index))}>
+          <div><strong>{textValue(candidate.resolvedTitle, textValue(candidate.title, "候选来源"))}</strong><small>{textValue(candidate.status)} · {textValue(candidate.rejectionReason, "SOURCE_UNAVAILABLE")}</small></div>
+          <span>{textValue(candidate.provider)}</span>
+        </li>)}</ul>
+      </details> : null}
     </section>
   );
 }

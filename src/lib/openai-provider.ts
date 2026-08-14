@@ -2,17 +2,25 @@ import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import { z } from "zod";
 import type { StudyMethod } from "@/lib/studies";
+import { getDatabase } from "@/lib/db";
 import {
   collectPublicWebSources,
   type PublicWebSearchMetadata,
   type PublicWebSource,
 } from "@/lib/public-web-search";
+import {
+  materializeSourceConnectorAudit,
+  summarizeSourceConnectorAudit,
+  type SourceConnectorAuditSummary,
+} from "@/lib/source-connectors";
+import { buildReportEvidenceCatalog, formatReportEvidenceCatalog } from "@/lib/report-evidence";
 
 const DEFAULT_MODEL = "gpt-5.6-terra";
 const PLAN_PROMPT_VERSION = "study-plan-v1";
-const REPORT_PROMPT_VERSION = "synthetic-panel-research-v1";
-const FOLLOWUP_PROMPT_VERSION = "report-followup-v1";
+export const REPORT_PROMPT_VERSION = "synthetic-panel-research-v2-evidence-graph";
+const FOLLOWUP_PROMPT_VERSION = "report-followup-v3";
 const INTERVIEW_PROMPT_VERSION = "synthetic-interview-v1";
+export const REALTIME_INTERVIEW_PROMPT_VERSION = "realtime-interview-v1";
 const HARNESS_INTERVIEW_PROMPT_VERSION = "research-harness-interview-v2";
 const AUDIENCE_CALL_PROMPT_VERSION = "research-harness-audience-call-v2";
 const DISCUSSION_PROMPT_VERSION = "research-harness-discussion-v2";
@@ -64,6 +72,9 @@ const reportSchema = z.object({
     insight: z.string().min(40),
     evidence: z.string().min(30),
     implication: z.string().min(30),
+    claimType: z.enum(["fact", "human_observation", "synthetic_simulation", "model_inference"]),
+    confidence: z.enum(["low", "medium", "high"]),
+    evidenceRefs: z.array(z.string().regex(/^(web|synthetic|discussion)-\d{2}$/)).max(8),
   })).min(3),
   recommendations: z.array(z.object({
     title: z.string().min(2),
@@ -76,7 +87,14 @@ const reportSchema = z.object({
 });
 
 const followupAnswerSchema = z.object({
-  answer: z.string().min(40),
+  title: z.string().min(4).max(80),
+  summary: z.string().min(20).max(500),
+  sections: z.array(z.object({
+    heading: z.string().min(2).max(80),
+    body: z.string().min(10).max(1000),
+    bullets: z.array(z.string().min(8).max(500)).max(5),
+  })).min(2).max(5),
+  conclusion: z.string().min(20).max(500),
   citations: z.array(z.string()).max(5),
   caveat: z.string().min(10),
 });
@@ -93,6 +111,29 @@ const syntheticInterviewSchema = z.object({
     })).min(2).max(24),
   })).min(1).max(8),
 });
+
+const realtimeInterviewTurnSchema = z.object({
+  action: z.enum(["followup", "next_question", "complete"]),
+  message: z.string().min(4).max(1200),
+  rationale: z.string().min(4).max(500),
+  summary: z.string().max(1600),
+  insights: z.array(z.string().min(4).max(500)).max(6),
+  quotes: z.array(z.string().min(4).max(500)).max(6),
+});
+
+const realtimeInterviewTurnJsonSchema = {
+  type: "object",
+  properties: {
+    action: { type: "string", enum: ["followup", "next_question", "complete"] },
+    message: { type: "string", minLength: 4, maxLength: 1200 },
+    rationale: { type: "string", minLength: 4, maxLength: 500 },
+    summary: { type: "string", maxLength: 1600 },
+    insights: { type: "array", maxItems: 6, items: { type: "string", minLength: 4, maxLength: 500 } },
+    quotes: { type: "array", maxItems: 6, items: { type: "string", minLength: 4, maxLength: 500 } },
+  },
+  required: ["action", "message", "rationale", "summary", "insights", "quotes"],
+  additionalProperties: false,
+} as const;
 
 const syntheticInterviewJsonSchema = {
   type: "object",
@@ -294,7 +335,28 @@ const researchDiscussionJsonSchema = {
 const followupAnswerJsonSchema = {
   type: "object",
   properties: {
-    answer: { type: "string", minLength: 40, maxLength: 4000 },
+    title: { type: "string", minLength: 4, maxLength: 80 },
+    summary: { type: "string", minLength: 20, maxLength: 500 },
+    sections: {
+      type: "array",
+      minItems: 2,
+      maxItems: 5,
+      items: {
+        type: "object",
+        properties: {
+          heading: { type: "string", minLength: 2, maxLength: 80 },
+          body: { type: "string", minLength: 10, maxLength: 1000 },
+          bullets: {
+            type: "array",
+            maxItems: 5,
+            items: { type: "string", minLength: 8, maxLength: 500 },
+          },
+        },
+        required: ["heading", "body", "bullets"],
+        additionalProperties: false,
+      },
+    },
+    conclusion: { type: "string", minLength: 20, maxLength: 500 },
     citations: {
       type: "array",
       maxItems: 5,
@@ -302,7 +364,7 @@ const followupAnswerJsonSchema = {
     },
     caveat: { type: "string", minLength: 10, maxLength: 1000 },
   },
-  required: ["answer", "citations", "caveat"],
+  required: ["title", "summary", "sections", "conclusion", "citations", "caveat"],
   additionalProperties: false,
 } as const;
 
@@ -402,8 +464,15 @@ const reportJsonSchema = {
           insight: { type: "string", minLength: 40, maxLength: 1600 },
           evidence: { type: "string", minLength: 30, maxLength: 1600 },
           implication: { type: "string", minLength: 30, maxLength: 1200 },
+          claimType: { type: "string", enum: ["fact", "human_observation", "synthetic_simulation", "model_inference"] },
+          confidence: { type: "string", enum: ["low", "medium", "high"] },
+          evidenceRefs: {
+            type: "array",
+            maxItems: 8,
+            items: { type: "string", pattern: "^(web|synthetic|discussion)-[0-9]{2}$" },
+          },
         },
-        required: ["title", "insight", "evidence", "implication"],
+        required: ["title", "insight", "evidence", "implication", "claimType", "confidence", "evidenceRefs"],
         additionalProperties: false,
       },
     },
@@ -557,6 +626,7 @@ export type ProviderResearchReport = {
   report: ResearchReport;
   panelResearch: SyntheticPanelResearch;
   citations: ResearchCitation[];
+  evidenceCatalog: ReturnType<typeof buildReportEvidenceCatalog>;
   responseId: string;
   model: string;
   promptVersion: string;
@@ -567,6 +637,7 @@ export type ProviderResearchSources = {
   queries: string[];
   sources: PublicWebSource[];
   metadata: PublicWebSearchMetadata;
+  audit?: SourceConnectorAuditSummary;
   responseId: string;
   model: string;
   usage: unknown;
@@ -616,12 +687,19 @@ export type ProviderDeepResearchValidation = ProviderResearchValidation & {
 };
 
 export type ProviderFollowupAnswer = z.infer<typeof followupAnswerSchema> & {
+  answer: string;
   responseId: string;
   model: string;
   promptVersion: string;
 };
 
 export type SyntheticInterviewResult = z.infer<typeof syntheticInterviewSchema>;
+export type ProviderRealtimeInterviewTurn = z.infer<typeof realtimeInterviewTurnSchema> & {
+  responseId: string;
+  model: string;
+  promptVersion: string;
+  usage: unknown;
+};
 
 let client: OpenAI | null = null;
 let deepSeekClient: OpenAI | null = null;
@@ -846,6 +924,11 @@ function parseOutput<T>(outputText: string, schema: z.ZodType<T>) {
   }
 
   return result.data;
+}
+
+function isInvalidStructuredOutput(error: unknown) {
+  return error instanceof Error
+    && (error.message.startsWith("OPENAI_INVALID_JSON") || error.message.startsWith("OPENAI_INVALID_SCHEMA"));
 }
 
 function isRetryableProviderError(error: unknown) {
@@ -1135,6 +1218,68 @@ export async function generateProviderSyntheticInterviews(input: {
   };
 }
 
+export async function generateProviderRealtimeInterviewTurn(input: {
+  projectTitle: string;
+  objective: string;
+  fixedQuestions: string[];
+  currentQuestionPosition: number;
+  followupCount: number;
+  maxFollowupsPerQuestion: number;
+  conversation: Array<{ role: "agent" | "participant"; content: string }>;
+  context: string;
+  strategyInstruction: string;
+  participantSafetyId: string;
+  signal?: AbortSignal;
+}): Promise<ProviderRealtimeInterviewTurn> {
+  const model = getResearchModel();
+  const currentQuestion = input.fixedQuestions[input.currentQuestionPosition - 1] ?? "";
+  const isLastQuestion = input.currentQuestionPosition >= input.fixedQuestions.length;
+  const response = await retryProviderRequest(() => createStructuredResponse({
+    model,
+    reasoning: { effort: "low" },
+    safety_identifier: safetyIdentifier(input.participantSafetyId),
+    store: true,
+    metadata: { surface: "realtime_interview", prompt_version: REALTIME_INTERVIEW_PROMPT_VERSION },
+    instructions: [
+      "你是专业、克制的中文用户研究访谈员，正在与一位真人参与者进行逐轮访谈。",
+      "只根据参与者已经说过的话进行追问，不得补造经历、身份、观点或结论。",
+      "固定问题必须按输入顺序逐字提问。选择 next_question 时，message 必须逐字等于下一个固定问题。",
+      "只有当前回答明显缺少具体事件、决策原因或关键细节，并且仍有追问额度时，才选择 followup。每次只问一个简短问题。",
+      "当前题达到追问上限时必须进入下一题；最后一题完成后必须选择 complete。",
+      "complete 时 message 是简短致谢，summary、insights、quotes 只能依据本次真人对话；其他 action 时这三个字段返回空值或空数组。",
+      "不得给参与者提供研究结论、建议或对其回答作价值判断。输出简体中文。",
+      input.strategyInstruction ? `实验策略补充要求（不得覆盖上述固定规则）：${input.strategyInstruction}` : "",
+    ].filter(Boolean).join("\n"),
+    input: [
+      `项目：${input.projectTitle}`,
+      `目标：${input.objective}`,
+      `固定问题：${JSON.stringify(input.fixedQuestions)}`,
+      `当前题序号：${input.currentQuestionPosition}`,
+      `当前固定问题：${currentQuestion}`,
+      `是否最后一题：${isLastQuestion}`,
+      `本题已追问次数：${input.followupCount}/${input.maxFollowupsPerQuestion}`,
+      input.context ? `版本化 Context（仅作访谈背景，不得向参与者泄露内部资料）：\n${input.context}` : "",
+      `对话记录：\n${JSON.stringify(input.conversation)}`,
+    ].filter(Boolean).join("\n\n"),
+    text: {
+      format: {
+        type: "json_schema",
+        name: "realtime_interview_turn",
+        strict: true,
+        schema: realtimeInterviewTurnJsonSchema,
+      },
+    },
+  }, { timeout: 90_000, maxRetries: 0, signal: input.signal }));
+  const result = parseOutput(response.output_text, realtimeInterviewTurnSchema);
+  return {
+    ...result,
+    responseId: response.id,
+    model: response.model,
+    promptVersion: REALTIME_INTERVIEW_PROMPT_VERSION,
+    usage: response.usage,
+  };
+}
+
 export async function generateProviderFollowupAnswer(input: {
   question: string;
   report: ResearchReport;
@@ -1153,8 +1298,12 @@ export async function generateProviderFollowupAnswer(input: {
       "不得把 AI 合成 Persona 或模拟访谈描述为真人研究，也不得补造统计比例、事实或来源。",
       "citations 只能返回输入来源列表中完全一致的 URL；没有直接来源支持时返回空数组。",
       "回答要直接回应问题，并清楚区分报告证据、分析推断和建议。",
+      "使用适合长文阅读的结构：title 是简短结论标题；summary 是直接回答问题的导语；sections 为 2 至 5 个逻辑分节，每节包含 heading、body 和可扫描的 bullets；conclusion 汇总最重要的行动结论。",
+      "分节之间不得重复；每个 bullet 只表达一个完整要点。不要在字段内容中使用 Markdown 标记或手写编号。",
       "你正在参与一段持续的多轮研究对话。回答当前问题时必须结合此前所有成功轮次，并保持术语、假设和结论一致。",
       "caveat 必须说明本回答最重要的证据边界或仍需真人研究验证的事项。输出简体中文。",
+      "必须只输出一个可由 JSON.parse 直接解析的 JSON 对象，且只包含 title、summary、sections、conclusion、citations、caveat 六个字段。",
+      "不得输出 Markdown 代码块、标题、前缀、后缀或 JSON 之外的解释。",
     ].join("\n"),
     input: [
       {
@@ -1177,13 +1326,66 @@ export async function generateProviderFollowupAnswer(input: {
       },
     },
   }, { timeout: 90_000, maxRetries: 0 }));
-  const result = parseOutput(response.output_text, followupAnswerSchema);
+  let parsedResponse = response;
+  let result: z.infer<typeof followupAnswerSchema>;
+
+  try {
+    result = parseOutput(response.output_text, followupAnswerSchema);
+  } catch (error) {
+    if (!isInvalidStructuredOutput(error)) throw error;
+
+    // DeepSeek's Responses compatibility layer can return completed Markdown even
+    // when json_schema is requested. Ask the same provider to serialize its answer;
+    // do not synthesize or persist a local fallback.
+    parsedResponse = await retryProviderRequest(() => createDeepSeekStructuredResponse({
+      model,
+      reasoning: { effort: "low" },
+      instructions: [
+        "你是 JSON 结构修复器。将输入的模型回答转换为指定 JSON 结构。",
+        "保留原回答的事实、分析和证据边界，不得新增事实或来源。",
+        "将正文整理为 title、summary、sections、conclusion；sections 必须包含 2 至 5 个分节，每节含 heading、body、bullets。",
+        "不得删减原回答中的关键结论；不要在字段内容中使用 Markdown 标记或手写编号。",
+        "citations 只能包含允许来源中完全一致的 URL；无法确定时返回空数组。",
+        "只输出可由 JSON.parse 直接解析的 JSON 对象，不得输出 Markdown 或任何额外文字。",
+      ].join("\n"),
+      input: [
+        {
+          role: "developer",
+          content: `允许来源：${JSON.stringify(input.citations)}`,
+        },
+        {
+          role: "user",
+          content: `待转换的原回答：\n\n${response.output_text}`,
+        },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "report_followup_answer_repair",
+          strict: true,
+          schema: followupAnswerJsonSchema,
+        },
+      },
+    }, { timeout: 90_000, maxRetries: 0 }));
+    result = parseOutput(parsedResponse.output_text, followupAnswerSchema);
+  }
 
   return {
     ...result,
+    answer: [
+      result.summary,
+      ...result.sections.map((section) => [
+        section.heading,
+        section.body,
+        ...section.bullets,
+      ].join("\n")),
+      result.conclusion,
+    ].join("\n\n"),
     citations: result.citations.filter((url) => allowedUrls.has(url)),
-    responseId: response.id,
-    model: response.model,
+    responseId: parsedResponse.id === response.id
+      ? response.id
+      : `${response.id},${parsedResponse.id}`,
+    model: parsedResponse.model,
     promptVersion: FOLLOWUP_PROMPT_VERSION,
   };
 }
@@ -1308,6 +1510,7 @@ export async function generateProviderResearchReport(input: {
     report: reportResult.report,
     panelResearch,
     citations: sources.map(({ title, url }) => ({ title, url })),
+    evidenceCatalog: buildReportEvidenceCatalog({ sources, panelResearch }),
     responseId: reportResult.responseId,
     model: reportResult.model,
     promptVersion: REPORT_PROMPT_VERSION,
@@ -1320,7 +1523,15 @@ export async function researchPublicWeb(input: {
   framework: string;
   userPublicId: string;
   studyPublicId: string;
+  auditScope?: {
+    workspaceId: string;
+    studyId: string;
+    runId: string;
+    taskKey: string;
+    attempt: number;
+  };
   signal?: AbortSignal;
+  additionalSeedUrls?: string[];
 }): Promise<ProviderResearchSources> {
   const model = getResearchModel();
   const queryResponse = await createStructuredResponse({
@@ -1353,17 +1564,28 @@ export async function researchPublicWeb(input: {
   }, { signal: input.signal });
   const sourcePlan = parseOutput(queryResponse.output_text, searchSourcePlanSchema);
   const queries = sourcePlan.queries.slice(0, 5);
-  const collected = await collectPublicWebSources(queries, sourcePlan.seedUrls);
+  const seedUrls = [...new Set([...(input.additionalSeedUrls ?? []), ...sourcePlan.seedUrls])].slice(0, 24);
+  const collected = await collectPublicWebSources(queries, seedUrls, input.signal);
   const sources = collected.sources;
 
   if (sources.length < 3) {
     throw new Error("PUBLIC_WEB_SOURCES_INSUFFICIENT");
   }
 
+  if (input.auditScope) {
+    const auditScope = input.auditScope;
+    const database = await getDatabase();
+    await database.transaction((transaction) => materializeSourceConnectorAudit(transaction, {
+      ...auditScope,
+      audit: collected.audit,
+    }));
+  }
+
   return {
     queries,
     sources,
     metadata: collected.metadata,
+    audit: summarizeSourceConnectorAudit(collected.audit),
     responseId: queryResponse.id,
     model: queryResponse.model,
     usage: queryResponse.usage,
@@ -1657,9 +1879,9 @@ export async function synthesizeProviderResearchReport(input: {
   usage: unknown;
 }> {
   const model = getResearchModel();
-  const evidencePacket = input.sources.map((source, index) => (
-    `[S${index + 1}] ${source.title}\nURL: ${source.url}\n公开网页摘录：${source.excerpt}`
-  )).join("\n\n");
+  const evidenceCatalog = buildReportEvidenceCatalog(input);
+  const evidencePacket = formatReportEvidenceCatalog(evidenceCatalog);
+  const allowedEvidenceRefs = new Set(evidenceCatalog.map((item) => item.ref));
   const response = await createStructuredResponse({
     model,
     reasoning: { effort: "medium" },
@@ -1673,7 +1895,8 @@ export async function synthesizeProviderResearchReport(input: {
     instructions: [
       "你是严谨的商业研究员。只根据输入中的公开网页证据包生成可审计的中文报告。",
       "清楚区分公开来源事实、AI 合成 Persona 模拟、分析推断和建议。不得把模拟访谈写成真人研究或具有统计代表性的证据。",
-      "每条 finding.evidence 都要引用对应的 [S编号]；证据不足时必须写入 limitations，不得补造来源或数字。",
+      "每条 finding 必须给出 claimType、confidence 和 evidenceRefs。evidenceRefs 只能使用证据目录中出现的 ID；没有直接证据时必须返回空数组、使用 model_inference 和 low confidence，并写入 limitations。",
+      "fact 只能由 public_web 等事实证据支持；synthetic_simulation 只能表示 AI 合成访谈或讨论，不得写成真人观察。human_observation 只有输入存在真人访谈证据时才允许使用。",
       "没有买方侧直接证据时，不得在标题、洞察或总结中使用“最关注、首要、普遍、主要偏好”等排序断言；规范性建议应使用“应当、可作为、建议”措辞，并明确它不是已验证的市场事实。",
       "搜索摘要可能不完整，涉及采购或合规决策时应建议复核原始页面。优先采用近期、权威且彼此独立的来源。",
       "报告应直接服务业务决策，避免泛泛而谈。",
@@ -1703,8 +1926,16 @@ export async function synthesizeProviderResearchReport(input: {
     },
   }, { timeout: 180_000, signal: input.signal });
 
+  const report = parseOutput(response.output_text, reportSchema);
+  for (const finding of report.findings) {
+    finding.evidenceRefs = finding.evidenceRefs.filter((ref) => allowedEvidenceRefs.has(ref));
+    if (!finding.evidenceRefs.length) {
+      finding.claimType = "model_inference";
+      finding.confidence = "low";
+    }
+  }
   return {
-    report: parseOutput(response.output_text, reportSchema),
+    report,
     responseId: response.id,
     model: response.model,
     usage: response.usage,

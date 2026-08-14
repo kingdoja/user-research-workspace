@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Bot, Check, FlaskConical, LoaderCircle, MessageCircleMore, Plus, Search, UsersRound, X } from "lucide-react";
+import { ArrowRight, Bot, Check, FlaskConical, Gauge, LoaderCircle, MessageCircleMore, Plus, Search, UsersRound, X } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useMemo, useState, useTransition } from "react";
 import type { InterviewProjectSummary } from "@/lib/interviews";
@@ -59,7 +59,7 @@ export function InterviewProjectsWorkspace({ projects, library, studies }: {
     <div className="interview-projects-page workspace-page">
       <header className="interview-projects-heading">
         <div><h1>访谈项目</h1><p>选择 AI Persona 进行结构化模拟访谈，回放对话并沉淀研究洞察。</p></div>
-        <button type="button" className="button button-green" onClick={() => setCreateOpen(true)}><Plus size={17} />新建访谈</button>
+        <div className="interview-projects-actions"><Link className="button" href="/interview/experiments"><Gauge size={16} />实验对比</Link><button type="button" className="button button-green" onClick={() => setCreateOpen(true)}><Plus size={17} />新建访谈</button></div>
       </header>
       <div className="synthetic-disclosure"><Bot size={16} /><span>本工作区生成的是 AI 合成访谈，用于假设探索与压力测试，不代表真人参与者、真实引语或统计结论。</span></div>
       <div className="interview-project-toolbar"><label><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索项目、目标或 Persona" aria-label="搜索访谈项目" /></label><span>{filtered.length} 个项目</span></div>

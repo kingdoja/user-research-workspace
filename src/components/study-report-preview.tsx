@@ -2,6 +2,7 @@
 
 import { ChevronDown, Download, ExternalLink, Eye, FileText, Hash, Printer, X } from "lucide-react";
 import { useState } from "react";
+import { ReportClaimEvidence } from "@/components/report-claim-evidence";
 import type { StudyDetail } from "@/lib/studies";
 
 export function StudyReportPreview({ study }: { study: StudyDetail }) {
@@ -10,6 +11,7 @@ export function StudyReportPreview({ study }: { study: StudyDetail }) {
   const findingCount = report?.content.findings.length ?? 0;
   const recommendationCount = report?.content.recommendations.length ?? 0;
   const sourceCount = report?.citations.length ?? 0;
+  const findingNodes = report?.evidenceGraph?.nodes.filter((node) => node.nodeType === "finding") ?? [];
   const reportSections = [
     { id: "report-summary", label: "执行摘要" },
     { id: "report-findings", label: `核心发现 · ${findingCount}` },
@@ -105,6 +107,7 @@ export function StudyReportPreview({ study }: { study: StudyDetail }) {
                 <span>{String(index + 1).padStart(2, "0")}</span>
                 <div>
                   <h3>{finding.title}</h3>
+                  <ReportClaimEvidence claim={findingNodes[index]?.claim ?? null} />
                   <p>{finding.insight}</p>
                   <dl><div><dt>证据</dt><dd>{finding.evidence}</dd></div><div><dt>业务含义</dt><dd>{finding.implication}</dd></div></dl>
                 </div>

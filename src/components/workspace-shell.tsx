@@ -6,6 +6,7 @@ import {
   Coins,
   Files,
   FlaskConical,
+  Gauge,
   LogOut,
   Menu,
   MessageCircleMore,
@@ -26,6 +27,7 @@ const primaryNavigation = [
 const productNavigation = [
   { href: "/persona", label: "AI Persona", icon: Bot },
   { href: "/interview", label: "AI 访谈", icon: MessageCircleMore },
+  { href: "/interview/experiments", label: "访谈实验", icon: Gauge },
   { href: "/sage", label: "AI Sage", icon: Sparkles },
 ];
 
@@ -63,7 +65,9 @@ export function WorkspaceShell({ children, viewer }: WorkspaceShellProps) {
       const Icon = item.icon;
       const active =
         pathname === item.href ||
-        pathname.startsWith(`${item.href}/`) ||
+        (item.href === "/interview"
+          ? pathname.startsWith("/interview/projects") || pathname.startsWith("/interview/invite")
+          : pathname.startsWith(`${item.href}/`)) ||
         (item.href === "/studies" && pathname.startsWith("/study/"));
 
       return (

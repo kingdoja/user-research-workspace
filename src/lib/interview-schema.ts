@@ -46,6 +46,31 @@ export const submitPublicInterviewSchema = z.object({
   })).min(1).max(50),
 });
 
+export const startRealtimeInterviewSchema = z.object({
+  participantName: z.string().trim().min(2, "请填写称呼").max(80),
+  participantEmail: z.union([z.string().trim().email("邮箱格式无效").max(320), z.literal("")]).optional(),
+});
+
+export const realtimeInterviewTurnSchema = z.object({
+  content: z.string().trim().min(1, "请填写回答").max(4000),
+  idempotencyKey: z.string().trim().min(8).max(160),
+});
+
+export const realtimeInterviewSessionSchema = z.object({
+  sessionPublicId: z.string().trim().min(8).max(120),
+  resumeToken: z.string().trim().min(20).max(200),
+});
+
+export const interviewQualityReviewSchema = z.object({
+  relevance: z.number().int().min(1).max(5),
+  depth: z.number().int().min(1).max(5),
+  followupQuality: z.number().int().min(1).max(5),
+  consistency: z.number().int().min(1).max(5),
+  evidenceGrounding: z.number().int().min(1).max(5),
+  safetyCompliance: z.number().int().min(1).max(5),
+  notes: z.string().trim().max(2000).default(""),
+});
+
 export const citeInterviewInsightSchema = z.object({
   sessionPublicId: z.string().trim().min(8).max(120),
   insight: z.string().trim().min(10).max(1000),

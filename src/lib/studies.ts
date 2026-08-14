@@ -1,6 +1,8 @@
 import { getDatabase } from "@/lib/db";
 import { createPublicId } from "@/lib/identifiers";
 import type { Viewer } from "@/lib/auth";
+import { submitTaskInput } from "@/lib/task-recovery";
+import { getReportEvidenceGraph, materializeReportEvidenceGraph, sanitizeReportEvidenceGraphForPublic, type ReportEvidenceGraph } from "@/lib/evidence-graph";
 import {
   describeOpenAIError,
   generateProviderFollowupAnswer,
@@ -101,8 +103,56 @@ export type StudyDetail = StudySummary & {
     output: Record<string, unknown>;
     error: string | null;
     attempt: number;
+    maxAttempts: number;
+    nextAttemptAt: string | null;
+    lastErrorCode: string | null;
+    lastErrorClass: string | null;
+    retryable: boolean | null;
+    waitingReason: string | null;
+    waitingPayload: Record<string, unknown> | null;
+    resumedAt: string | null;
+    resumeCount: number;
     startedAt: string | null;
     finishedAt: string | null;
+    origin: "planned" | "dynamic";
+    generation: number;
+    reasoningDecisionPublicId: string | null;
+    attempts: Array<{
+      publicId: string;
+      attempt: number;
+      status: "running" | "completed" | "failed" | "interrupted" | "waiting_input" | "cancelled";
+      errorClass: string | null;
+      errorCode: string | null;
+      error: string | null;
+      retryable: boolean | null;
+      startedAt: string;
+      finishedAt: string | null;
+    }>;
+    inputRequest: {
+      publicId: string;
+      request: Record<string, unknown>;
+      requestedAt: string;
+    } | null;
+  }>;
+  reasoningDecisions: Array<{
+    publicId: string;
+    runId: string;
+    sequence: number;
+    triggerType: string;
+    policyVersion: string;
+    metrics: Record<string, unknown>;
+    budget: Record<string, unknown>;
+    chosenAction: Record<string, unknown>;
+    reason: string;
+    createdAt: string;
+    candidates: Array<{
+      actionType: string;
+      score: number;
+      allowed: boolean;
+      selected: boolean;
+      payload: Record<string, unknown>;
+      rejectionReasons: string[];
+    }>;
   }>;
   artifacts: Array<{
     publicId: string;
@@ -152,6 +202,7 @@ export type StudyDetail = StudySummary & {
     generatedAt: string;
     shareEnabled: boolean;
     shareToken: string | null;
+    evidenceGraph: ReportEvidenceGraph | null;
   } | null;
 };
 
@@ -977,6 +1028,12 @@ export async function submitStudyFollowup(viewer: Viewer, publicId: string, ques
        values ($1, 'user', 'followup_question', $2, '{}'::jsonb),
               ($1, 'assistant', 'followup_answer', $3, $4::jsonb)`,
       [study.study_id, question, answer.answer, JSON.stringify({
+        presentation: {
+          title: answer.title,
+          summary: answer.summary,
+          sections: answer.sections,
+          conclusion: answer.conclusion,
+        },
         caveat: answer.caveat,
         citations: citationDetails,
         responseId: answer.responseId,
@@ -1039,12 +1096,13 @@ export async function getSharedStudyReport(shareToken: string): Promise<SharedSt
     title: string;
     brief: string;
     report_public_id: string;
+    report_id: string;
     report_title: string;
     report_content: (ResearchReport & { citations?: ResearchCitation[] }) | string;
     report_generated_at: string;
   }>(
     `select studies.id::text as study_id, studies.title, studies.brief,
-       reports.public_id as report_public_id, reports.title as report_title,
+       reports.id::text as report_id, reports.public_id as report_public_id, reports.title as report_title,
        reports.content_json as report_content, reports.generated_at::text as report_generated_at
      from reports
      join studies on studies.id = reports.study_id
@@ -1055,7 +1113,7 @@ export async function getSharedStudyReport(shareToken: string): Promise<SharedSt
   const row = result.rows[0];
   if (!row) return null;
 
-  const [personasResult, panelResult, interviewsResult] = await Promise.all([
+  const [personasResult, panelResult, interviewsResult, evidenceGraph] = await Promise.all([
     database.query<{
       public_id: string;
       name: string;
@@ -1085,6 +1143,7 @@ export async function getSharedStudyReport(shareToken: string): Promise<SharedSt
        where i.study_id = $1 order by i.batch asc, i.created_at asc, i.id asc`,
       [row.study_id],
     ),
+    getReportEvidenceGraph(database, row.report_id),
   ]);
   const reportContent = typeof row.report_content === "string"
     ? JSON.parse(row.report_content)
@@ -1102,6 +1161,7 @@ export async function getSharedStudyReport(shareToken: string): Promise<SharedSt
       generatedAt: row.report_generated_at,
       shareEnabled: true,
       shareToken,
+      evidenceGraph: sanitizeReportEvidenceGraphForPublic(evidenceGraph),
     },
     panel: panelResult.rows[0]
       ? {
@@ -1356,7 +1416,7 @@ export async function executeStudyRun(publicId: string, workspaceId: string) {
         );
       }
 
-      await transaction.query(
+      const storedReport = await transaction.query<{ id: string }>(
         `insert into reports (public_id, study_id, title, description, content_html, content_json)
          values ($1, $2, $3, $4, $5, $6::jsonb)
          on conflict (study_id) do update set
@@ -1364,7 +1424,8 @@ export async function executeStudyRun(publicId: string, workspaceId: string) {
            description = excluded.description,
            content_html = excluded.content_html,
            content_json = excluded.content_json,
-           generated_at = now()`,
+           generated_at = now()
+         returning id::text as id`,
         [
           reportPublicId,
           study.study_id,
@@ -1374,6 +1435,19 @@ export async function executeStudyRun(publicId: string, workspaceId: string) {
           JSON.stringify(contentJson),
         ],
       );
+      await materializeReportEvidenceGraph(transaction, {
+        workspaceId,
+        studyId: study.study_id,
+        runId: study.run_id,
+        reportId: storedReport.rows[0].id,
+        report: providerResult.report,
+        citations: providerResult.citations,
+        catalog: providerResult.evidenceCatalog,
+        provider: providerStatus.providerName,
+        providerModel: providerResult.model,
+        providerResponseId: providerResult.responseId,
+        promptVersion: providerResult.promptVersion,
+      });
       await transaction.query(
         `update study_runs
          set status = 'completed', provider_response_id = $2, provider_model = $3,
@@ -1512,6 +1586,10 @@ export async function queueStudyRun(viewer: Viewer, publicId: string) {
       return "completed" as const;
     }
 
+    if (study.run_status === "waiting_input") {
+      return "waiting_input" as const;
+    }
+
     const activeSince = study.run_last_event_at ?? study.run_started_at ?? study.run_created_at;
     const activeRunExpired = (study.run_status === "running" || study.run_status === "queued")
       && activeSince !== null
@@ -1528,18 +1606,23 @@ export async function queueStudyRun(viewer: Viewer, publicId: string) {
         [study.run_id],
       );
       if (liveSlot.rows[0]) return "already_running" as const;
-      const interruptionMessage = "执行进程超过 10 分钟未更新，已作为中断记录保留。";
+      const interruptionMessage = "执行进程超过 10 分钟未更新，已从最近 checkpoint 排队恢复。";
       await transaction.query(
         `update study_runs
-         set status = 'failed', error_message = $2, finished_at = now()
+         set status = 'queued', error_message = null, finished_at = null
          where id = $1 and status in ('queued', 'running')`,
-        [study.run_id, interruptionMessage],
+        [study.run_id],
+      );
+      await transaction.query(
+        "update studies set status = 'queued', current_stage = 'execution', updated_at = now() where id = $1",
+        [study.study_id],
       );
       await transaction.query(
         `insert into study_events (study_id, run_id, event_type, payload)
-         values ($1, $2, 'run.interrupted', $3::jsonb)`,
+         values ($1, $2, 'run.recovery_queued', $3::jsonb)`,
         [study.study_id, study.run_id, JSON.stringify({ message: interruptionMessage, recoverable: true })],
       );
+      return "queued" as const;
     }
 
     let queuedRunId = study.run_id;
@@ -1571,6 +1654,23 @@ export async function queueStudyRun(viewer: Viewer, publicId: string) {
 
     return "queued" as const;
   });
+}
+
+export async function submitStudyTaskInput(
+  viewer: Viewer,
+  studyPublicId: string,
+  taskPublicId: string,
+  response: Record<string, unknown>,
+) {
+  if (viewer.role === "viewer") return "forbidden" as const;
+  const database = await getDatabase();
+  return database.transaction((transaction) => submitTaskInput(transaction, {
+    workspaceId: viewer.workspaceId,
+    viewerId: viewer.userId,
+    studyPublicId,
+    taskPublicId,
+    response,
+  }));
 }
 
 export async function listStudies(viewer: Viewer, limit = 8): Promise<StudySummary[]> {
@@ -1643,6 +1743,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
     run_finished_at: string | null;
     run_last_event_at: string | null;
     report_public_id: string | null;
+    report_id: string | null;
     report_title: string | null;
     report_content: (ResearchReport & { citations?: ResearchCitation[] }) | string | null;
     report_generated_at: string | null;
@@ -1679,6 +1780,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
        latest_run.started_at::text as run_started_at,
        latest_run.finished_at::text as run_finished_at,
        latest_run.last_event_at::text as run_last_event_at,
+       reports.id::text as report_id,
        reports.public_id as report_public_id,
        reports.title as report_title,
        reports.content_json as report_content,
@@ -1712,7 +1814,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
     return null;
   }
 
-  const [messagesResult, eventsResult, personasResult, panelResult, interviewsResult, runsResult, tasksResult, artifactsResult] = await Promise.all([
+  const [messagesResult, eventsResult, personasResult, panelResult, interviewsResult, runsResult, tasksResult, attemptsResult, inputsResult, artifactsResult, decisionsResult, evidenceGraph] = await Promise.all([
     database.query<{
     id: string;
     role: StudyDetail["messages"][number]["role"];
@@ -1840,15 +1942,68 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
       output: Record<string, unknown> | string;
       error_message: string | null;
       attempt: number;
+      max_attempts: number;
+      next_attempt_at: string | null;
+      last_error_code: string | null;
+      last_error_class: string | null;
+      retryable: boolean | null;
+      waiting_reason: string | null;
+      waiting_payload: Record<string, unknown> | string | null;
+      resumed_at: string | null;
+      resume_count: number;
       started_at: string | null;
       finished_at: string | null;
+      origin: "planned" | "dynamic";
+      generation: number;
+      reasoning_decision_public_id: string | null;
     }>(
-      `select public_id, run_id::text as run_id, task_key, title, tool_name, status,
-              position, depends_on, input, output, error_message, attempt,
-              started_at::text as started_at, finished_at::text as finished_at
-       from study_tasks
-       where study_id = $1 and ($2::bigint is null or run_id = $2)
-       order by position, id`,
+      `select task.public_id, task.run_id::text as run_id, task.task_key, task.title,
+              task.tool_name, task.status, task.position, task.depends_on, task.input,
+              task.output, task.error_message, task.attempt, task.max_attempts, task.next_attempt_at::text as next_attempt_at,
+              task.last_error_code, task.last_error_class, task.retryable, task.waiting_reason, task.waiting_payload,
+              task.resumed_at::text as resumed_at, task.resume_count,
+              task.started_at::text as started_at, task.finished_at::text as finished_at,
+              task.origin, task.generation, decision.public_id as reasoning_decision_public_id
+       from study_tasks task
+       left join reasoning_decisions decision on decision.id = task.reasoning_decision_id
+       where task.study_id = $1 and ($2::bigint is null or task.run_id = $2)
+       order by task.position, task.id`,
+    [row.id, row.run_id],
+    ),
+    database.query<{
+      task_public_id: string;
+      public_id: string;
+      attempt: number;
+      status: StudyDetail["tasks"][number]["attempts"][number]["status"];
+      error_class: string | null;
+      error_code: string | null;
+      error_message: string | null;
+      retryable: boolean | null;
+      started_at: string;
+      finished_at: string | null;
+    }>(
+      `select task.public_id as task_public_id, attempt.public_id, attempt.attempt, attempt.status,
+              attempt.error_class, attempt.error_code, attempt.error_message, attempt.retryable,
+              attempt.started_at::text as started_at, attempt.finished_at::text as finished_at
+       from study_task_attempts attempt
+       join study_tasks task on task.id = attempt.task_id
+       where attempt.study_id = $1 and ($2::bigint is null or attempt.run_id = $2)
+       order by task.position, attempt.attempt`,
+      [row.id, row.run_id],
+    ),
+    database.query<{
+      task_public_id: string;
+      public_id: string;
+      request_payload: Record<string, unknown> | string;
+      requested_at: string;
+    }>(
+      `select task.public_id as task_public_id, request.public_id, request.request_payload,
+              request.requested_at::text as requested_at
+       from study_task_inputs request
+       join study_tasks task on task.id = request.task_id
+       where request.study_id = $1 and ($2::bigint is null or request.run_id = $2)
+         and request.status = 'pending'
+       order by request.requested_at desc`,
       [row.id, row.run_id],
     ),
     database.query<{
@@ -1870,6 +2025,39 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
        order by artifact.created_at asc, artifact.id asc`,
       [row.id, row.run_id],
     ),
+    database.query<{
+      public_id: string;
+      run_id: string;
+      sequence: number;
+      trigger_type: string;
+      policy_version: string;
+      metrics: Record<string, unknown> | string;
+      budget_snapshot: Record<string, unknown> | string;
+      chosen_action: Record<string, unknown> | string;
+      reason: string;
+      created_at: string;
+      candidates: unknown[] | string;
+    }>(
+      `select decision.public_id, decision.run_id::text as run_id, decision.sequence,
+              decision.trigger_type, decision.policy_version, decision.metrics,
+              decision.budget_snapshot, decision.chosen_action, decision.reason,
+              decision.created_at::text as created_at,
+              coalesce(jsonb_agg(jsonb_build_object(
+                'actionType', candidate.action_type,
+                'score', candidate.score,
+                'allowed', candidate.allowed,
+                'selected', candidate.selected,
+                'payload', candidate.payload,
+                'rejectionReasons', candidate.rejection_reasons
+              ) order by candidate.position) filter (where candidate.id is not null), '[]'::jsonb) as candidates
+       from reasoning_decisions decision
+       left join reasoning_decision_candidates candidate on candidate.decision_id = decision.id
+       where decision.study_id = $1 and ($2::bigint is null or decision.run_id = $2)
+       group by decision.id
+       order by decision.sequence, decision.id`,
+      [row.id, row.run_id],
+    ),
+    row.report_id ? getReportEvidenceGraph(database, row.report_id) : Promise.resolve(null),
   ]);
 
   const methods = typeof row.methods === "string" ? JSON.parse(row.methods) : row.methods;
@@ -1890,6 +2078,27 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
   const runRecoverable = (row.run_status === "queued" || row.run_status === "running")
     && runActiveSince !== null
     && Date.now() - new Date(runActiveSince).getTime() > 10 * 60 * 1000;
+  const attemptsByTask = new Map<string, StudyDetail["tasks"][number]["attempts"]>();
+  for (const attempt of attemptsResult.rows) {
+    const entries = attemptsByTask.get(attempt.task_public_id) ?? [];
+    entries.push({
+      publicId: attempt.public_id,
+      attempt: attempt.attempt,
+      status: attempt.status,
+      errorClass: attempt.error_class,
+      errorCode: attempt.error_code,
+      error: attempt.error_message,
+      retryable: attempt.retryable,
+      startedAt: attempt.started_at,
+      finishedAt: attempt.finished_at,
+    });
+    attemptsByTask.set(attempt.task_public_id, entries);
+  }
+  const inputByTask = new Map(inputsResult.rows.map((request) => [request.task_public_id, {
+    publicId: request.public_id,
+    request: typeof request.request_payload === "string" ? JSON.parse(request.request_payload) : request.request_payload,
+    requestedAt: request.requested_at,
+  }]));
 
   return {
     publicId: row.public_id,
@@ -1958,8 +2167,35 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
       output: typeof task.output === "string" ? JSON.parse(task.output) : task.output,
       error: task.error_message,
       attempt: task.attempt,
+      maxAttempts: task.max_attempts,
+      nextAttemptAt: task.next_attempt_at,
+      lastErrorCode: task.last_error_code,
+      lastErrorClass: task.last_error_class,
+      retryable: task.retryable,
+      waitingReason: task.waiting_reason,
+      waitingPayload: task.waiting_payload ? (typeof task.waiting_payload === "string" ? JSON.parse(task.waiting_payload) : task.waiting_payload) : null,
+      resumedAt: task.resumed_at,
+      resumeCount: task.resume_count,
       startedAt: task.started_at,
       finishedAt: task.finished_at,
+      origin: task.origin,
+      generation: task.generation,
+      reasoningDecisionPublicId: task.reasoning_decision_public_id,
+      attempts: attemptsByTask.get(task.public_id) ?? [],
+      inputRequest: inputByTask.get(task.public_id) ?? null,
+    })),
+    reasoningDecisions: decisionsResult.rows.map((decision) => ({
+      publicId: decision.public_id,
+      runId: decision.run_id,
+      sequence: decision.sequence,
+      triggerType: decision.trigger_type,
+      policyVersion: decision.policy_version,
+      metrics: typeof decision.metrics === "string" ? JSON.parse(decision.metrics) : decision.metrics,
+      budget: typeof decision.budget_snapshot === "string" ? JSON.parse(decision.budget_snapshot) : decision.budget_snapshot,
+      chosenAction: typeof decision.chosen_action === "string" ? JSON.parse(decision.chosen_action) : decision.chosen_action,
+      reason: decision.reason,
+      createdAt: decision.created_at,
+      candidates: (typeof decision.candidates === "string" ? JSON.parse(decision.candidates) : decision.candidates) as StudyDetail["reasoningDecisions"][number]["candidates"],
     })),
     artifacts: artifactsResult.rows.map((artifact) => ({
       publicId: artifact.public_id,
@@ -2014,6 +2250,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
           generatedAt: row.report_generated_at,
           shareEnabled: row.report_share_enabled ?? false,
           shareToken: row.report_share_token,
+          evidenceGraph,
         }
       : null,
   };

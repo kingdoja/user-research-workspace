@@ -24,13 +24,17 @@ export type InterviewProjectSummary = {
 
 export type InterviewSessionDetail = {
   publicId: string;
-  status: "running" | "completed" | "failed";
+  status: "running" | "waiting_participant" | "responding" | "completed" | "cancelled" | "failed";
   summary: string;
   insights: string[];
   quotes: string[];
   sessionType: "ai" | "human";
   participantName: string;
   participantEmail: string | null;
+  workflowType: "static_form" | "realtime_agent" | "synthetic_batch";
+  workflowVersion: string;
+  strategyVersion: string;
+  skill: { slug: string; version: number } | null;
   persona: {
     publicId: string;
     name: string;
@@ -39,7 +43,7 @@ export type InterviewSessionDetail = {
   } | null;
   messages: Array<{
     id: string;
-    role: "interviewer" | "persona";
+    role: "interviewer" | "persona" | "agent" | "participant";
     content: string;
   }>;
 };
@@ -245,15 +249,22 @@ export async function getInterviewProject(viewer: Viewer, publicId: string): Pro
     session_type: "ai" | "human";
     participant_name: string | null;
     participant_email: string | null;
+    workflow_type: InterviewSessionDetail["workflowType"];
+    workflow_version: string;
+    strategy_version: string;
+    skill_slug: string | null;
+    skill_version: number | null;
     persona_public_id: string | null;
     persona_name: string | null;
     archetype: string | null;
     profile: SyntheticPanelResearch["personas"][number] | string | null;
-    messages: Array<{ id: string; role: "interviewer" | "persona"; content: string }> | string;
+    messages: Array<{ id: string; role: "interviewer" | "persona" | "agent" | "participant"; content: string }> | string;
   }>(
     `select session.id::text as session_id, session.public_id as session_public_id,
             session.status, session.summary, session.insights, session.quotes,
             session.session_type, session.participant_name, session.participant_email,
+            session.workflow_type, session.workflow_version, session.strategy_version,
+            session.skill_slug, session.skill_version,
             persona.public_id as persona_public_id, persona.name as persona_name,
             persona.archetype, persona.profile,
             coalesce(jsonb_agg(jsonb_build_object(
@@ -276,6 +287,10 @@ export async function getInterviewProject(viewer: Viewer, publicId: string): Pro
     sessionType: session.session_type,
     participantName: session.participant_name ?? session.persona_name ?? "匿名参与者",
     participantEmail: session.participant_email,
+    workflowType: session.workflow_type,
+    workflowVersion: session.workflow_version,
+    strategyVersion: session.strategy_version,
+    skill: session.skill_slug && session.skill_version ? { slug: session.skill_slug, version: session.skill_version } : null,
     persona: session.persona_public_id && session.persona_name && session.archetype && session.profile ? {
       publicId: session.persona_public_id,
       name: session.persona_name,
@@ -360,10 +375,10 @@ export async function getInterviewProject(viewer: Viewer, publicId: string): Pro
     imageUrls: imagePaths.map(getInterviewImageUrl).filter(Boolean),
     answers: sessions.flatMap((session) => {
       const questionMessageIndex = session.messages.findIndex((candidate) => (
-        candidate.role === "interviewer" && candidate.content.trim() === question.content.trim()
+        (candidate.role === "interviewer" || candidate.role === "agent") && candidate.content.trim() === question.content.trim()
       ));
       const answer = questionMessageIndex >= 0
-        ? session.messages.slice(questionMessageIndex + 1).find((candidate) => candidate.role === "persona")
+        ? session.messages.slice(questionMessageIndex + 1).find((candidate) => candidate.role === "persona" || candidate.role === "participant")
         : null;
       return answer ? [{
         sessionPublicId: session.publicId,
@@ -1035,8 +1050,10 @@ async function executeInterviewRunById(runId: string) {
         if (!activeRun.rowCount) throw new Error("INTERVIEW_RUN_INTERRUPTED");
         const sessionResult = await transaction.query<{ id: string }>(
           `insert into interview_sessions (
-             public_id, project_id, run_id, persona_id, status, summary, insights, quotes, provider, provider_model
-           ) values ($1, $2, $3, $4, 'completed', $5, $6::jsonb, $7::jsonb, $8, $9)
+             public_id, project_id, run_id, persona_id, status, summary, insights, quotes, provider, provider_model,
+             workflow_type, workflow_version, skill_slug, skill_version
+           ) values ($1, $2, $3, $4, 'completed', $5, $6::jsonb, $7::jsonb, $8, $9,
+             'synthetic_batch', 'synthetic-interview-v1', 'generate-synthetic-interviews', 1)
            returning id::text as id`,
           [
             createPublicId("ins"), project.project_id, project.run_id, persona.id, session.summary,
@@ -1045,9 +1062,9 @@ async function executeInterviewRunById(runId: string) {
         );
         for (const [index, message] of session.messages.entries()) {
           await transaction.query(
-            `insert into interview_messages (session_id, turn_index, role, content)
-             values ($1, $2, $3, $4)`,
-            [sessionResult.rows[0].id, index, message.role, message.content],
+            `insert into interview_messages (session_id, turn_index, role, content, message_type)
+             values ($1, $2, $3, $4, $5)`,
+            [sessionResult.rows[0].id, index, message.role, message.content, message.role === "persona" ? "answer" : "question"],
           );
         }
         await transaction.query(

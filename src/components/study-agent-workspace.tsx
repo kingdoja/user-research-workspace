@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { StudyAgentControls, type StudyProgressItem } from "@/components/study-agent-controls";
+import { ReportClaimEvidence } from "@/components/report-claim-evidence";
 import {
   StudyAgentConsole,
   StudyArtifactConsoleProvider,
@@ -28,6 +29,8 @@ import { StudyPanelOpenButton } from "@/components/study-panel-open-button";
 import { StudyRunActions } from "@/components/study-run-actions";
 import { StudyReplayControls } from "@/components/study-replay-controls";
 import { StudyShareControls } from "@/components/study-share-controls";
+import { StudyTaskInputForm } from "@/components/study-task-input-form";
+import { StructuredFollowupAnswer } from "@/components/structured-followup-answer";
 import type { Viewer } from "@/lib/auth";
 import { getOpenAIProviderStatus } from "@/lib/openai-provider";
 import type { StudyDetail } from "@/lib/studies";
@@ -246,11 +249,18 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
 
   const active = (study.runStatus === "queued" || study.runStatus === "running") && !study.runRecoverable;
   const failed = study.runStatus === "failed" || study.runRecoverable;
+  const waitingInput = study.runStatus === "waiting_input";
   const events = study.events.filter((event) => !study.runId || event.runId === study.runId || event.runId === null);
   const steps = createProgressItems(study);
   const activeStep = steps.find((step) => step.status === "active");
   const latestEvent = events.at(-1);
   const tasksByKey = new Map(study.tasks.map((task) => [task.key, task]));
+  const actionLabels: Record<string, string> = {
+    continue: "继续固定 DAG",
+    append_task: "追加受控任务",
+    stop_expansion: "停止动态扩展",
+    finish_run: "结束运行",
+  };
 
   return (
     <article className="agent-message agent-execution-message">
@@ -272,7 +282,7 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
         {study.runRecoverable ? (
           <div className="agent-interrupted-state" role="alert">
             <RotateCcw size={16} />
-            <div><strong>上次执行已中断</strong><p>运行超过 10 分钟未更新。重新执行会创建新的尝试并从头开始，旧时间线会完整保留。</p></div>
+            <div><strong>上次执行已中断</strong><p>运行超过 10 分钟未更新。恢复会从最近 checkpoint 继续，已完成任务和 artifact 不会重复生成。</p></div>
           </div>
         ) : null}
         <section className="agent-execution-timeline" data-replay-run={study.runId ?? undefined}>
@@ -297,6 +307,7 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
             return <div className="agent-task-event" key={step.key}>
               <ToolCall name={step.toolName} status={step.status}>
                   <p className="agent-tool-message"><strong>{index + 1}. {step.label}</strong></p>
+                  {task?.origin === "dynamic" ? <span className="agent-dynamic-task-badge">动态追加 · 第 {task.generation} 代</span> : null}
                   <p className="agent-step-summary">{stepSummary}</p>
                   <dl className="agent-tool-fields">
                     <div><dt>status</dt><dd>{step.status}</dd></div>
@@ -312,6 +323,8 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
                     {typeof payload.recommendationCount === "number" ? <div><dt>recommendations</dt><dd>{payload.recommendationCount}</dd></div> : null}
                     {index === 0 ? <><div><dt>provider</dt><dd>{study.runProvider ?? provider.providerName}</dd></div><div><dt>model</dt><dd>{study.runModel ?? provider.researchModel}</dd></div></> : null}
                     {task && task.attempt > 0 ? <div><dt>attempt</dt><dd>{task.attempt}</dd></div> : null}
+                    {task?.nextAttemptAt ? <div><dt>retry</dt><dd>将在 {new Date(task.nextAttemptAt).toLocaleTimeString("zh-CN")} 重试</dd></div> : null}
+                    {task?.resumedAt ? <div><dt>resumed</dt><dd>第 {task.resumeCount} 次继续</dd></div> : null}
                     {step.status === "failed" && (task?.error ?? study.runError) ? <div><dt>error</dt><dd>{task?.error ?? study.runError}</dd></div> : null}
                   </dl>
                   <TracePayloadDetails stepKey={step.key} payload={payload} events={events} />
@@ -320,17 +333,53 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
                     <details><summary>result</summary><JsonBlock value={task.output} /></details>
                     <details open><summary>message</summary><p>{stepSummary}</p></details>
                   </div> : null}
+                  {task?.attempts.length ? <details className="agent-task-attempts">
+                    <summary>尝试记录 · {task.attempts.length} 次</summary>
+                    <ol>{task.attempts.map((attempt) => <li key={attempt.publicId}>
+                      <strong>#{attempt.attempt} · {attempt.status}</strong>
+                      <span>{attempt.errorClass ?? "执行"}{attempt.errorCode ? ` · ${attempt.errorCode}` : ""}</span>
+                      {attempt.error ? <small>{attempt.error}</small> : null}
+                    </li>)}</ol>
+                  </details> : null}
+                  {task?.inputRequest ? <StudyTaskInputForm studyPublicId={study.publicId} taskPublicId={task.publicId} request={task.inputRequest.request} /> : null}
               </ToolCall>
               {artifact ? <ArtifactResultCard artifact={artifact} /> : null}
               {todoEvent ? <ToolCall name="updateTodo" status="done" /> : null}
             </div>;
           })}
         </section>
+        {study.reasoningDecisions.length ? (
+          <details className="agent-reasoning-trace" open>
+            <summary><ChevronRight size={15} /><strong>调度决策</strong><span>{study.reasoningDecisions.length} 次</span></summary>
+            <ol>{study.reasoningDecisions.map((decision) => {
+              const action = typeof decision.chosenAction.type === "string" ? decision.chosenAction.type : "continue";
+              const coverage = typeof decision.metrics.coverage === "number" ? Math.round(decision.metrics.coverage * 100) : null;
+              const conflict = typeof decision.metrics.conflict === "number" ? Math.round(decision.metrics.conflict * 100) : null;
+              const novelty = typeof decision.metrics.novelty === "number" ? Math.round(decision.metrics.novelty * 100) : null;
+              const tokenUsage = typeof decision.budget.tokenUsage === "number" ? decision.budget.tokenUsage : null;
+              const tokenBudget = typeof decision.budget.tokenBudget === "number" ? decision.budget.tokenBudget : null;
+              const selected = decision.candidates.find((candidate) => candidate.selected);
+              return (
+                <li key={decision.publicId}>
+                  <header><span>#{decision.sequence + 1}</span><strong>{actionLabels[action] ?? action}</strong><time>{new Date(decision.createdAt).toLocaleTimeString("zh-CN")}</time></header>
+                  <p>{decision.reason}</p>
+                  <dl>
+                    {coverage !== null ? <div><dt>coverage</dt><dd>{coverage}%</dd></div> : null}
+                    {conflict !== null ? <div><dt>conflict</dt><dd>{conflict}%</dd></div> : null}
+                    {novelty !== null ? <div><dt>novelty</dt><dd>{novelty}%</dd></div> : null}
+                    {tokenUsage !== null && tokenBudget !== null ? <div><dt>budget</dt><dd>{formatTokens(tokenUsage)} / {formatTokens(tokenBudget)}</dd></div> : null}
+                  </dl>
+                  {selected ? <small>policy {decision.policyVersion} · score {selected.score.toFixed(2)}</small> : null}
+                </li>
+              );
+            })}</ol>
+          </details>
+        ) : null}
         {study.runHistory.length > 0 ? (
           <details className="agent-run-history" open={study.runHistory.length > 1}>
             <summary><ChevronRight size={15} /><strong>执行历史</strong><span>{study.runHistory.length} 次</span></summary>
             <ol>{study.runHistory.toReversed().map((run) => {
-              const statusLabel = run.status === "completed" ? "已完成" : run.status === "failed" ? "失败" : run.status === "running" ? "执行中" : "排队中";
+              const statusLabel = run.status === "completed" ? "已完成" : run.status === "failed" ? "失败" : run.status === "waiting_input" ? "等待输入" : run.status === "running" ? "执行中" : "排队中";
               const started = new Date(run.startedAt ?? run.createdAt);
               const ended = run.finishedAt ? new Date(run.finishedAt) : null;
               const duration = ended ? Math.max(0, Math.round((ended.getTime() - started.getTime()) / 1000)) : null;
@@ -344,7 +393,7 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
             })}</ol>
           </details>
         ) : null}
-        {!study.report && !active ? <StudyRunActions publicId={study.publicId} configured={provider.configured} retry={failed} /> : null}
+        {!study.report && !active && !waitingInput ? <StudyRunActions publicId={study.publicId} configured={provider.configured} retry={failed} /> : null}
       </div>
     </article>
   );
@@ -352,6 +401,7 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
 
 function ResearchOutput({ study }: { study: StudyDetail }) {
   if (!study.report) return null;
+  const findingNodes = study.report.evidenceGraph?.nodes.filter((node) => node.nodeType === "finding") ?? [];
 
   return (
     <section className="agent-research-output" id="research-output">
@@ -359,7 +409,7 @@ function ResearchOutput({ study }: { study: StudyDetail }) {
       <h2>{study.report.title}</h2>
       <p>{study.report.content.executiveSummary}</p>
       <h3>核心发现</h3>
-      <ol>{study.report.content.findings.slice(0, 3).map((finding) => <li key={finding.title}><strong>{finding.title}：</strong>{finding.insight}</li>)}</ol>
+      <ol>{study.report.content.findings.slice(0, 3).map((finding, index) => <li key={finding.title}><strong>{finding.title}：</strong>{finding.insight}<ReportClaimEvidence claim={findingNodes[index]?.claim ?? null} /></li>)}</ol>
       <div className="agent-panel-summary">
         <span className="agent-panel-avatars"><i /><i /><i /><i /></span>
         <div><strong>{study.panel ? `${study.panel.title} · AI 合成 Panel` : "公开资料研究与综合分析"}</strong><p>{study.report.citations.length} 个来源，{study.personas.length} 个 Persona，{study.interviews.length} 份模拟访谈，{study.report.content.findings.length} 项洞察</p></div>
@@ -403,7 +453,9 @@ function FollowupThread({ study }: { study: StudyDetail }) {
             <span className={`agent-avatar ${user ? "" : "agent-avatar-ai"}`}>{user ? <UserRound size={16} /> : <Bot size={17} />}</span>
             <div className="agent-message-content">
               <strong>{user ? "您" : "atypica.AI"}</strong>
-              <p>{message.content}</p>
+              {user
+                ? <p>{message.content}</p>
+                : <StructuredFollowupAnswer content={message.content} presentation={message.payload.presentation} />}
               {!user && caveat ? <div className="agent-answer-caveat"><strong>证据边界</strong><p>{caveat}</p></div> : null}
               {!user && citations.length ? <div className="agent-answer-citations">{citations.map((citation) => <a href={citation.url} target="_blank" rel="noreferrer" key={citation.url}>{citation.title}</a>)}</div> : null}
             </div>

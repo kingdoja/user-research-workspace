@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Viewer } from "@/lib/auth";
 import { getDatabase, type Queryable } from "@/lib/db";
@@ -22,10 +23,16 @@ export type ContextCitation = {
 export type ContextSnapshot = {
   retrievalId: string | null;
   retrievalPublicId: string | null;
-  strategy: "lexical_metadata_v1";
+  strategy: "lexical_metadata_v1" | "hybrid_v1";
   query: string;
   citations: ContextCitation[];
 };
+
+export const CONTEXT_EMBEDDING_BASELINE = {
+  model: "hash-ngram-128",
+  version: "v1",
+  dimensions: 128,
+} as const;
 
 export const contextAssetInputSchema = z.object({
   assetType: z.enum(["core_memory", "working_memory", "document", "research_sample", "persona", "study_context"]),
@@ -89,6 +96,33 @@ function queryTerms(query: string) {
   return [...new Set(terms)].slice(0, 40);
 }
 
+function embeddingTokens(value: string) {
+  const normalized = value.toLowerCase().normalize("NFKC").replace(/\s+/g, " ").trim();
+  const terms = queryTerms(normalized);
+  const characters = [...normalized.replace(/\s/g, "")];
+  const ngrams = characters.flatMap((_, index) => [
+    characters.slice(index, index + 2).join(""),
+    characters.slice(index, index + 3).join(""),
+  ]).filter((item) => item.length >= 2);
+  return [...terms, ...ngrams].slice(0, 2000);
+}
+
+export function createContextEmbedding(value: string) {
+  const vector = Array.from({ length: CONTEXT_EMBEDDING_BASELINE.dimensions }, () => 0);
+  for (const token of embeddingTokens(value)) {
+    const digest = createHash("sha256").update(token).digest();
+    const index = digest.readUInt32BE(0) % vector.length;
+    vector[index] += digest[4] % 2 === 0 ? 1 : -1;
+  }
+  const magnitude = Math.sqrt(vector.reduce((sum, item) => sum + item * item, 0));
+  return magnitude ? vector.map((item) => Number((item / magnitude).toFixed(8))) : vector;
+}
+
+function cosineSimilarity(left: number[], right: number[]) {
+  if (!left.length || left.length !== right.length) return 0;
+  return left.reduce((sum, item, index) => sum + item * right[index], 0);
+}
+
 function scoreCandidate(query: string, terms: string[], candidate: { title: string; content: string; asset_type: string }) {
   const title = candidate.title.toLowerCase();
   const content = candidate.content.toLowerCase();
@@ -117,10 +151,17 @@ async function insertVersion(
     [createPublicId("cxv"), input.assetId, input.version, JSON.stringify({ text: input.content }), input.changeNote, input.userId],
   );
   for (const [ordinal, chunk] of chunkText(input.content).entries()) {
+    const embedding = createContextEmbedding(chunk);
     await transaction.query(
-      `insert into context_chunks (public_id, asset_version_id, ordinal, content, metadata)
-       values ($1, $2, $3, $4, $5::jsonb)`,
-      [createPublicId("cxc"), version.rows[0].id, ordinal, chunk, JSON.stringify({ characters: chunk.length })],
+      `insert into context_chunks (
+         public_id, asset_version_id, ordinal, content, metadata, embedding,
+         embedding_model, embedding_dimensions, embedding_indexed_at, index_generation
+       ) values ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, now(), 1)`,
+      [
+        createPublicId("cxc"), version.rows[0].id, ordinal, chunk,
+        JSON.stringify({ characters: chunk.length, embeddingVersion: CONTEXT_EMBEDDING_BASELINE.version }),
+        JSON.stringify(embedding), CONTEXT_EMBEDDING_BASELINE.model, embedding.length,
+      ],
     );
   }
   return version.rows[0];
@@ -220,11 +261,16 @@ export async function retrieveContext(input: {
   limit?: number;
   studyId?: string;
   runId?: string;
+  interviewSessionId?: string;
   audit?: boolean;
 }): Promise<ContextSnapshot> {
   const database = await getDatabase();
   if (input.runId && input.audit !== false) {
     const existing = await loadRunContextSnapshot(database, input.runId, input.workspaceId);
+    if (existing) return existing;
+  }
+  if (input.interviewSessionId && input.audit !== false) {
+    const existing = await loadInterviewContextSnapshot(database, input.interviewSessionId, input.workspaceId);
     if (existing) return existing;
   }
   const terms = queryTerms(input.query);
@@ -274,19 +320,23 @@ export async function retrieveContext(input: {
   return database.transaction(async (transaction) => {
     const retrieval = await transaction.query<{ id: string; public_id: string }>(
       `insert into context_retrievals (
-         public_id, workspace_id, created_by, study_id, run_id, query, strategy, filters
-       ) values ($1, $2, $3, $4, $5, $6, 'lexical_metadata_v1', $7::jsonb)
-       on conflict (run_id) where run_id is not null do nothing
+         public_id, workspace_id, created_by, study_id, run_id, interview_session_id,
+         query, strategy, filters
+       ) values ($1, $2, $3, $4, $5, $6, $7, 'lexical_metadata_v1', $8::jsonb)
+       on conflict do nothing
        returning id::text as id, public_id`,
       [
         createPublicId("cxr"), input.workspaceId, input.userId, input.studyId ?? null, input.runId ?? null,
-        input.query, JSON.stringify({ assetTypes: input.assetTypes ?? [], scopes: input.scopes ?? [] }),
+        input.interviewSessionId ?? null, input.query,
+        JSON.stringify({ assetTypes: input.assetTypes ?? [], scopes: input.scopes ?? [] }),
       ],
     );
     if (!retrieval.rows[0]) {
       const existing = input.runId
         ? await loadRunContextSnapshot(transaction, input.runId, input.workspaceId)
-        : null;
+        : input.interviewSessionId
+          ? await loadInterviewContextSnapshot(transaction, input.interviewSessionId, input.workspaceId)
+          : null;
       if (existing) return existing;
       throw new Error("CONTEXT_RETRIEVAL_CONFLICT");
     }
@@ -307,18 +357,35 @@ export async function retrieveContext(input: {
   });
 }
 
+async function loadInterviewContextSnapshot(
+  database: Queryable,
+  interviewSessionId: string,
+  workspaceId: string,
+) {
+  return loadContextSnapshot(database, "interview_session_id", interviewSessionId, workspaceId);
+}
+
 async function loadRunContextSnapshot(
   database: Queryable,
   runId: string,
+  workspaceId: string,
+): Promise<ContextSnapshot | null> {
+  return loadContextSnapshot(database, "run_id", runId, workspaceId);
+}
+
+async function loadContextSnapshot(
+  database: Queryable,
+  binding: "run_id" | "interview_session_id",
+  bindingId: string,
   workspaceId: string,
 ): Promise<ContextSnapshot | null> {
   const retrieval = await database.query<{
     id: string; public_id: string; query: string; strategy: "lexical_metadata_v1";
   }>(
     `select id::text as id, public_id, query, strategy
-     from context_retrievals where run_id = $1 and workspace_id = $2
+     from context_retrievals where ${binding} = $1 and workspace_id = $2
      order by created_at, id limit 1`,
-    [runId, workspaceId],
+    [bindingId, workspaceId],
   );
   const record = retrieval.rows[0];
   if (!record) return null;

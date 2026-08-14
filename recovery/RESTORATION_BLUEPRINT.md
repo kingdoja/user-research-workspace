@@ -1,6 +1,6 @@
 # atypica.AI / GEA 完整还原方案
 
-日期：2026-08-13  
+日期：2026-08-14
 定位：基于公开产品、公开工程文章、公开研究回放、旧站归档和当前仓库的 clean-room 恢复设计。  
 目标：还原 atypica.AI 的核心产品体验，并用可审计、可恢复、可演进的工程实现替代无法确认的原私有实现。
 
@@ -541,27 +541,29 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 
 ### P1：可信研究闭环，2-4 周
 
-- 完成 Evidence Source/Item、Claim、Claim Evidence 表。
-- 报告改为结构化 node，并加入逐条 citation。
-- 合成访谈和真人访谈在 UI、导出、Prompt 中强制区分。
+- [x] 完成 Evidence Source/Item、Claim、Claim Evidence 表。
+- [x] 报告改为不可变 version + 结构化 node，并加入逐条 citation。
+- [x] 合成访谈和真人访谈在 UI、公开分享和 Prompt 中强制区分；公开分享对真人 evidence 服务端脱敏。
 - 所有数字增加 metric provenance；无来源数字不允许发布。
-- Report version、share 和 replay 对齐。
+- [x] Report version 与 workspace/share 读取对齐；历史报告保持 legacy，不推测回填。
 
 验收：随机抽取十条报告结论，全部能打开直接证据或显示“模型推断/无外部证据”。
 
 ### P2：动态 GEA Runtime，3-5 周
 
-- 增加 `reasoning_decisions` 和动态追加任务。
-- 实现 coverage/conflict/novelty/budget 停止条件。
-- 完善单 task retry、waiting_input、resume、cancel。
-- Runtime 与 UI 展示同一事件源，避免前端伪进度。
+- [x] 增加版本化 `reasoning_decisions`、候选动作和白名单动态追加任务。
+- [x] 实现 coverage/conflict/novelty/budget 扩展停止条件，并保证固定必需任务继续执行。
+- [x] 完善单 task retry、waiting_input、resume、cancel。
+- [x] Runtime 与 UI 使用同一持久化 decision/task/event 数据源，回放不依赖前端推演。
 
 验收：模拟 Provider 超时、单 Persona 失败、Worker 重启和用户取消，运行可恢复且不重复生成 artifact。
 
 ### P3：Scout 与 Context 增强，3-6 周
 
-- 接入至少一个真实 Search Provider 和一个合规 Social Connector。
-- 原始内容写入对象存储，数据库保存 hash、locator 和权限元数据。
+- [x] 接入真实 Tavily/Bing Search Provider，并将 Provider 搜索结果约束为候选发现，不作为未经采集的事实证据。
+- [x] 增加合规 Public Web Connector、robots/公网/重定向/类型/大小/访问限制检查，以及不可变 Snapshot、Observation、hash 和 tombstone。
+- [ ] 接入至少一个有官方 API、授权数据合作方或企业数据合同支持的 Social Connector；当前不声称具备小红书、抖音、X、Instagram 的非公开 API 权限。
+- [ ] 大体积原始内容迁入对象存储；当前 MVP 在 PostgreSQL 保存受大小上限约束的原始正文、hash、locator 和权限元数据。
 - Context 增加 hybrid retrieval 和 retrieval evaluation dataset。
 - 自动沉淀 Persona、研究模板、knowledge gap，但需要显式保留策略。
 
@@ -584,16 +586,20 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 - Persona、Panel、AI/真人 Interview。
 - Skill/Context 版本化基础。
 - DAG 并发、provider 限流、实验分组和运行取消基础。
+- 持久化实时访谈 Agent、公开邀请页双模式、会话恢复/取消和逐轮幂等。
+- 实时会话 Skill/Context/策略版本回放、六维人工质量评分与实验指标聚合。
+- 跨 realtime experiment variant 的指标表、候选会话选择和双侧版本化 transcript/Context/review 回放。
+- Evidence Source/Item → Claim Evidence → Claim → Report Version/Node 证据链，以及逐条引用和公开分享隐私边界。
+- ReasoningDecision → 候选动作 → 动态任务/停止条件 → checkpoint replay 的确定性调度闭环。
+- Connector Run → Source Candidate → immutable Snapshot/hash → Observation → Evidence 的公开来源审计闭环。
 
 下一批最值得做的工作，按收益排序：
 
-1. Evidence/Claim/Report Node 数据模型与引用 UI。
-2. Reasoning Decision 和动态任务追加。
-3. 真实 Scout Connector 与原始快照。
-4. Replay 页完整复刻工具调用、失败和重试。
-5. Plan version 与 run replay。
-6. Skill enable/disable 和 MCP executor。
-7. Hybrid retrieval 及离线评估。
+1. 增加 Hybrid retrieval，并保留 lexical/metadata 权限过滤作为可解释基线。
+2. 建立离线检索评估集，记录 precision/recall 和版本化模型参数。
+3. 增加 Context tombstone/reindex 与版本切换审计。
+4. Plan version 与跨 run 完整 replay 对比。
+5. Skill enable/disable 和 MCP executor。
 
 不建议现在做：
 

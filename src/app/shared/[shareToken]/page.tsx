@@ -2,6 +2,7 @@ import { ExternalLink, FileText, UsersRound } from "lucide-react";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { cache } from "react";
+import { ReportClaimEvidence } from "@/components/report-claim-evidence";
 import { getSharedStudyReport } from "@/lib/studies";
 
 type SharedPageProps = { params: Promise<{ shareToken: string }> };
@@ -17,6 +18,7 @@ export default async function SharedStudyPage({ params }: SharedPageProps) {
   const { shareToken } = await params;
   const study = await getSharedReport(shareToken);
   if (!study) notFound();
+  const findingNodes = study.report.evidenceGraph?.nodes.filter((node) => node.nodeType === "finding") ?? [];
 
   return (
     <main className="shared-report-page">
@@ -39,7 +41,7 @@ export default async function SharedStudyPage({ params }: SharedPageProps) {
         {study.report.content.findings.map((finding, index) => (
           <section className="shared-report-finding" key={finding.title}>
             <span>{String(index + 1).padStart(2, "0")}</span>
-            <div><h2>{finding.title}</h2><p>{finding.insight}</p><dl><div><dt>证据</dt><dd>{finding.evidence}</dd></div><div><dt>业务含义</dt><dd>{finding.implication}</dd></div></dl></div>
+            <div><h2>{finding.title}</h2><ReportClaimEvidence claim={findingNodes[index]?.claim ?? null} /><p>{finding.insight}</p><dl><div><dt>证据总结</dt><dd>{finding.evidence}</dd></div><div><dt>业务含义</dt><dd>{finding.implication}</dd></div></dl></div>
           </section>
         ))}
         {study.panel ? (

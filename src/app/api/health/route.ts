@@ -10,13 +10,15 @@ export async function GET() {
   return NextResponse.json({
     status: "ok",
     service: "atypica-rebuild",
-    phase: "runtime-scheduling-experiments",
+    phase: "realtime-interview-agents",
     architecture: {
       runtime: "research-dag-v2",
       skillGateway: "versioned-contracts-v1",
       contextSystem: "lexical-metadata-v1",
       scheduling: "leased-provider-slots-v1",
       experiments: "stable-weighted-assignment-v1",
+      realtimeInterviews: "realtime-interview-agent-v1",
+      interviewReplay: "versioned-replay-and-human-review-v1",
     },
     providers: {
       model: {

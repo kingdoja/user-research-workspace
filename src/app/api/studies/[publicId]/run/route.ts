@@ -35,6 +35,10 @@ export async function POST(request: Request, context: RouteContext<"/api/studies
     );
   }
 
+  if (result === "waiting_input") {
+    return NextResponse.json({ error: "当前研究正在等待补充输入后继续" }, { status: 409 });
+  }
+
   if (result === "queued") {
     await enqueueLatestStudyRun(publicId, viewer.workspaceId);
     after(() => processStudyJobQueue({ maxJobs: 1 }));

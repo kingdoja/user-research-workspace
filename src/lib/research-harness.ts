@@ -22,14 +22,27 @@ import {
   type ProviderResearchInterviews,
   type ProviderResearchSources,
   type ResearchReport,
+  REPORT_PROMPT_VERSION,
 } from "@/lib/openai-provider";
+import { materializeReportEvidenceGraph } from "@/lib/evidence-graph";
+import { buildReportEvidenceCatalog } from "@/lib/report-evidence";
+import { evaluateReasoningCheckpoint, REASONING_POLICY_VERSION } from "@/lib/reasoning-runtime";
+import type { SourceConnectorAuditSummary } from "@/lib/source-connectors";
 import type { StudyMethod } from "@/lib/studies";
 import { resolveBuiltInSkill, type SkillSummary } from "@/lib/skill-gateway";
+import {
+  TaskTerminalFailure,
+  classifyTaskError,
+  recoverInterruptedTasks,
+  startTaskAttempt,
+  taskRetryDelaySeconds,
+} from "@/lib/task-recovery";
 import {
   acquireProviderRuntimeSlot,
   assignActiveStrategy,
   consumeProviderRateToken,
   getRuntimeLimits,
+  recordBatchTaskMetrics,
   recordStrategyMetric,
   releaseProviderRuntimeSlot,
   renewProviderRuntimeSlot,
@@ -61,6 +74,7 @@ type HarnessStudy = {
   methods: StudyMethod[];
   audience: string;
   personaCount: number;
+  estimatedTokens: number;
 };
 
 type StoredTask = {
@@ -75,7 +89,12 @@ type StoredTask = {
   input: Record<string, unknown>;
   output: Record<string, unknown>;
   attempt: number;
+  maxAttempts: number;
+  nextAttemptAt: string | null;
+  waitingReason: string | null;
   timeoutSeconds: number;
+  origin: "planned" | "dynamic";
+  generation: number;
 };
 
 type HarnessState = Record<string, unknown>;
@@ -89,6 +108,7 @@ type ToolResult<Output> = {
 
 type ToolContext = {
   study: HarnessStudy;
+  task: Pick<StoredTask, "key" | "publicId" | "attempt">;
   state: HarnessState;
   context: ContextSnapshot;
   signal: AbortSignal;
@@ -122,6 +142,12 @@ const sourceSchema = z.object({
   title: z.string(),
   url: z.string().url(),
   excerpt: z.string(),
+  connectorRunPublicId: z.string().optional(),
+  candidatePublicId: z.string().optional(),
+  snapshotPublicId: z.string().optional(),
+  observationPublicId: z.string().optional(),
+  contentHash: z.string().optional(),
+  collectedAt: z.string().optional(),
 });
 
 const webResearchSchema = z.object({
@@ -133,7 +159,13 @@ const webResearchSchema = z.object({
     seedSourceCount: z.number(),
     searchSourceCount: z.number(),
     finalSourceCount: z.number(),
+    candidateCount: z.number().optional(),
+    rejectedCount: z.number().optional(),
+    unavailableCount: z.number().optional(),
+    connectorRunPublicId: z.string().optional(),
+    policyVersion: z.string().optional(),
   }),
+  audit: z.custom<SourceConnectorAuditSummary>().optional(),
   responseId: z.string(),
   model: z.string(),
   usage: z.unknown(),
@@ -297,6 +329,10 @@ const designStudyTool: ResearchTool<Record<string, never>, Record<string, unknow
 const researchInputSchema = z.object({
   platform: z.string().optional(),
   focus: z.string().optional(),
+  resumeInput: z.object({
+    focus: z.string().max(600).optional(),
+    sourceUrls: z.array(z.string().url()).max(8).optional(),
+  }).optional(),
 });
 
 const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, ProviderResearchSources> = {
@@ -307,13 +343,21 @@ const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, Provide
   capabilities: ["web.search", "research.sources"],
   inputSchema: researchInputSchema,
   outputSchema: webResearchSchema,
-  async execute({ study, context, signal, strategy }, input) {
+  async execute({ study, task, context, signal, strategy }, input) {
     const output = await researchPublicWeb({
-      brief: [contextualBrief(study, context, strategy), input.platform ? `重点平台：${input.platform}` : "", input.focus ? `研究焦点：${input.focus}` : ""].filter(Boolean).join("\n"),
+      brief: [contextualBrief(study, context, strategy), input.platform ? `重点平台：${input.platform}` : "", input.focus ? `研究焦点：${input.focus}` : "", input.resumeInput?.focus ? `用户补充研究焦点：${input.resumeInput.focus}` : ""].filter(Boolean).join("\n"),
       framework: study.framework,
       userPublicId: study.userPublicId,
       studyPublicId: study.publicId,
+      auditScope: {
+        workspaceId: study.workspaceId,
+        studyId: study.studyId,
+        runId: study.runId,
+        taskKey: task.key,
+        attempt: task.attempt,
+      },
       signal,
+      additionalSeedUrls: input.resumeInput?.sourceUrls,
     });
     return {
       output,
@@ -326,7 +370,7 @@ const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, Provide
         sources: output.sources.map(({ title, url }) => ({ title, url })),
         provider: output.metadata.primaryProvider,
         platform: input.platform ?? "public_web",
-        focus: input.focus ?? "行业与用户背景",
+        focus: input.resumeInput?.focus ?? input.focus ?? "行业与用户背景",
       },
     };
   },
@@ -837,12 +881,13 @@ async function loadHarnessStudy(runId: string): Promise<HarnessStudy | null> {
     methods: StudyMethod[] | string;
     persona_filters: { audience?: string } | string;
     persona_count: number;
+    estimated_tokens: string;
   }>(
     `select study.id::text as study_id, study.public_id,
             study.workspace_id::text as workspace_id, study.created_by::text as created_by,
             app_user.public_id as user_public_id, run.id::text as run_id,
             run.status as run_status, run.started_at::text as run_started_at,
-            study.brief, study.study_type,
+            study.brief, study.study_type, study.estimated_tokens::text as estimated_tokens,
             plan.framework, plan.methods, plan.persona_filters, plan.persona_count
      from study_runs run
      join studies study on study.id = run.study_id
@@ -870,6 +915,7 @@ async function loadHarnessStudy(runId: string): Promise<HarnessStudy | null> {
     methods: parseJson(row.methods),
     audience: filters.audience ?? "由研究 Brief 确定的目标人群",
     personaCount: row.persona_count,
+    estimatedTokens: Number(row.estimated_tokens),
   };
 }
 
@@ -918,10 +964,15 @@ async function loadTasks(runId: string): Promise<StoredTask[]> {
     input: Record<string, unknown> | string;
     output: Record<string, unknown> | string;
     attempt: number;
+    max_attempts: number;
+    next_attempt_at: string | null;
+    waiting_reason: string | null;
     timeout_seconds: number;
+    origin: "planned" | "dynamic";
+    generation: number;
   }>(
     `select id::text as id, public_id, position, task_key, title, tool_name, status,
-            depends_on, input, output, attempt, timeout_seconds
+            depends_on, input, output, attempt, max_attempts, next_attempt_at, waiting_reason, timeout_seconds, origin, generation
      from study_tasks where run_id = $1 order by position, id`,
     [runId],
   );
@@ -937,7 +988,12 @@ async function loadTasks(runId: string): Promise<StoredTask[]> {
     input: parseJson(row.input),
     output: parseJson(row.output),
     attempt: row.attempt,
+    maxAttempts: row.max_attempts,
+    nextAttemptAt: row.next_attempt_at,
+    waitingReason: row.waiting_reason,
     timeoutSeconds: row.timeout_seconds,
+    origin: row.origin,
+    generation: row.generation,
   }));
 }
 
@@ -996,6 +1052,16 @@ function abortError(message: string) {
   return new DOMException(message, "AbortError");
 }
 
+function waitForRetry(signal: AbortSignal, delayMs: number) {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, delayMs);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? abortError("RUNTIME_CANCELLED"));
+    }, { once: true });
+  });
+}
+
 async function executeTask(input: {
   study: HarnessStudy;
   task: StoredTask;
@@ -1013,10 +1079,6 @@ async function executeTask(input: {
     "web.search", "persona.generate", "interview.synthetic", "audience.validate",
     "discussion.synthetic", "report.generate",
   ].includes(capability));
-  if (providerBacked) {
-    const rateAccepted = await consumeProviderRateToken(database, getOpenAIProviderStatus().providerName, input.study.workspaceId);
-    if (!rateAccepted) throw new Error("RUNTIME_RATE_LIMITED");
-  }
   const timeoutSeconds = Number(input.strategy.config.taskTimeoutSeconds ?? input.task.timeoutSeconds);
   const timeout = Math.max(15, Math.min(3600, timeoutSeconds)) * 1000;
   const controller = new AbortController();
@@ -1030,7 +1092,7 @@ async function executeTask(input: {
     toolName: input.task.toolName,
     skillVersion: tool.version,
     contextRetrievalId: input.context.retrievalPublicId,
-    invocationId: invocation.public_id,
+    invocationId: invocation.invocationPublicId,
     strategyVersion: input.strategy.strategyVersion,
   });
   await appendEvent(database, input.study.studyId, input.study.runId, "tool.call.started", {
@@ -1039,13 +1101,22 @@ async function executeTask(input: {
     toolName: input.task.toolName,
     skillVersion: tool.version,
     contextRetrievalId: input.context.retrievalPublicId,
-    invocationId: invocation.public_id,
+    invocationId: invocation.invocationPublicId,
     arguments: input.task.input,
   });
   try {
+    if (providerBacked) {
+      const rateAccepted = await consumeProviderRateToken(database, getOpenAIProviderStatus().providerName, input.study.workspaceId);
+      if (!rateAccepted) throw new Error("RUNTIME_RATE_LIMITED");
+    }
     const parsedInput = tool.inputSchema.parse(input.task.input);
     const result = await tool.execute({
       study: input.study,
+      task: {
+        key: input.task.key,
+        publicId: input.task.publicId,
+        attempt: invocation.attempt,
+      },
       state: input.state,
       context: input.context,
       signal: controller.signal,
@@ -1058,22 +1129,26 @@ async function executeTask(input: {
     await completeInvocation({
       study: input.study,
       task: input.task,
-      invocationId: invocation.id,
+      invocationId: invocation.invocationId,
+      attempt: invocation.attempt,
       output,
       artifactType: result.artifactType,
       artifactTitle: result.artifactTitle,
       eventPayload: result.eventPayload,
     });
-    return { key: input.task.key, output };
+    return { kind: "completed" as const, key: input.task.key, output };
   } catch (error) {
-    const described = describeOpenAIError(error);
-    await failInvocation({
+    const resolution = await failInvocation({
       study: input.study,
       task: input.task,
-      invocationId: invocation.id,
-      message: described.message,
+      invocationId: invocation.invocationId,
+      attempt: invocation.attempt,
+      error,
     });
-    throw error;
+    if (resolution === "retry" || resolution === "waiting_input") return { kind: resolution, key: input.task.key };
+    if (resolution === "cancelled") throw error;
+    const failure = classifyTaskError(error);
+    throw new TaskTerminalFailure(failure.message, failure.code);
   } finally {
     clearTimeout(timer);
     input.runSignal.removeEventListener("abort", abortFromRun);
@@ -1087,38 +1162,23 @@ async function beginInvocation(
   contextRetrievalId: string | null,
 ) {
   const database = await getDatabase();
-  const idempotencyKey = `${study.runId}:${task.key}`;
-  return database.transaction(async (transaction) => {
-    await transaction.query(
-      `update study_tasks set status = 'running', attempt = attempt + 1,
-              error_message = null, started_at = now(), finished_at = null, updated_at = now()
-       where id = $1`,
-      [task.id],
-    );
-    const invocation = await transaction.query<{ id: string; public_id: string }>(
-      `insert into study_tool_invocations (
-         public_id, study_id, run_id, task_id, tool_name, idempotency_key, arguments,
-         skill_slug, skill_version, context_retrieval_id
-       ) values ($1, $2, $3, $4, $5, $6, $7::jsonb, $5, $8, $9)
-       on conflict (idempotency_key) do update set
-         status = 'running', arguments = excluded.arguments, error_message = null,
-         skill_slug = excluded.skill_slug, skill_version = excluded.skill_version,
-         context_retrieval_id = excluded.context_retrieval_id,
-         attempt = study_tool_invocations.attempt + 1, started_at = now(), finished_at = null
-       returning id::text as id, public_id`,
-      [
-        createPublicId("inv"), study.studyId, study.runId, task.id, task.toolName,
-        idempotencyKey, JSON.stringify(task.input), skillVersion, contextRetrievalId,
-      ],
-    );
-    return invocation.rows[0];
-  });
+  return database.transaction((transaction) => startTaskAttempt(transaction, {
+    studyId: study.studyId,
+    runId: study.runId,
+    taskId: task.id,
+    taskKey: task.key,
+    toolName: task.toolName,
+    skillVersion,
+    contextRetrievalId,
+    arguments: task.input,
+  }));
 }
 
 async function completeInvocation(input: {
   study: HarnessStudy;
   task: StoredTask;
   invocationId: string;
+  attempt: number;
   output: unknown;
   artifactType: string;
   artifactTitle: string;
@@ -1133,8 +1193,16 @@ async function completeInvocation(input: {
       [input.invocationId, JSON.stringify(input.output)],
     );
     await transaction.query(
+      `update study_task_attempts set status = 'completed', error_class = null, error_code = null,
+              error_message = null, retryable = false, finished_at = now()
+       where task_id = $1 and attempt = $2`,
+      [input.task.id, input.attempt],
+    );
+    await transaction.query(
       `update study_tasks
-       set status = 'completed', output = $2::jsonb, error_message = null,
+       set status = 'completed', output = $2::jsonb, error_message = null, next_attempt_at = null,
+           last_error_code = null, last_error_class = null, retryable = false,
+           waiting_reason = null, waiting_payload = null, waiting_since = null,
            finished_at = now(), updated_at = now()
        where id = $1`,
       [input.task.id, JSON.stringify(input.output)],
@@ -1184,37 +1252,76 @@ async function failInvocation(input: {
   study: HarnessStudy;
   task: StoredTask;
   invocationId: string;
-  message: string;
+  attempt: number;
+  error: unknown;
 }) {
+  const failure = classifyTaskError(input.error);
+  const resolution = failure.disposition === "retry" && input.attempt >= input.task.maxAttempts
+    ? "terminal" as const
+    : failure.disposition;
+  const taskStatus = resolution === "retry" || resolution === "cancelled" ? "pending" : resolution === "waiting_input" ? "waiting_input" : "failed";
+  const invocationStatus = resolution === "waiting_input" ? "waiting_input" : resolution === "cancelled" ? "cancelled" : "failed";
+  const attemptStatus = resolution === "waiting_input" ? "waiting_input" : resolution === "cancelled" ? "cancelled" : "failed";
+  const delaySeconds = resolution === "retry" ? taskRetryDelaySeconds(input.attempt) : null;
   const database = await getDatabase();
   await database.transaction(async (transaction) => {
     await transaction.query(
-      `update study_tool_invocations set status = 'failed', error_message = $2, finished_at = now()
+      `update study_tool_invocations set status = $2, error_message = $3, finished_at = now()
        where id = $1`,
-      [input.invocationId, input.message],
+      [input.invocationId, invocationStatus, failure.message],
     );
     await transaction.query(
-      `update study_tasks set status = 'failed', error_message = $2, finished_at = now(), updated_at = now()
-       where id = $1`,
-      [input.task.id, input.message],
+      `update study_task_attempts set status = $3, error_class = $4, error_code = $5,
+              error_message = $6, retryable = $7, finished_at = now()
+       where task_id = $1 and attempt = $2`,
+      [input.task.id, input.attempt, attemptStatus, failure.className, failure.code, failure.message, resolution === "retry"],
     );
+    await transaction.query(
+      `update study_tasks set status = $2, error_message = $3, last_error_code = $4, last_error_class = $5,
+              retryable = $6, next_attempt_at = case when $7::integer is null then null else now() + ($7 * interval '1 second') end,
+              waiting_reason = $8, waiting_payload = $9::jsonb,
+              waiting_since = case when $2 = 'waiting_input' then now() else null end,
+              finished_at = now(), updated_at = now()
+       where id = $1`,
+      [
+        input.task.id, taskStatus, failure.message, failure.code, failure.className, resolution === "retry",
+        delaySeconds, resolution === "waiting_input" ? failure.message : null,
+        JSON.stringify(resolution === "waiting_input" ? failure.inputRequest ?? {} : {}),
+      ],
+    );
+    if (resolution === "waiting_input") {
+      await transaction.query(
+        `insert into study_task_inputs (public_id, workspace_id, study_id, run_id, task_id, request_payload)
+         values ($1, $2, $3, $4, $5, $6::jsonb)
+         on conflict (task_id) where (status = 'pending') do update set request_payload = excluded.request_payload,
+           requested_at = now(), response_payload = null`,
+        [createPublicId("tin"), input.study.workspaceId, input.study.studyId, input.study.runId, input.task.id, JSON.stringify(failure.inputRequest ?? {})],
+      );
+      await transaction.query("update study_runs set status = 'waiting_input', error_message = $2 where id = $1", [input.study.runId, failure.message]);
+      await transaction.query("update studies set status = 'waiting_input', current_stage = 'execution', updated_at = now() where id = $1", [input.study.studyId]);
+    }
     await transaction.query(
       `insert into study_events (study_id, run_id, event_type, payload)
        values ($1, $2, $3, $4::jsonb), ($1, $2, 'tool.call.failed', $4::jsonb)`,
       [
         input.study.studyId,
         input.study.runId,
-        `task.${input.task.key}.failed`,
+        resolution === "retry" ? `task.${input.task.key}.retry_scheduled` : resolution === "waiting_input" ? `task.${input.task.key}.waiting_input` : `task.${input.task.key}.failed`,
         JSON.stringify({
           taskKey: input.task.key,
           taskPublicId: input.task.publicId,
           toolName: input.task.toolName,
           invocationId: input.invocationId,
-          message: input.message,
+          message: failure.message,
+          errorClass: failure.className,
+          errorCode: failure.code,
+          retryable: resolution === "retry",
+          nextAttemptInSeconds: delaySeconds,
         }),
       ],
     );
   });
+  return resolution;
 }
 
 function escapeHtml(value: string) {
@@ -1312,19 +1419,48 @@ async function materializeStudy(study: HarnessStudy, state: HarnessState) {
 
     if (reportResult.success) {
       const content = { ...reportResult.data.report, citations: reportResult.data.citations };
-      await transaction.query(
+      const storedReport = await transaction.query<{ id: string }>(
         `insert into reports (public_id, study_id, title, description, content_html, content_json)
          values ($1, $2, $3, $4, $5, $6::jsonb)
          on conflict (study_id) do update set
            title = excluded.title, description = excluded.description,
            content_html = excluded.content_html, content_json = excluded.content_json,
-           generated_at = now()`,
+           generated_at = now()
+         returning id::text as id`,
         [
           createPublicId("rpt"), study.studyId, reportResult.data.report.title,
           reportResult.data.report.executiveSummary, renderReportHtml(reportResult.data.report),
           JSON.stringify(content),
         ],
       );
+      const research = mergedResearchState(state);
+      const discussion = discussionSchema.safeParse(state.discussion);
+      const provider = getOpenAIProviderStatus();
+      await materializeReportEvidenceGraph(transaction, {
+        workspaceId: study.workspaceId,
+        studyId: study.studyId,
+        runId: study.runId,
+        reportId: storedReport.rows[0].id,
+        report: reportResult.data.report,
+        citations: reportResult.data.citations,
+        catalog: buildReportEvidenceCatalog({
+          sources: research.sources,
+          panelResearch: personaResult.success ? {
+            panel: panelResult.success ? panelResult.data : personaResult.data.panel,
+            personas: personaResult.data.personas,
+            interviews: [
+              ...(batchOne.success ? batchOne.data : []),
+              ...(batchTwo.success ? batchTwo.data : []),
+            ],
+            validation: validationSchema.parse(state.validation),
+          } : undefined,
+          discussion: discussion.success ? discussion.data : undefined,
+        }),
+        provider: provider.providerName,
+        providerModel: reportResult.data.model,
+        providerResponseId: reportResult.data.responseId,
+        promptVersion: REPORT_PROMPT_VERSION,
+      });
     }
 
     const usage = Object.values(state).reduce<number>((sum, item) => {
@@ -1366,6 +1502,7 @@ export async function runStudyHarness(runId: string) {
   const resuming = study.runStartedAt !== null;
   await ensureTasks(study);
   const database = await getDatabase();
+  const recoveredTasks = await database.transaction((transaction) => recoverInterruptedTasks(transaction, runId));
   const provider = getOpenAIProviderStatus();
   const strategy = await database.transaction(async (transaction) => {
     const assigned = await assignActiveStrategy({
@@ -1378,11 +1515,11 @@ export async function runStudyHarness(runId: string) {
     });
     const runTimeoutSeconds = Number(assigned.config.runTimeoutSeconds ?? getRuntimeLimits().runTimeoutSeconds);
     await transaction.query(
-      `update study_runs set workflow_type = 'batch_research', workflow_version = 'research-dag-v2',
+      `update study_runs set workflow_type = 'batch_research', workflow_version = 'research-dag-v3-dynamic',
               strategy_key = $2, strategy_version = $3, experiment_assignment_id = $4,
-              timeout_seconds = $5
+              timeout_seconds = $5, reasoning_policy_version = $6
        where id = $1`,
-      [study.runId, assigned.variantKey, assigned.strategyVersion, assigned.assignmentId, runTimeoutSeconds],
+      [study.runId, assigned.variantKey, assigned.strategyVersion, assigned.assignmentId, runTimeoutSeconds, REASONING_POLICY_VERSION],
     );
     return assigned;
   });
@@ -1401,13 +1538,14 @@ export async function runStudyHarness(runId: string) {
   await appendEvent(database, study.studyId, study.runId, resuming ? "run.resumed" : "run.started", {
     provider: provider.providerName,
     model: provider.researchModel,
-    harness: "research-dag-v2",
+    harness: "research-dag-v3-dynamic",
     strategy: {
       experimentKey: strategy.experimentKey,
       variantKey: strategy.variantKey,
       strategyVersion: strategy.strategyVersion,
       assignmentId: strategy.assignmentPublicId,
     },
+    recoveredTaskKeys: recoveredTasks.map((task) => task.task_key),
   });
 
   const runController = new AbortController();
@@ -1454,12 +1592,39 @@ export async function runStudyHarness(runId: string) {
         if (task.status === "completed" && !(task.key in state)) state[task.key] = task.output;
       }
       const unfinished = tasks.filter((task) => task.status !== "completed" && task.status !== "skipped");
-      if (!unfinished.length) break;
+      if (!unfinished.length) {
+        await database.transaction((transaction) => evaluateReasoningCheckpoint(transaction, {
+          workspaceId: study.workspaceId,
+          studyId: study.studyId,
+          runId: study.runId,
+          strategyConfig: strategy.config,
+          tokenBudget: study.estimatedTokens,
+          elapsedMs: Date.now() - startedAt,
+          triggerType: "terminal",
+        }));
+        break;
+      }
+      if (unfinished.some((task) => task.status === "waiting_input")) {
+        await recordBatchTaskMetrics(database, strategy.assignmentId, runId);
+        return "waiting_input" as const;
+      }
       const ready = unfinished.filter((task) => (
-        (task.status === "pending" || task.status === "failed")
+        task.status === "pending"
+        && (!task.nextAttemptAt || new Date(task.nextAttemptAt).getTime() <= Date.now())
         && task.dependsOn.every((dependency) => dependency in state)
       ));
       if (!ready.length) {
+        const terminal = unfinished.find((task) => task.status === "failed");
+        if (terminal) throw new TaskTerminalFailure(`任务 ${terminal.key} 未完成`, null);
+        const nextAttemptAt = unfinished
+          .filter((task) => task.status === "pending" && task.nextAttemptAt)
+          .map((task) => new Date(task.nextAttemptAt as string).getTime())
+          .filter((time) => Number.isFinite(time))
+          .sort((left, right) => left - right)[0];
+        if (nextAttemptAt) {
+          await waitForRetry(runController.signal, Math.max(50, Math.min(30_000, nextAttemptAt - Date.now())));
+          continue;
+        }
         const blocked = unfinished.map((task) => `${task.key}<-${task.dependsOn.filter((dependency) => !(dependency in state)).join(",")}`).join(";");
         throw new Error(`HARNESS_DAG_STALLED:${blocked}`);
       }
@@ -1479,14 +1644,34 @@ export async function runStudyHarness(runId: string) {
       })));
       const failures = settled.filter((result): result is PromiseRejectedResult => result.status === "rejected");
       for (const result of settled) {
-        if (result.status === "fulfilled") state[result.value.key] = result.value.output;
+        if (result.status === "fulfilled" && result.value.kind === "completed") state[result.value.key] = result.value.output;
       }
+      const retryScheduled = settled.filter((result) => result.status === "fulfilled" && result.value.kind === "retry").length;
+      const waitingForInput = settled.filter((result) => result.status === "fulfilled" && result.value.kind === "waiting_input").length;
       await appendEvent(database, study.studyId, study.runId, "dag.wave.completed", {
         taskKeys: wave.map((task) => task.key),
-        completed: settled.filter((result) => result.status === "fulfilled").length,
+        completed: settled.filter((result) => result.status === "fulfilled" && result.value.kind === "completed").length,
         failed: failures.length,
+        retryScheduled,
+        waitingForInput,
       });
       if (failures.length) throw failures[0].reason;
+      if (waitingForInput) {
+        await recordBatchTaskMetrics(database, strategy.assignmentId, runId);
+        return "waiting_input" as const;
+      }
+      const remainingTasks = (await loadTasks(runId)).some((task) => task.status !== "completed" && task.status !== "skipped");
+      if (remainingTasks) {
+        await database.transaction((transaction) => evaluateReasoningCheckpoint(transaction, {
+          workspaceId: study.workspaceId,
+          studyId: study.studyId,
+          runId: study.runId,
+          strategyConfig: strategy.config,
+          tokenBudget: study.estimatedTokens,
+          elapsedMs: Date.now() - startedAt,
+          triggerType: resuming ? "resume" : "checkpoint",
+        }));
+      }
     }
     await materializeStudy(study, state);
     const runTokens = Object.values(state).reduce<number>((sum, item) => {
@@ -1497,12 +1682,14 @@ export async function runStudyHarness(runId: string) {
     await recordStrategyMetric(database, strategy.assignmentId, "run_duration_ms", Date.now() - startedAt);
     await recordStrategyMetric(database, strategy.assignmentId, "run_tokens", runTokens);
     await recordStrategyMetric(database, strategy.assignmentId, "task_count", Object.keys(state).length);
+    await recordBatchTaskMetrics(database, strategy.assignmentId, runId);
     return "completed" as const;
   } catch (error) {
     const cancellationRequested = await isRunCancellationRequested(study.runId);
     if (cancellationRequested || (error instanceof DOMException && error.name === "AbortError" && error.message === "RUNTIME_CANCELLED")) {
       await markRunCancelled(study);
       await recordStrategyMetric(database, strategy.assignmentId, "run_cancelled", 1);
+      await recordBatchTaskMetrics(database, strategy.assignmentId, runId);
       return "cancelled" as const;
     }
     if (!(error instanceof Error && error.message === "RUNTIME_RATE_LIMITED")) {
@@ -1510,6 +1697,7 @@ export async function runStudyHarness(runId: string) {
       error: error instanceof Error ? error.message.slice(0, 200) : "unknown",
       });
     }
+    await recordBatchTaskMetrics(database, strategy.assignmentId, runId);
     throw error;
   } finally {
     clearTimeout(runTimer);
@@ -1564,6 +1752,7 @@ async function claimStudyJob(workerId: string) {
        join studies study on study.id = run.study_id
        where job.available_at <= now()
          and (job.status = 'queued' or (job.status = 'leased' and job.lease_expires_at < now()))
+         and run.status <> 'waiting_input'
        order by job.available_at, job.id
        for update skip locked
        limit 1`,
@@ -1603,6 +1792,16 @@ async function finishStudyJob(jobId: string, workerId: string) {
   );
 }
 
+async function pauseStudyJob(jobId: string, workerId: string) {
+  const database = await getDatabase();
+  await database.query(
+    `update study_job_queue set status = 'waiting_input', lease_owner = null,
+            lease_expires_at = null, updated_at = now()
+     where id = $1 and status = 'leased' and lease_owner = $2`,
+    [jobId, workerId],
+  );
+}
+
 async function handleStudyJobFailure(job: {
   id: string;
   run_id: string;
@@ -1610,8 +1809,9 @@ async function handleStudyJobFailure(job: {
   max_attempts: number;
 }, workerId: string, error: unknown) {
   const database = await getDatabase();
+  const classified = classifyTaskError(error);
   const described = describeOpenAIError(error);
-  const retry = job.attempt < job.max_attempts;
+  const retry = classified.disposition === "retry" && job.attempt < job.max_attempts;
   await database.transaction(async (transaction) => {
     const released = await transaction.query<{ id: string }>(
       `update study_job_queue set status = $2,
@@ -1693,6 +1893,8 @@ export async function processStudyJobQueue(options: {
            where id = $1 and lease_owner = $2`,
           [job.id, workerId],
         );
+      } else if (result === "waiting_input") {
+        await pauseStudyJob(job.id, workerId);
       } else {
         await finishStudyJob(job.id, workerId);
       }

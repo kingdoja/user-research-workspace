@@ -27,6 +27,7 @@ import type { InterviewProjectDetail } from "@/lib/interviews";
 import { InterviewProjectSettings } from "@/components/interview-project-settings";
 import { InterviewAnalysisView } from "@/components/interview-analysis-view";
 import { InterviewReportView } from "@/components/interview-report-view";
+import { InterviewSessionEvaluation } from "@/components/interview-session-evaluation";
 import { buildInterviewDifferences, buildInterviewHypotheses, buildInterviewThemes } from "@/lib/interview-analysis";
 
 type ProjectView = "sessions" | "questions" | "report" | "settings";
@@ -213,9 +214,9 @@ export function InterviewProjectWorkspace({ project }: { project: InterviewProje
           <section className="interview-objective"><strong>访谈目标</strong><p>{project.objective}</p></section>
           <section className="interview-transcript" aria-label={`${selected.participantName} 访谈回放`}>
             {selected.messages.map((message, index) => (
-              <article className={message.role === "interviewer" ? "interviewer-turn" : "persona-turn"} key={message.id}>
-                <div>{message.role === "interviewer" ? <MessageCircleMore size={16} /> : selected.participantName.slice(0, 1)}</div>
-                <section><header><strong>{message.role === "interviewer" ? "访谈问题" : selected.participantName}</strong><span>{String(index + 1).padStart(2, "0")}</span></header><p>{message.content}</p></section>
+              <article className={message.role === "interviewer" || message.role === "agent" ? "interviewer-turn" : "persona-turn"} key={message.id}>
+                <div>{message.role === "interviewer" || message.role === "agent" ? <MessageCircleMore size={16} /> : selected.participantName.slice(0, 1)}</div>
+                <section><header><strong>{message.role === "interviewer" || message.role === "agent" ? selected.workflowType === "realtime_agent" ? "访谈 Agent" : "访谈问题" : selected.participantName}</strong><span>{String(index + 1).padStart(2, "0")}</span></header><p>{message.content}</p></section>
               </article>
             ))}
           </section>
@@ -225,6 +226,7 @@ export function InterviewProjectWorkspace({ project }: { project: InterviewProje
           <section><header><Lightbulb size={16} /><h2>关键洞察</h2></header><ol>{selected.insights.map((insight, index) => <li key={insight}><span>{String(index + 1).padStart(2, "0")}</span><div><p>{insight}</p>{project.study ? <button type="button" disabled={pending || citedInsights.includes(insight)} onClick={() => citeInsight(selected.publicId, insight)}>{citedInsights.includes(insight) ? <><Check size={11} />已引用</> : "加入研究报告"}</button> : null}</div></li>)}</ol></section>
           <section><header><Quote size={16} /><h2>{selected.sessionType === "ai" ? "合成引用" : "访谈引用"}</h2></header>{selected.quotes.map((quote) => <blockquote key={quote}>“{formatQuote(quote)}”</blockquote>)}</section>
           <section className="interview-links"><header><UsersRound size={16} /><h2>研究关联</h2></header>{project.panel ? <Link href={`/panel/${project.panel.publicId}`}>Panel<span>{project.panel.title}</span></Link> : null}{project.study ? <Link href={`/study/${project.study.publicId}`}>研究<span>{project.study.title}</span></Link> : null}{!project.panel && !project.study ? <p>该项目暂未关联 Panel 或研究。</p> : null}</section>
+          <InterviewSessionEvaluation key={selected.publicId} projectPublicId={project.publicId} sessionPublicId={selected.publicId} workflowType={selected.workflowType} />
         </aside>
       </div> : null}
 
