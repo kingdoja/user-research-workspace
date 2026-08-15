@@ -8,6 +8,6 @@ import { listPersonas } from "@/lib/studies";
 export default async function PersonaPage() {
   const viewer = await getViewer();
   if (!viewer) return <ProductPage {...productPages.persona} />;
-  const library = await listPersonas(viewer);
+  const library = await listPersonas(viewer, { includeInactive: true });
   return <WorkspaceShell viewer={viewer}><PersonaLibrary initialData={library} /></WorkspaceShell>;
 }

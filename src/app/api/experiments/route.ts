@@ -8,7 +8,7 @@ const experimentSchema = z.object({
   experimentKey: z.string().trim().min(2).max(80).regex(/^[a-z][a-z0-9-]*$/),
   name: z.string().trim().min(2).max(160),
   description: z.string().trim().max(1000).default(""),
-  workflowType: z.enum(["realtime_agent", "batch_research"]).default("batch_research"),
+  workflowType: z.enum(["realtime_agent", "batch_research", "market_insight"]).default("batch_research"),
   variants: z.array(z.object({
     variantKey: z.string().trim().min(1).max(80).regex(/^[a-z][a-z0-9-]*$/),
     name: z.string().trim().min(1).max(120),

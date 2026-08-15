@@ -24,7 +24,7 @@ export const personaInputSchema = z.object({
 export async function GET() {
   const viewer = await getViewer();
   if (!viewer) return NextResponse.json({ error: "请先登录" }, { status: 401 });
-  return NextResponse.json(await listPersonas(viewer));
+  return NextResponse.json(await listPersonas(viewer, { includeInactive: true }));
 }
 
 export async function POST(request: Request) {

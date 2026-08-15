@@ -8,6 +8,7 @@ import {
   submitTaskInput,
   taskRetryDelaySeconds,
 } from "../src/lib/task-recovery";
+import { createSmokePlanVersion } from "./smoke-plan-fixture";
 
 if (process.env.TASK_RECOVERY_SMOKE_CONFIRM !== "1") {
   throw new Error("Set TASK_RECOVERY_SMOKE_CONFIRM=1 to run the isolated database smoke test.");
@@ -43,10 +44,11 @@ async function main() {
          values ($1, $2, $3, 'Task recovery smoke', '验证故障恢复', 'running', 'execution') returning id::text as id`,
         [`std_${suffix}`, workspaceId, actor.rows[0].user_id],
       );
+      const planVersion = await createSmokePlanVersion(transaction, study.rows[0].id, actor.rows[0].user_id);
       const run = await transaction.query<{ id: string }>(
-        `insert into study_runs (study_id, status, provider, provider_model, started_at)
-         values ($1, 'running', 'smoke', 'smoke-model', now()) returning id::text as id`,
-        [study.rows[0].id],
+        `insert into study_runs (study_id, plan_version_id, status, provider, provider_model, started_at)
+         values ($1, $2, 'running', 'smoke', 'smoke-model', now()) returning id::text as id`,
+        [study.rows[0].id, planVersion.id],
       );
       await transaction.query("insert into study_run_checkpoints (run_id, study_id, cursor, state) values ($1, $2, 1, '{\"completed\":{\"stable\":true}}')", [run.rows[0].id, study.rows[0].id]);
       return { userId: actor.rows[0].user_id, studyId: study.rows[0].id, runId: run.rows[0].id };

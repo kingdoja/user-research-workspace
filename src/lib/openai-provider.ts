@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import { z } from "zod";
-import type { StudyMethod } from "@/lib/studies";
+import type { StudyMethod } from "@/lib/research-types";
 import { getDatabase } from "@/lib/db";
 import {
   collectPublicWebSources,

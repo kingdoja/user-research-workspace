@@ -1,8 +1,28 @@
 import { getDatabase } from "@/lib/db";
 import { createPublicId } from "@/lib/identifiers";
 import type { Viewer } from "@/lib/auth";
+import { createConfirmedPlanVersion } from "@/lib/study-plan-versions";
+import type { StudyMethod, StudyProductLine } from "@/lib/research-types";
+import { retrieveContext, retrieveContextWithQueryable } from "@/lib/context-system";
+import {
+  compileWorkflowDefinition,
+  createConfirmedIntentVersion,
+  createDraftIntentVersion,
+  formatIntentPlanningContext,
+} from "@/lib/intent-workflow-contracts";
+import { createMarketInsightTaskPlan, createResearchTaskPlan, listResearchSkills } from "@/lib/research-harness";
+import { getRuntimeLimits } from "@/lib/runtime-control";
 import { submitTaskInput } from "@/lib/task-recovery";
 import { getReportEvidenceGraph, materializeReportEvidenceGraph, sanitizeReportEvidenceGraphForPublic, type ReportEvidenceGraph } from "@/lib/evidence-graph";
+import {
+  effectiveRetentionStatus,
+  groundStudyPersonasFromEvidence,
+  normalizeGroundingSummary,
+  type PersonaEvidenceConfidence,
+  type PersonaEvidenceStatus,
+  type PersonaGroundingSummary,
+  type PersonaRetentionStatus,
+} from "@/lib/persona-evidence";
 import {
   describeOpenAIError,
   generateProviderFollowupAnswer,
@@ -15,7 +35,7 @@ import {
   type SyntheticPanelResearch,
 } from "@/lib/openai-provider";
 
-export type StudyMethod = "Interview Chat" | "Discussion Chat" | "Scout Agent" | "Fast Insight";
+export type { StudyMethod } from "@/lib/research-types";
 
 export type ClarificationQuestion = {
   id: string;
@@ -33,6 +53,7 @@ export type ClarificationAnswer = {
 export type StudySummary = {
   publicId: string;
   title: string;
+  productLine: StudyProductLine;
   status: string;
   currentStage: string;
   studyType: string;
@@ -52,6 +73,10 @@ export type StudyDetail = StudySummary & {
     createdAt: string;
   }>;
   plan: {
+    version: number;
+    versionPublicId: string | null;
+    schemaVersion: string | null;
+    contentHash: string | null;
     framework: string;
     methods: StudyMethod[];
     personaFilters: {
@@ -64,8 +89,46 @@ export type StudyDetail = StudySummary & {
     status: "draft" | "confirmed" | "rejected";
     source: "local_rules" | "openai";
     providerModel: string | null;
+    promptVersion: string;
     rationale: string;
   };
+  intent: {
+    version: number;
+    publicId: string;
+    schemaVersion: string;
+    lifecycleStatus: "draft" | "confirmed";
+    productLine: StudyProductLine;
+    contentHash: string;
+    objective: string;
+    audience: Record<string, unknown>;
+    budget: Record<string, unknown>;
+    dataScope: Record<string, unknown>;
+    compliance: Record<string, unknown>;
+    requestedMethods: StudyMethod[];
+    assumptions: string[];
+    openQuestions: string[];
+    promptVersion: string;
+    providerModel: string | null;
+    context: {
+      retrievalPublicId: string;
+      purpose: string;
+      policyVersion: string;
+      policyDecision: Record<string, unknown>;
+      citationCount: number;
+    } | null;
+  } | null;
+  workflow: {
+    publicId: string;
+    version: number;
+    schemaVersion: string;
+    workflowType: string;
+    templateVersion: string;
+    compilerVersion: string;
+    contentHash: string;
+    taskCount: number;
+    skillRequirements: Array<{ slug: string; version: number }>;
+    runtimeLimits: Record<string, unknown>;
+  } | null;
   runStatus: string | null;
   runProvider: string | null;
   runModel: string | null;
@@ -78,6 +141,7 @@ export type StudyDetail = StudySummary & {
   runRecoverable: boolean;
   runHistory: Array<{
     id: string;
+    publicId: string;
     attempt: number;
     status: string;
     provider: string | null;
@@ -245,6 +309,15 @@ export type PersonaLibraryItem = StudyDetail["personas"][number] & {
   panels: PersonaPanelUsage[];
   interviewCount: number;
   canEdit: boolean;
+  evidenceStatus: PersonaEvidenceStatus;
+  evidenceConfidence: PersonaEvidenceConfidence;
+  groundingSummary: PersonaGroundingSummary;
+  groundedAt: string | null;
+  retentionStatus: PersonaRetentionStatus;
+  validUntil: string | null;
+  retentionNote: string | null;
+  retentionReviewedAt: string | null;
+  retentionReviewerName: string | null;
 };
 
 export type PersonaInput = {
@@ -291,7 +364,7 @@ function includesAny(brief: string, terms: string[]) {
   return terms.some((term) => normalized.includes(term));
 }
 
-function createClarificationQuestions(brief: string): ClarificationQuestion[] {
+function createClarificationQuestions(brief: string, productLine: StudyProductLine): ClarificationQuestion[] {
   const mobilityStudy = includesAny(brief, ["电动两轮", "电动车", "通勤", "续航", "换购"]);
   const productStudy = includesAny(brief, ["产品", "功能", "研发", "体验", "优化"]);
 
@@ -309,16 +382,20 @@ function createClarificationQuestions(brief: string): ClarificationQuestion[] {
       id: "research_focus",
       label: "研究重点",
       question: "您更希望深入理解哪些方面？",
-      options: mobilityStudy
+      options: productLine === "market_insight"
+        ? ["市场格局与增长驱动", "竞争定位与替代方案", "新兴需求与弱信号", "进入机会与风险"]
+        : mobilityStudy
         ? ["换购决策的完整路径", "续航预期与真实体验差距", "充电与换电场景限制", "品牌、价格与功能选择标准"]
         : ["完整决策路径", "核心痛点与未满足需求", "不同方案的比较标准", "使用体验与改进机会"],
       maxSelect: 2,
     },
     {
       id: "target_audience",
-      label: "目标人群",
-      question: "本次研究应优先覆盖哪类人群？",
-      options: mobilityStudy
+      label: productLine === "market_insight" ? "市场范围" : "目标人群",
+      question: productLine === "market_insight" ? "本次洞察应优先覆盖哪个市场范围？" : "本次研究应优先覆盖哪类人群？",
+      options: productLine === "market_insight"
+        ? ["当前核心市场", "相邻品类与替代方案", "新进入者与前沿市场", "覆盖多个地区或细分市场"]
+        : mobilityStudy
         ? ["一线城市上班族", "新一线与二线城市通勤者", "长距离高频骑行者", "近期正在换购的人群"]
         : ["现有用户", "近期购买或换购者", "潜在用户", "覆盖多个差异化细分群体"],
       maxSelect: 1,
@@ -326,8 +403,13 @@ function createClarificationQuestions(brief: string): ClarificationQuestion[] {
     {
       id: "research_scope",
       label: "证据范围",
-      question: "您希望这次研究如何组合公开资料和 AI 合成 Persona？",
-      options: [
+      question: productLine === "market_insight" ? "您希望这次洞察优先使用哪些证据？" : "您希望这次研究如何组合公开资料和 AI 合成 Persona？",
+      options: productLine === "market_insight" ? [
+        "公开市场、行业与竞品资料",
+        "公开资料 + 社交趋势信号",
+        "公开资料优先，并输出真人研究验证建议",
+        "侧重政策、渠道与市场进入资料",
+      ] : [
         "公开资料 + AI 合成 Persona 模拟访谈",
         "仅使用公开资料，不做 Persona 模拟",
         "公开资料优先，并输出真人研究验证建议",
@@ -408,18 +490,38 @@ export function derivePlan(brief: string) {
   };
 }
 
-export async function createStudy(viewer: Viewer, briefInput: string, sourcePanelPublicId?: string) {
+function normalizeProductLinePlan<T extends ReturnType<typeof derivePlan>>(
+  productLine: StudyProductLine,
+  plan: T,
+): T {
+  if (productLine === "research") return plan;
+  const usesScout = plan.methods.includes("Scout Agent");
+  return {
+    ...plan,
+    studyType: "product_rnd",
+    framework: "Market Landscape + Opportunity Mapping",
+    methods: usesScout ? ["Scout Agent", "Fast Insight"] : ["Fast Insight"],
+    personaFilters: {
+      audience: "由 Brief 与后续澄清确定的市场、品类与竞争范围",
+      source: usesScout ? "公开市场资料 + 社交趋势信号" : "公开市场、行业与竞品资料",
+    },
+    personaCount: 1,
+    estimatedDurationMinutes: usesScout ? 1440 : 240,
+    estimatedTokens: usesScout ? 90000 : 55000,
+    rationale: "以可核查公开证据建立市场格局、竞争信号与机会地图；默认不构建 Persona、不执行合成访谈，并把推断与事实证据分开标记。",
+  } as T;
+}
+
+export async function createStudy(
+  viewer: Viewer,
+  briefInput: string,
+  productLine: StudyProductLine = "research",
+  sourcePanelPublicId?: string,
+) {
   const database = await getDatabase();
   const brief = briefInput.trim();
-  const localPlan = {
-    ...derivePlan(brief),
-    source: "local_rules" as const,
-    responseId: null,
-    model: null,
-    promptVersion: "clarification-draft-v1",
-  };
-  const questions = createClarificationQuestions(brief);
-  const plan = localPlan;
+  const initialPlan = normalizeProductLinePlan(productLine, derivePlan(brief));
+  const questions = createClarificationQuestions(brief, productLine);
   const publicId = createPublicId("std");
   const title = createStudyTitle(brief);
 
@@ -442,9 +544,9 @@ export async function createStudy(viewer: Viewer, briefInput: string, sourcePane
 
     const studyResult = await transaction.query<{ id: string }>(
       `insert into studies (
-         public_id, workspace_id, created_by, title, brief, study_type, status,
+         public_id, workspace_id, created_by, title, brief, product_line, study_type, status,
          current_stage, estimated_tokens, source_panel_id
-       ) values ($1, $2, $3, $4, $5, $6, 'planning', 'clarification', $7, $8)
+       ) values ($1, $2, $3, $4, $5, $6, $7, 'planning', 'clarification', $8, $9)
        returning id::text as id`,
       [
         publicId,
@@ -452,19 +554,42 @@ export async function createStudy(viewer: Viewer, briefInput: string, sourcePane
         viewer.userId,
         title,
         brief,
-        plan.studyType,
-        plan.estimatedTokens,
+        productLine,
+        initialPlan.studyType,
+        initialPlan.estimatedTokens,
         sourcePanelId,
       ],
     );
     const studyId = studyResult.rows[0].id;
+    const context = await retrieveContextWithQueryable(transaction, {
+      workspaceId: viewer.workspaceId,
+      userId: viewer.userId,
+      query: brief,
+      assetTypes: ["core_memory", "team_memory", "research_sample", "persona", "study_context"],
+      scopes: ["user", "workspace", "study"],
+      studyId,
+      purpose: "intent_planning",
+      limit: 8,
+    });
+    const planningContext = formatIntentPlanningContext(context);
+    const plan = normalizeProductLinePlan(productLine, {
+      ...derivePlan([brief, planningContext].filter(Boolean).join("\n\n")),
+      source: "local_rules" as const,
+      responseId: null,
+      model: null,
+      promptVersion: "intent-planning-draft-v1",
+    });
+    await transaction.query(
+      "update studies set study_type = $2, estimated_tokens = $3 where id = $1",
+      [studyId, plan.studyType, plan.estimatedTokens],
+    );
 
     await transaction.query(
       `insert into study_plans (
          study_id, framework, methods, persona_filters, persona_count,
          estimated_duration_minutes, estimated_tokens, source,
-         provider_response_id, provider_model, rationale
-       ) values ($1, $2, $3::jsonb, $4::jsonb, $5, $6, $7, $8, $9, $10, $11)`,
+         provider_response_id, provider_model, prompt_version, rationale
+       ) values ($1, $2, $3::jsonb, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12)`,
       [
         studyId,
         plan.framework,
@@ -476,9 +601,22 @@ export async function createStudy(viewer: Viewer, briefInput: string, sourcePane
         plan.source,
         plan.responseId,
         plan.model,
+        plan.promptVersion,
         plan.rationale,
       ],
     );
+
+    const intentVersion = await createDraftIntentVersion(transaction, {
+      workspaceId: viewer.workspaceId,
+      studyId,
+      brief,
+      productLine,
+      plan,
+      questions,
+      answers: [],
+      context,
+      snapshotReason: "brief_creation",
+    });
 
     await transaction.query(
       `insert into study_messages (study_id, role, content)
@@ -498,9 +636,17 @@ export async function createStudy(viewer: Viewer, briefInput: string, sourcePane
         studyId,
         JSON.stringify({
           intent: plan.studyType,
+          productLine,
           frameworkCandidate: plan.framework,
           audienceCandidate: plan.personaFilters.audience,
           requiresClarification: true,
+          intentVersionPublicId: intentVersion.publicId,
+          intentVersion: intentVersion.version,
+          intentSchemaVersion: intentVersion.schemaVersion,
+          intentContentHash: intentVersion.contentHash,
+          contextRetrievalPublicId: context.retrievalPublicId,
+          contextCitationCount: context.citations.length,
+          contextPolicyDecision: context.policyDecision,
         }),
         JSON.stringify({ questions }),
       ],
@@ -569,13 +715,14 @@ export async function getPanel(viewer: Viewer, publicId: string): Promise<PanelD
     database.query<{
       public_id: string;
       title: string;
+      product_line: StudyProductLine;
       status: string;
       current_stage: string;
       study_type: string;
       methods: StudyMethod[] | string;
       updated_at: string;
     }>(
-      `select studies.public_id, studies.title, studies.status, studies.current_stage,
+      `select studies.public_id, studies.title, studies.product_line, studies.status, studies.current_stage,
               studies.study_type, coalesce(study_plans.methods, '[]'::jsonb) as methods,
               studies.updated_at::text as updated_at
        from studies
@@ -613,6 +760,7 @@ export async function getPanel(viewer: Viewer, publicId: string): Promise<PanelD
     projects: projectsResult.rows.map((project) => ({
       publicId: project.public_id,
       title: project.title,
+      productLine: project.product_line,
       status: project.status,
       currentStage: project.current_stage,
       studyType: project.study_type,
@@ -622,7 +770,7 @@ export async function getPanel(viewer: Viewer, publicId: string): Promise<PanelD
   };
 }
 
-export async function listPersonas(viewer: Viewer): Promise<{
+export async function listPersonas(viewer: Viewer, options: { includeInactive?: boolean } = {}): Promise<{
   personas: PersonaLibraryItem[];
   panels: PersonaPanelUsage[];
 }> {
@@ -642,11 +790,25 @@ export async function listPersonas(viewer: Viewer): Promise<{
       study_title: string | null;
       panels: PersonaPanelUsage[] | string;
       interview_count: number;
+      evidence_status: PersonaEvidenceStatus;
+      evidence_confidence: PersonaEvidenceConfidence;
+      grounding_summary: PersonaGroundingSummary | string;
+      grounded_at: string | null;
+      retention_status: Exclude<PersonaRetentionStatus, "expired">;
+      valid_until: string | null;
+      retention_note: string | null;
+      retention_reviewed_at: string | null;
+      retention_reviewer_name: string | null;
     }>(
       `select persona.public_id, persona.name, persona.archetype, persona.profile,
               persona.source, persona.visibility, persona.created_at::text as created_at,
               persona.updated_at::text as updated_at, persona.created_by::text as created_by,
               studies.public_id as study_public_id, studies.title as study_title,
+              persona.evidence_status, persona.evidence_confidence, persona.grounding_summary,
+              persona.grounded_at::text as grounded_at, persona.retention_status,
+              persona.valid_until::text as valid_until, persona.retention_note,
+              persona.retention_reviewed_at::text as retention_reviewed_at,
+              retention_reviewer.display_name as retention_reviewer_name,
               coalesce(jsonb_agg(distinct jsonb_build_object(
                 'publicId', panels.public_id, 'title', panels.title
               )) filter (where panels.id is not null), '[]'::jsonb) as panels,
@@ -657,11 +819,16 @@ export async function listPersonas(viewer: Viewer): Promise<{
        left join study_panels panels on panels.id = members.panel_id
        left join study_interviews interviews on interviews.persona_id = persona.id
        left join interview_sessions workspace_interviews on workspace_interviews.persona_id = persona.id
+       left join users retention_reviewer on retention_reviewer.id = persona.retention_reviewed_by
        where persona.workspace_id = $1
          and (persona.visibility = 'workspace' or persona.created_by = $2)
-       group by persona.id, studies.public_id, studies.title
+         and ($3::boolean or (
+           persona.retention_status = 'retained'
+           and (persona.valid_until is null or persona.valid_until > now())
+         ))
+       group by persona.id, studies.public_id, studies.title, retention_reviewer.id
        order by persona.updated_at desc, persona.id desc`,
-      [viewer.workspaceId, viewer.userId],
+      [viewer.workspaceId, viewer.userId, options.includeInactive === true],
     ),
     database.query<{ public_id: string; title: string }>(
       `select study_panels.public_id, study_panels.title
@@ -689,6 +856,15 @@ export async function listPersonas(viewer: Viewer): Promise<{
       panels: typeof persona.panels === "string" ? JSON.parse(persona.panels) : persona.panels,
       interviewCount: persona.interview_count,
       canEdit: persona.created_by === viewer.userId || viewer.role === "owner" || viewer.role === "admin",
+      evidenceStatus: persona.evidence_status,
+      evidenceConfidence: persona.evidence_confidence,
+      groundingSummary: normalizeGroundingSummary(persona.grounding_summary),
+      groundedAt: persona.grounded_at,
+      retentionStatus: effectiveRetentionStatus(persona.retention_status, persona.valid_until),
+      validUntil: persona.valid_until,
+      retentionNote: persona.retention_note,
+      retentionReviewedAt: persona.retention_reviewed_at,
+      retentionReviewerName: persona.retention_reviewer_name,
     })),
     panels: panelsResult.rows.map((panel) => ({ publicId: panel.public_id, title: panel.title })),
   };
@@ -742,6 +918,15 @@ export async function createPersona(viewer: Viewer, input: PersonaInput) {
        returning id::text as id`,
       [publicId, viewer.workspaceId, viewer.userId, profile.name, profile.archetype, JSON.stringify(profile), input.visibility],
     );
+    await transaction.query(
+      `insert into persona_governance_events (
+         public_id, workspace_id, persona_id, actor_user_id, event_type, payload
+       ) values ($1, $2, $3, $4, 'retention.retained', $5::jsonb)`,
+      [
+        createPublicId("pge"), viewer.workspaceId, personaResult.rows[0].id, viewer.userId,
+        JSON.stringify({ source: "manual_create", retentionStatus: "retained" }),
+      ],
+    );
     for (const panelId of panelIds) {
       await transaction.query(
         `insert into study_panel_members (panel_id, persona_id, position)
@@ -770,8 +955,19 @@ export async function updatePersona(viewer: Viewer, publicId: string, input: Per
     const panelIds = await resolvePanelIds(transaction, viewer, input.addToPanelPublicIds);
     await transaction.query(
       `update study_personas set name = $2, archetype = $3, profile = $4::jsonb,
-              visibility = $5, updated_at = now() where id = $1`,
+              visibility = $5, evidence_status = 'ungrounded', evidence_confidence = 'low',
+              grounding_summary = '{}'::jsonb, grounded_at = null, updated_at = now() where id = $1`,
       [persona.id, profile.name, profile.archetype, JSON.stringify(profile), input.visibility],
+    );
+    await transaction.query("delete from persona_evidence_links where persona_id = $1", [persona.id]);
+    await transaction.query(
+      `insert into persona_governance_events (
+         public_id, workspace_id, persona_id, actor_user_id, event_type, payload
+       ) values ($1, $2, $3, $4, 'evidence.invalidated', $5::jsonb)`,
+      [
+        createPublicId("pge"), viewer.workspaceId, persona.id, viewer.userId,
+        JSON.stringify({ reason: "profile_edited" }),
+      ],
     );
     for (const panelId of panelIds) {
       await transaction.query(
@@ -822,11 +1018,12 @@ export async function submitStudyClarification(
   const result = await database.query<{
     id: string;
     brief: string;
+    product_line: StudyProductLine;
     plan_status: string;
     completed: boolean;
     questions_payload: { questions?: ClarificationQuestion[] } | string | null;
   }>(
-    `select studies.id::text as id, studies.brief, study_plans.status as plan_status,
+    `select studies.id::text as id, studies.brief, studies.product_line, study_plans.status as plan_status,
        exists (
          select 1 from study_events completed
          where completed.study_id = studies.id and completed.event_type = 'clarification.completed'
@@ -866,26 +1063,40 @@ export async function submitStudyClarification(
   if (!valid) return "invalid_answers" as const;
 
   const clarificationContext = formatClarificationAnswers(questions, answers);
+  const enrichedBrief = `${study.brief}\n${clarificationContext}`;
+  const context = await retrieveContext({
+    workspaceId: viewer.workspaceId,
+    userId: viewer.userId,
+    query: enrichedBrief,
+    assetTypes: ["core_memory", "team_memory", "research_sample", "persona", "study_context"],
+    scopes: ["user", "workspace", "study"],
+    studyId: study.id,
+    purpose: "intent_planning",
+    limit: 8,
+  });
+  const planningContext = formatIntentPlanningContext(context);
+  const governedPlanningInput = [clarificationContext, planningContext
+    ? `已批准且允许用于 intent_planning 的 Context：\n${planningContext}`
+    : ""].filter(Boolean).join("\n\n");
   const providerStatus = getOpenAIProviderStatus();
   let providerFailure: ReturnType<typeof describeOpenAIError> | null = null;
   let providerPlan: Awaited<ReturnType<typeof generateProviderStudyPlan>> | null = null;
 
   if (providerStatus.configured) {
     try {
-      providerPlan = await generateProviderStudyPlan(study.brief, viewer.userPublicId, clarificationContext);
+      providerPlan = await generateProviderStudyPlan(study.brief, viewer.userPublicId, governedPlanningInput);
     } catch (error) {
       providerFailure = describeOpenAIError(error);
     }
   }
 
-  const enrichedBrief = `${study.brief}\n${clarificationContext}`;
-  const plan = providerPlan ?? {
-    ...derivePlan(enrichedBrief),
-    source: "local_rules" as const,
-    responseId: null,
-    model: null,
-    promptVersion: "clarified-local-plan-v1",
-  };
+  const plan = normalizeProductLinePlan(study.product_line, providerPlan ?? {
+      ...derivePlan([enrichedBrief, planningContext].filter(Boolean).join("\n\n")),
+      source: "local_rules" as const,
+      responseId: null,
+      model: null,
+      promptVersion: "clarified-local-plan-v1",
+    });
 
   await database.transaction(async (transaction) => {
     const lock = await transaction.query<{ completed: boolean }>(
@@ -905,15 +1116,26 @@ export async function submitStudyClarification(
          persona_filters = $4::jsonb, persona_count = $5,
          estimated_duration_minutes = $6, estimated_tokens = $7,
          source = $8, provider_response_id = $9, provider_model = $10,
-         rationale = $11, updated_at = now()
+         prompt_version = $11, rationale = $12, updated_at = now()
        where study_id = $1`,
       [
         study.id, plan.framework, JSON.stringify(plan.methods),
         JSON.stringify(plan.personaFilters), plan.personaCount,
         plan.estimatedDurationMinutes, plan.estimatedTokens, plan.source,
-        plan.responseId, plan.model, plan.rationale,
+        plan.responseId, plan.model, plan.promptVersion, plan.rationale,
       ],
     );
+    const intentVersion = await createDraftIntentVersion(transaction, {
+      workspaceId: viewer.workspaceId,
+      studyId: study.id,
+      brief: study.brief,
+      productLine: study.product_line,
+      plan,
+      questions,
+      answers,
+      context,
+      snapshotReason: "clarification",
+    });
     await transaction.query(
       `update studies set study_type = $2, status = 'awaiting_confirmation',
          current_stage = 'confirmation', estimated_tokens = $3, updated_at = now()
@@ -945,6 +1167,12 @@ export async function submitStudyClarification(
           responseId: plan.responseId,
           model: plan.model,
           fallbackError: providerFailure,
+          intentVersionPublicId: intentVersion.publicId,
+          intentVersion: intentVersion.version,
+          intentContentHash: intentVersion.contentHash,
+          contextRetrievalPublicId: context.retrievalPublicId,
+          contextCitationCount: context.citations.length,
+          contextPolicyDecision: context.policyDecision,
         }),
       ],
     );
@@ -1190,8 +1418,19 @@ export async function confirmStudyPlan(viewer: Viewer, publicId: string) {
   const database = await getDatabase();
 
   return database.transaction(async (transaction) => {
-    const result = await transaction.query<{ id: string; plan_status: string }>(
-      `select studies.id::text as id, study_plans.status as plan_status
+    const result = await transaction.query<{
+      id: string;
+      workspace_id: string;
+      brief: string;
+      product_line: StudyProductLine;
+      study_type: string;
+      plan_status: string;
+      methods: StudyMethod[] | string;
+      persona_count: number;
+    }>(
+      `select studies.id::text as id, studies.workspace_id::text as workspace_id,
+              studies.brief, studies.product_line, studies.study_type, study_plans.status as plan_status,
+              study_plans.methods, study_plans.persona_count
        from studies
        join study_plans on study_plans.study_id = studies.id
        where studies.public_id = $1 and studies.workspace_id = $2
@@ -1208,10 +1447,48 @@ export async function confirmStudyPlan(viewer: Viewer, publicId: string) {
       return "already_confirmed" as const;
     }
 
-    await transaction.query(
-      "update study_plans set status = 'confirmed', confirmed_at = now(), updated_at = now() where study_id = $1",
-      [study.id],
-    );
+    const intentVersion = await createConfirmedIntentVersion(transaction, study.id, viewer.userId);
+    const planVersion = await createConfirmedPlanVersion(transaction, study.id, viewer.userId, intentVersion.id);
+    const methods = typeof study.methods === "string" ? JSON.parse(study.methods) as StudyMethod[] : study.methods;
+    const taskGraph = study.product_line === "market_insight"
+      ? createMarketInsightTaskPlan({ methods, brief: study.brief })
+      : createResearchTaskPlan({
+          studyType: study.study_type,
+          methods,
+          brief: study.brief,
+          personaCount: study.persona_count,
+        });
+    const workflowContract = study.product_line === "market_insight" ? {
+      workflowType: "market_insight" as const,
+      templateKey: "market_insight_dag",
+      templateVersion: "market-insight-dag-v1",
+      outputContracts: ["market_landscape", "opportunity_map", "competitive_signals", "evidence", "report"],
+    } : {
+      workflowType: "batch_research" as const,
+      templateKey: "research_dag",
+      templateVersion: "research-dag-v3-dynamic",
+      outputContracts: ["research_plan", "evidence", "personas", "panel", "interviews", "report"],
+    };
+    const skillVersions = new Map(listResearchSkills().map((skill) => [skill.slug, skill.version]));
+    const skillRequirements = [...new Set(taskGraph.map((task) => task.toolName))].map((slug) => ({
+      slug,
+      version: skillVersions.get(slug) ?? 1,
+    }));
+    const limits = getRuntimeLimits();
+    const workflow = await compileWorkflowDefinition(transaction, {
+      workspaceId: study.workspace_id,
+      studyId: study.id,
+      intentVersionId: intentVersion.id,
+      planVersionId: planVersion.id,
+      taskGraph,
+      skillRequirements,
+      runtimeLimits: {
+        runTimeoutSeconds: limits.runTimeoutSeconds,
+        taskTimeoutSeconds: limits.taskTimeoutSeconds,
+      },
+      ...workflowContract,
+      compiledBy: viewer.userId,
+    });
     await transaction.query(
       `update studies
        set status = 'queued', current_stage = 'execution', updated_at = now()
@@ -1219,15 +1496,36 @@ export async function confirmStudyPlan(viewer: Viewer, publicId: string) {
       [study.id],
     );
     const runResult = await transaction.query<{ id: string }>(
-      `insert into study_runs (study_id, status)
-       values ($1, 'awaiting_provider')
+      `insert into study_runs (
+         study_id, plan_version_id, intent_version_id, workflow_definition_id,
+         workflow_type, workflow_version, timeout_seconds, status
+       ) values ($1, $2, $3, $4, $5, $6, $7, 'awaiting_provider')
        returning id::text as id`,
-      [study.id],
+      [
+        study.id, planVersion.id, intentVersion.id, workflow.id,
+        workflow.workflowType, workflow.templateVersion, limits.runTimeoutSeconds,
+      ],
     );
     await transaction.query(
-      `insert into study_events (study_id, run_id, event_type)
-       values ($1, $2, 'plan.confirmed')`,
-      [study.id, runResult.rows[0].id],
+      `insert into study_events (study_id, run_id, event_type, payload)
+       values ($1, $2, 'plan.confirmed', $3::jsonb)`,
+      [study.id, runResult.rows[0].id, JSON.stringify({
+        planVersionPublicId: planVersion.publicId,
+        version: planVersion.version,
+        schemaVersion: planVersion.schemaVersion,
+        contentHash: planVersion.contentHash,
+        intentVersionPublicId: intentVersion.publicId,
+        intentVersion: intentVersion.version,
+        intentSchemaVersion: intentVersion.schemaVersion,
+        intentContentHash: intentVersion.contentHash,
+        contextRetrievalId: intentVersion.contextRetrievalId,
+        workflowDefinitionPublicId: workflow.publicId,
+        workflowDefinitionVersion: workflow.version,
+        productLine: study.product_line,
+        workflowType: workflow.workflowType,
+        workflowSchemaVersion: workflow.schemaVersion,
+        workflowContentHash: workflow.contentHash,
+      })],
     );
 
     return "confirmed" as const;
@@ -1283,23 +1581,23 @@ export async function executeStudyRun(publicId: string, workspaceId: string) {
     `select
        studies.id::text as study_id,
        studies.brief,
-       study_plans.framework,
-       study_plans.methods,
-       study_plans.persona_filters,
+       locked_plan.framework,
+       locked_plan.methods,
+       locked_plan.persona_filters,
        users.public_id as user_public_id,
        studies.created_by::text as created_by,
        latest_run.id as run_id,
        latest_run.status as run_status
      from studies
-     join study_plans on study_plans.study_id = studies.id
      join users on users.id = studies.created_by
      left join lateral (
-       select study_runs.id::text as id, study_runs.status
+       select study_runs.id::text as id, study_runs.status, study_runs.plan_version_id
        from study_runs
        where study_runs.study_id = studies.id
        order by study_runs.created_at desc, study_runs.id desc
        limit 1
      ) latest_run on true
+     left join study_plan_versions locked_plan on locked_plan.id = latest_run.plan_version_id
      where studies.public_id = $1 and studies.workspace_id = $2
      limit 1`,
     [publicId, workspaceId],
@@ -1368,19 +1666,21 @@ export async function executeStudyRun(publicId: string, workspaceId: string) {
 
     await database.transaction(async (transaction) => {
       const personaIdsByName = new Map<string, string>();
+      const personaGroundingCandidates: Array<{ publicId: string; name: string }> = [];
 
       for (const persona of providerResult.panelResearch.personas) {
-        const personaResult = await transaction.query<{ id: string }>(
+        const personaResult = await transaction.query<{ id: string; public_id: string }>(
           `insert into study_personas (
-             public_id, workspace_id, created_by, study_id, run_id, name, archetype, profile
-           ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
-           returning id::text as id`,
+             public_id, workspace_id, created_by, study_id, run_id, name, archetype, profile, retention_status
+           ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 'pending')
+           returning id::text as id, public_id`,
           [
             createPublicId("per"), workspaceId, study.created_by, study.study_id, study.run_id,
             persona.name, persona.archetype, JSON.stringify(persona),
           ],
         );
         personaIdsByName.set(persona.name, personaResult.rows[0].id);
+        personaGroundingCandidates.push({ publicId: personaResult.rows[0].public_id, name: persona.name });
       }
 
       const panelResult = await transaction.query<{ id: string }>(
@@ -1447,6 +1747,12 @@ export async function executeStudyRun(publicId: string, workspaceId: string) {
         providerModel: providerResult.model,
         providerResponseId: providerResult.responseId,
         promptVersion: providerResult.promptVersion,
+      });
+      await groundStudyPersonasFromEvidence(transaction, {
+        workspaceId,
+        studyId: study.study_id,
+        runId: study.run_id,
+        personas: personaGroundingCandidates,
       });
       await transaction.query(
         `update study_runs
@@ -1541,6 +1847,12 @@ export async function queueStudyRun(viewer: Viewer, publicId: string) {
     const result = await transaction.query<{
       study_id: string;
       plan_status: string;
+      current_plan_version_id: string | null;
+      current_intent_version_id: string | null;
+      workflow_definition_id: string | null;
+      workflow_type: string | null;
+      workflow_version: string | null;
+      run_timeout_seconds: number | null;
       run_id: string | null;
       run_status: string | null;
       run_created_at: string | null;
@@ -1550,6 +1862,12 @@ export async function queueStudyRun(viewer: Viewer, publicId: string) {
       `select
          studies.id::text as study_id,
          study_plans.status as plan_status,
+         study_plans.current_plan_version_id::text as current_plan_version_id,
+         current_plan.intent_version_id::text as current_intent_version_id,
+         workflow.id::text as workflow_definition_id,
+         workflow.workflow_type,
+         workflow.template_version as workflow_version,
+         (workflow.runtime_limits ->> 'runTimeoutSeconds')::int as run_timeout_seconds,
          latest_run.id as run_id,
          latest_run.status as run_status,
          latest_run.created_at::text as run_created_at,
@@ -1557,6 +1875,15 @@ export async function queueStudyRun(viewer: Viewer, publicId: string) {
          latest_run.last_event_at::text as run_last_event_at
        from studies
        join study_plans on study_plans.study_id = studies.id
+       left join study_plan_versions current_plan on current_plan.id = study_plans.current_plan_version_id
+       left join lateral (
+         select definition.id, definition.workflow_type, definition.template_version, definition.runtime_limits
+         from workflow_definitions definition
+         where definition.study_id = studies.id
+           and definition.plan_version_id = current_plan.id
+           and definition.intent_version_id = current_plan.intent_version_id
+         order by definition.version desc limit 1
+       ) workflow on true
        left join lateral (
          select study_runs.id::text as id, study_runs.status, study_runs.created_at, study_runs.started_at,
                 greatest(
@@ -1580,6 +1907,10 @@ export async function queueStudyRun(viewer: Viewer, publicId: string) {
 
     if (study.plan_status !== "confirmed") {
       return "plan_not_confirmed" as const;
+    }
+
+    if (!study.current_plan_version_id) {
+      throw new Error("CONFIRMED_PLAN_VERSION_MISSING");
     }
 
     if (study.run_status === "completed") {
@@ -1634,10 +1965,17 @@ export async function queueStudyRun(viewer: Viewer, publicId: string) {
       );
     } else {
       const runResult = await transaction.query<{ id: string }>(
-        `insert into study_runs (study_id, status, provider, provider_model)
-         values ($1, 'queued', $2, $3)
+        `insert into study_runs (
+           study_id, plan_version_id, intent_version_id, workflow_definition_id,
+           workflow_type, workflow_version, timeout_seconds, status, provider, provider_model
+         ) values ($1, $2, $3, $4, coalesce($5, 'batch_research'),
+                   coalesce($6, 'research-dag-v3-dynamic'), coalesce($7, 1800), 'queued', $8, $9)
          returning id::text as id`,
-        [study.study_id, providerStatus.providerName, providerStatus.researchModel],
+        [
+          study.study_id, study.current_plan_version_id, study.current_intent_version_id,
+          study.workflow_definition_id, study.workflow_type, study.workflow_version,
+          study.run_timeout_seconds, providerStatus.providerName, providerStatus.researchModel,
+        ],
       );
       queuedRunId = runResult.rows[0].id;
     }
@@ -1678,6 +2016,7 @@ export async function listStudies(viewer: Viewer, limit = 8): Promise<StudySumma
   const result = await database.query<{
     public_id: string;
     title: string;
+    product_line: StudyProductLine;
     status: string;
     current_stage: string;
     study_type: string;
@@ -1687,6 +2026,7 @@ export async function listStudies(viewer: Viewer, limit = 8): Promise<StudySumma
     `select
        studies.public_id,
        studies.title,
+       studies.product_line,
        studies.status,
        studies.current_stage,
        studies.study_type,
@@ -1703,6 +2043,7 @@ export async function listStudies(viewer: Viewer, limit = 8): Promise<StudySumma
   return result.rows.map((row) => ({
     publicId: row.public_id,
     title: row.title,
+    productLine: row.product_line,
     status: row.status,
     currentStage: row.current_stage,
     studyType: row.study_type,
@@ -1718,11 +2059,16 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
     public_id: string;
     title: string;
     brief: string;
+    product_line: StudyProductLine;
     status: string;
     current_stage: string;
     study_type: string;
     estimated_tokens: string;
     methods: StudyMethod[] | string;
+    plan_version: number;
+    plan_version_public_id: string | null;
+    plan_schema_version: string | null;
+    plan_content_hash: string | null;
     framework: string;
     persona_filters: StudyDetail["plan"]["personaFilters"] | string;
     persona_count: number;
@@ -1731,6 +2077,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
     plan_status: StudyDetail["plan"]["status"];
     plan_source: StudyDetail["plan"]["source"];
     plan_provider_model: string | null;
+    plan_prompt_version: string;
     plan_rationale: string;
     run_id: string | null;
     run_attempt: number | null;
@@ -1756,11 +2103,16 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
        studies.public_id,
        studies.title,
        studies.brief,
+       studies.product_line,
        studies.status,
        studies.current_stage,
        studies.study_type,
        studies.estimated_tokens::text as estimated_tokens,
        study_plans.methods,
+       study_plans.version as plan_version,
+       current_plan.public_id as plan_version_public_id,
+       current_plan.schema_version as plan_schema_version,
+       current_plan.content_hash as plan_content_hash,
        study_plans.framework,
        study_plans.persona_filters,
        study_plans.persona_count,
@@ -1769,6 +2121,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
        study_plans.status as plan_status,
        study_plans.source as plan_source,
        study_plans.provider_model as plan_provider_model,
+       study_plans.prompt_version as plan_prompt_version,
        study_plans.rationale as plan_rationale,
        latest_run.id::text as run_id,
        latest_run.attempt as run_attempt,
@@ -1790,6 +2143,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
        studies.updated_at::text as updated_at
      from studies
      join study_plans on study_plans.study_id = studies.id
+     left join study_plan_versions current_plan on current_plan.id = study_plans.current_plan_version_id
      left join reports on reports.study_id = studies.id
      left join lateral (
        select study_runs.id, study_runs.status, study_runs.provider, study_runs.provider_model,
@@ -1814,7 +2168,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
     return null;
   }
 
-  const [messagesResult, eventsResult, personasResult, panelResult, interviewsResult, runsResult, tasksResult, attemptsResult, inputsResult, artifactsResult, decisionsResult, evidenceGraph] = await Promise.all([
+  const [messagesResult, eventsResult, personasResult, panelResult, interviewsResult, runsResult, tasksResult, attemptsResult, inputsResult, artifactsResult, decisionsResult, evidenceGraph, intentResult, workflowResult] = await Promise.all([
     database.query<{
     id: string;
     role: StudyDetail["messages"][number]["role"];
@@ -1892,6 +2246,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
     ),
     database.query<{
       id: string;
+      public_id: string;
       status: string;
       provider: string | null;
       provider_model: string | null;
@@ -1903,7 +2258,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
       completed_steps: number;
       total_steps: number;
     }>(
-      `select r.id::text as id, r.status, r.provider, r.provider_model, r.error_message,
+      `select r.id::text as id, r.public_id, r.status, r.provider, r.provider_model, r.error_message,
               r.created_at::text as created_at, r.started_at::text as started_at,
               r.finished_at::text as finished_at,
               count(e.id)::int as event_count,
@@ -2058,6 +2413,46 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
       [row.id, row.run_id],
     ),
     row.report_id ? getReportEvidenceGraph(database, row.report_id) : Promise.resolve(null),
+    database.query<{
+      public_id: string; version: number; schema_version: string;
+      lifecycle_status: "draft" | "confirmed"; product_line: StudyProductLine; content_hash: string; objective: string;
+      audience: Record<string, unknown> | string; budget: Record<string, unknown> | string;
+      data_scope: Record<string, unknown> | string; compliance: Record<string, unknown> | string;
+      requested_methods: StudyMethod[] | string; assumptions: string[] | string;
+      open_questions: string[] | string; prompt_version: string; provider_model: string | null;
+      retrieval_public_id: string | null; retrieval_purpose: string | null;
+      retrieval_policy_version: string | null; retrieval_policy_decision: Record<string, unknown> | string | null;
+      citation_count: number;
+    }>(
+      `select intent.public_id, intent.version, intent.schema_version, intent.lifecycle_status,
+              intent.product_line, intent.content_hash, intent.objective, intent.audience, intent.budget,
+              intent.data_scope, intent.compliance, intent.requested_methods, intent.assumptions,
+              intent.open_questions, intent.prompt_version, intent.provider_model,
+              retrieval.public_id as retrieval_public_id, retrieval.purpose as retrieval_purpose,
+              retrieval.policy_version as retrieval_policy_version,
+              retrieval.policy_decision as retrieval_policy_decision,
+              coalesce((select count(*) from context_retrieval_items item where item.retrieval_id = retrieval.id), 0)::int as citation_count
+       from studies study
+       join study_intent_versions intent on intent.id = study.current_intent_version_id
+       left join context_retrievals retrieval on retrieval.id = intent.context_retrieval_id
+       where study.id = $1 limit 1`,
+      [row.id],
+    ),
+    database.query<{
+      public_id: string; version: number; schema_version: string; workflow_type: string;
+      template_version: string; compiler_version: string; content_hash: string;
+      task_count: number; skill_requirements: Array<{ slug: string; version: number }> | string;
+      runtime_limits: Record<string, unknown> | string;
+    }>(
+      `select definition.public_id, definition.version, definition.schema_version,
+              definition.workflow_type, definition.template_version, definition.compiler_version,
+              definition.content_hash, jsonb_array_length(definition.task_graph)::int as task_count,
+              definition.skill_requirements, definition.runtime_limits
+       from workflow_definitions definition
+       where definition.study_id = $1
+       order by definition.version desc limit 1`,
+      [row.id],
+    ),
   ]);
 
   const methods = typeof row.methods === "string" ? JSON.parse(row.methods) : row.methods;
@@ -2078,6 +2473,8 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
   const runRecoverable = (row.run_status === "queued" || row.run_status === "running")
     && runActiveSince !== null
     && Date.now() - new Date(runActiveSince).getTime() > 10 * 60 * 1000;
+  const intent = intentResult.rows[0];
+  const workflow = workflowResult.rows[0];
   const attemptsByTask = new Map<string, StudyDetail["tasks"][number]["attempts"]>();
   for (const attempt of attemptsResult.rows) {
     const entries = attemptsByTask.get(attempt.task_public_id) ?? [];
@@ -2103,6 +2500,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
   return {
     publicId: row.public_id,
     title: row.title,
+    productLine: row.product_line,
     brief: row.brief,
     status: row.status,
     currentStage: row.current_stage,
@@ -2119,6 +2517,10 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
       createdAt: message.created_at,
     })),
     plan: {
+      version: row.plan_version,
+      versionPublicId: row.plan_version_public_id,
+      schemaVersion: row.plan_schema_version,
+      contentHash: row.plan_content_hash,
       framework: row.framework,
       methods,
       personaFilters,
@@ -2128,8 +2530,54 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
       status: row.plan_status,
       source: row.plan_source,
       providerModel: row.plan_provider_model,
+      promptVersion: row.plan_prompt_version,
       rationale: row.plan_rationale,
     },
+    intent: intent ? {
+      version: intent.version,
+      publicId: intent.public_id,
+      schemaVersion: intent.schema_version,
+      lifecycleStatus: intent.lifecycle_status,
+      productLine: intent.product_line,
+      contentHash: intent.content_hash,
+      objective: intent.objective,
+      audience: typeof intent.audience === "string" ? JSON.parse(intent.audience) : intent.audience,
+      budget: typeof intent.budget === "string" ? JSON.parse(intent.budget) : intent.budget,
+      dataScope: typeof intent.data_scope === "string" ? JSON.parse(intent.data_scope) : intent.data_scope,
+      compliance: typeof intent.compliance === "string" ? JSON.parse(intent.compliance) : intent.compliance,
+      requestedMethods: typeof intent.requested_methods === "string" ? JSON.parse(intent.requested_methods) : intent.requested_methods,
+      assumptions: typeof intent.assumptions === "string" ? JSON.parse(intent.assumptions) : intent.assumptions,
+      openQuestions: typeof intent.open_questions === "string" ? JSON.parse(intent.open_questions) : intent.open_questions,
+      promptVersion: intent.prompt_version,
+      providerModel: intent.provider_model,
+      context: intent.retrieval_public_id ? {
+        retrievalPublicId: intent.retrieval_public_id,
+        purpose: intent.retrieval_purpose ?? "intent_planning",
+        policyVersion: intent.retrieval_policy_version ?? "memory-policy-v1",
+        policyDecision: intent.retrieval_policy_decision
+          ? typeof intent.retrieval_policy_decision === "string"
+            ? JSON.parse(intent.retrieval_policy_decision)
+            : intent.retrieval_policy_decision
+          : {},
+        citationCount: intent.citation_count,
+      } : null,
+    } : null,
+    workflow: workflow ? {
+      publicId: workflow.public_id,
+      version: workflow.version,
+      schemaVersion: workflow.schema_version,
+      workflowType: workflow.workflow_type,
+      templateVersion: workflow.template_version,
+      compilerVersion: workflow.compiler_version,
+      contentHash: workflow.content_hash,
+      taskCount: workflow.task_count,
+      skillRequirements: typeof workflow.skill_requirements === "string"
+        ? JSON.parse(workflow.skill_requirements)
+        : workflow.skill_requirements,
+      runtimeLimits: typeof workflow.runtime_limits === "string"
+        ? JSON.parse(workflow.runtime_limits)
+        : workflow.runtime_limits,
+    } : null,
     runStatus: row.run_status,
     runProvider: row.run_provider,
     runModel: row.run_model,
@@ -2142,6 +2590,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
     runRecoverable,
     runHistory: runsResult.rows.map((run, index) => ({
       id: run.id,
+      publicId: run.public_id,
       attempt: index + 1,
       status: run.status,
       provider: run.provider,

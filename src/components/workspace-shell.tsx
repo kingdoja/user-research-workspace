@@ -3,7 +3,9 @@
 import {
   BookOpenText,
   Bot,
+  Blocks,
   Coins,
+  Database,
   Files,
   FlaskConical,
   Gauge,
@@ -25,6 +27,8 @@ const primaryNavigation = [
 ];
 
 const productNavigation = [
+  { href: "/context", label: "Context 资产", icon: Database },
+  { href: "/skills", label: "Skills", icon: Blocks },
   { href: "/persona", label: "AI Persona", icon: Bot },
   { href: "/interview", label: "AI 访谈", icon: MessageCircleMore },
   { href: "/interview/experiments", label: "访谈实验", icon: Gauge },

@@ -15,6 +15,7 @@ export async function POST(request: Request) {
     query: parsed.data.query,
     assetTypes: parsed.data.assetTypes,
     scopes: parsed.data.scopes,
+    purpose: parsed.data.purpose,
     limit: parsed.data.limit,
   }));
 }

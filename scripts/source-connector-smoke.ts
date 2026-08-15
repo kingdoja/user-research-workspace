@@ -10,6 +10,7 @@ import {
   summarizeSourceConnectorAudit,
   type SourceCandidate,
 } from "../src/lib/source-connectors";
+import { createSmokePlanVersion } from "./smoke-plan-fixture";
 
 if (process.env.SOURCE_CONNECTOR_SMOKE_CONFIRM !== "1") {
   throw new Error("Set SOURCE_CONNECTOR_SMOKE_CONFIRM=1 to run the isolated database smoke test.");
@@ -102,10 +103,11 @@ async function main() {
          values ($1, $2, $3, 'Source connector smoke', 'Verify public source audit', 'running', 'execution') returning id::text as id`,
         [`std_${suffix}`, workspaceId, actor.rows[0].user_id],
       );
+      const planVersion = await createSmokePlanVersion(transaction, study.rows[0].id, actor.rows[0].user_id);
       const run = await transaction.query<{ id: string }>(
-        `insert into study_runs (study_id, status, provider, provider_model, started_at)
-         values ($1, 'running', 'smoke', 'smoke-model', now()) returning id::text as id`,
-        [study.rows[0].id],
+        `insert into study_runs (study_id, plan_version_id, status, provider, provider_model, started_at)
+         values ($1, $2, 'running', 'smoke', 'smoke-model', now()) returning id::text as id`,
+        [study.rows[0].id, planVersion.id],
       );
       return { studyId: study.rows[0].id, runId: run.rows[0].id };
     });

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { closeDatabase, getDatabase } from "../src/lib/db";
 import { evaluateReasoningCheckpoint } from "../src/lib/reasoning-runtime";
+import { createSmokePlanVersion } from "./smoke-plan-fixture";
 
 if (process.env.REASONING_RUNTIME_SMOKE_CONFIRM !== "1") {
   throw new Error("Set REASONING_RUNTIME_SMOKE_CONFIRM=1 to run the isolated database smoke test.");
@@ -48,10 +49,11 @@ async function main() {
          values ($1, $2, $3, 'Reasoning smoke', '验证动态任务决策', 'running', 'execution') returning id::text as id`,
         [`std_${suffix}`, workspaceId, actor.rows[0].user_id],
       );
+      const planVersion = await createSmokePlanVersion(transaction, study.rows[0].id, actor.rows[0].user_id);
       const run = await transaction.query<{ id: string }>(
-        `insert into study_runs (study_id, status, provider, provider_model, started_at)
-         values ($1, 'running', 'smoke', 'smoke-model', now()) returning id::text as id`,
-        [study.rows[0].id],
+        `insert into study_runs (study_id, plan_version_id, status, provider, provider_model, started_at)
+         values ($1, $2, 'running', 'smoke', 'smoke-model', now()) returning id::text as id`,
+        [study.rows[0].id, planVersion.id],
       );
       const tasks = [
         { key: "design", title: "设计", tool: "designStudy", status: "completed", dependencies: [], output: { framework: "smoke" } },

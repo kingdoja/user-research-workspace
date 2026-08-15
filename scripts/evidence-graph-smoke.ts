@@ -8,6 +8,7 @@ import {
 } from "../src/lib/evidence-graph";
 import type { ResearchReport } from "../src/lib/openai-provider";
 import type { ReportEvidenceCatalogItem } from "../src/lib/report-evidence";
+import { createSmokePlanVersion } from "./smoke-plan-fixture";
 
 if (process.env.EVIDENCE_GRAPH_SMOKE_CONFIRM !== "1") {
   throw new Error("Set EVIDENCE_GRAPH_SMOKE_CONFIRM=1 to run the isolated database smoke test.");
@@ -107,10 +108,11 @@ async function main() {
          values ($1, $2, $3, 'Evidence smoke', '验证证据图', 'completed', 'report') returning id::text as id`,
         [`std_${suffix}`, workspaceId, actor.rows[0].user_id],
       );
+      const planVersion = await createSmokePlanVersion(transaction, study.rows[0].id, actor.rows[0].user_id);
       const run = await transaction.query<{ id: string }>(
-        `insert into study_runs (study_id, status, provider, provider_model, prompt_version, finished_at)
-         values ($1, 'completed', 'smoke', 'smoke-model', 'evidence-v1', now()) returning id::text as id`,
-        [study.rows[0].id],
+        `insert into study_runs (study_id, plan_version_id, status, provider, provider_model, prompt_version, finished_at)
+         values ($1, $2, 'completed', 'smoke', 'smoke-model', 'evidence-v1', now()) returning id::text as id`,
+        [study.rows[0].id, planVersion.id],
       );
       const storedReport = await transaction.query<{ id: string }>(
         `insert into reports (public_id, study_id, title, content_html, content_json)

@@ -3,6 +3,7 @@ import type { Viewer } from "@/lib/auth";
 import { formatContextForPrompt, retrieveContext } from "@/lib/context-system";
 import { getDatabase, type Queryable } from "@/lib/db";
 import { createPublicId } from "@/lib/identifiers";
+import { isWorkspaceSkillEnabled } from "@/lib/skill-gateway";
 import {
   describeOpenAIError,
   generateProviderRealtimeInterviewTurn,
@@ -137,33 +138,31 @@ export async function materializeRealtimeInterviewMetrics(queryable: Queryable, 
   const session = sessionResult.rows[0];
   if (!session) return null;
 
-  const [questions, answers, followups, substantive] = await Promise.all([
-    queryable.query<{ count: number }>(
-      "select count(*)::int as count from interview_questions where project_id = $1",
-      [session.project_id],
-    ),
-    queryable.query<{ count: number }>(
-      `select count(distinct question_id)::int as count
-       from interview_messages
-       where session_id = $1 and role = 'participant' and question_id is not null`,
-      [sessionId],
-    ),
-    queryable.query<{ requested: number; answered: number }>(
-      `select count(*) filter (where message.message_type = 'followup')::int as requested,
-              count(*) filter (where message.message_type = 'followup' and exists (
-                select 1 from interview_messages answer
-                where answer.session_id = message.session_id and answer.role = 'participant'
-                  and answer.turn_index = message.turn_index + 1
-              ))::int as answered
-       from interview_messages message where message.session_id = $1 and message.role = 'agent'`,
-      [sessionId],
-    ),
-    queryable.query<{ count: number }>(
-      `select count(*)::int as count from interview_messages
-       where session_id = $1 and role = 'participant' and length(trim(content)) >= 24`,
-      [sessionId],
-    ),
-  ]);
+  const questions = await queryable.query<{ count: number }>(
+    "select count(*)::int as count from interview_questions where project_id = $1",
+    [session.project_id],
+  );
+  const answers = await queryable.query<{ count: number }>(
+    `select count(distinct question_id)::int as count
+     from interview_messages
+     where session_id = $1 and role = 'participant' and question_id is not null`,
+    [sessionId],
+  );
+  const followups = await queryable.query<{ requested: number; answered: number }>(
+    `select count(*) filter (where message.message_type = 'followup')::int as requested,
+            count(*) filter (where message.message_type = 'followup' and exists (
+              select 1 from interview_messages answer
+              where answer.session_id = message.session_id and answer.role = 'participant'
+                and answer.turn_index = message.turn_index + 1
+            ))::int as answered
+     from interview_messages message where message.session_id = $1 and message.role = 'agent'`,
+    [sessionId],
+  );
+  const substantive = await queryable.query<{ count: number }>(
+    `select count(*)::int as count from interview_messages
+     where session_id = $1 and role = 'participant' and length(trim(content)) >= 24`,
+    [sessionId],
+  );
   const questionCount = Number(questions.rows[0]?.count ?? 0);
   const answeredQuestionCount = Number(answers.rows[0]?.count ?? 0);
   const followupRequestedCount = Number(followups.rows[0]?.requested ?? 0);
@@ -189,15 +188,13 @@ export async function materializeRealtimeInterviewMetrics(queryable: Queryable, 
       questionCount, answeredQuestionCount, coverageRate, followupRequestedCount,
       followupAnsweredCount, followupHitRate, substantiveAnswerCount, "realtime-interview-metrics-v1"],
   );
-  await Promise.all([
-    recordStrategyMetric(queryable, session.assignment_id, "question_count", questionCount, metadata),
-    recordStrategyMetric(queryable, session.assignment_id, "answered_question_count", answeredQuestionCount, metadata),
-    recordStrategyMetric(queryable, session.assignment_id, "question_coverage_rate", coverageRate, metadata),
-    recordStrategyMetric(queryable, session.assignment_id, "followup_requested_count", followupRequestedCount, metadata),
-    recordStrategyMetric(queryable, session.assignment_id, "followup_answered_count", followupAnsweredCount, metadata),
-    recordStrategyMetric(queryable, session.assignment_id, "followup_hit_rate", followupHitRate, metadata),
-    recordStrategyMetric(queryable, session.assignment_id, "substantive_answer_count", substantiveAnswerCount, metadata),
-  ]);
+  await recordStrategyMetric(queryable, session.assignment_id, "question_count", questionCount, metadata);
+  await recordStrategyMetric(queryable, session.assignment_id, "answered_question_count", answeredQuestionCount, metadata);
+  await recordStrategyMetric(queryable, session.assignment_id, "question_coverage_rate", coverageRate, metadata);
+  await recordStrategyMetric(queryable, session.assignment_id, "followup_requested_count", followupRequestedCount, metadata);
+  await recordStrategyMetric(queryable, session.assignment_id, "followup_answered_count", followupAnsweredCount, metadata);
+  await recordStrategyMetric(queryable, session.assignment_id, "followup_hit_rate", followupHitRate, metadata);
+  await recordStrategyMetric(queryable, session.assignment_id, "substantive_answer_count", substantiveAnswerCount, metadata);
   return {
     questionCount,
     answeredQuestionCount,
@@ -262,6 +259,9 @@ export async function startRealtimeInterview(invitationToken: string, input: {
   );
   const invitationRow = invitation.rows[0];
   if (!invitationRow) return "not_found" as const;
+  if (!await isWorkspaceSkillEnabled(invitationRow.workspace_id, "builtin", REALTIME_INTERVIEW_SKILL.slug)) {
+    return "skill_disabled" as const;
+  }
   const questions = await getQuestions(database, invitationRow.project_id);
   if (!questions.length) return "no_questions" as const;
 
@@ -331,6 +331,7 @@ export async function startRealtimeInterview(invitationToken: string, input: {
     studyId: invitationRow.study_id ?? undefined,
     interviewSessionId: session.id,
     query: `${invitationRow.project_title}\n${invitationRow.objective}\n${questions.map((question) => question.content).join("\n")}`,
+    purpose: "realtime_interview",
     scopes: invitationRow.study_id ? ["workspace", "study", "system"] : ["workspace", "system"],
     limit: 6,
   });
@@ -456,10 +457,22 @@ export async function submitRealtimeInterviewTurn(invitationToken: string, sessi
     retrievalPublicId: null,
     strategy: "lexical_metadata_v1",
     query: claimed.objective,
+    purpose: "realtime_interview",
+    policyVersion: "memory-policy-v1",
+    policyDecision: {
+      version: "memory-policy-v1",
+      purpose: "realtime_interview",
+      evaluatedMemoryChunks: 0,
+      allowedMemoryChunks: 0,
+      deniedMemoryChunks: 0,
+      denialReasons: {},
+      policyVersions: { core: null, working: null, team: null },
+    },
     citations: contextResult.rows.map((item) => ({
       chunkPublicId: item.chunk_public_id, assetPublicId: "", assetVersionPublicId: "",
       assetType: "", scope: "workspace" as const, title: item.title, sourceUri: null,
       version: item.version, content: item.content, score: 0, reasons: [],
+      memoryKind: null,
     })),
   });
 
@@ -597,12 +610,17 @@ export async function getInterviewSessionReplay(viewer: Viewer, projectPublicId:
     id: string; public_id: string; workflow_type: string; workflow_version: string; status: string;
     skill_slug: string | null; skill_version: number | null; strategy_key: string; strategy_version: string;
     context_public_id: string | null; context_strategy: string | null; started_at: string | null;
+    context_purpose: string | null; context_policy_version: string | null;
+    context_policy_decision: Record<string, unknown> | string | null;
     completed_at: string | null; metadata: Record<string, unknown> | string;
   }>(
     `select session.id::text as id, session.public_id, session.workflow_type, session.workflow_version,
             session.status, session.skill_slug, session.skill_version, session.strategy_key,
             session.strategy_version, retrieval.public_id as context_public_id,
-            retrieval.strategy as context_strategy, session.started_at::text as started_at,
+            retrieval.strategy as context_strategy, retrieval.purpose as context_purpose,
+            retrieval.policy_version as context_policy_version,
+            retrieval.policy_decision as context_policy_decision,
+            session.started_at::text as started_at,
             session.completed_at::text as completed_at, session.metadata
      from interview_sessions session
      join interview_projects project on project.id = session.project_id
@@ -669,7 +687,14 @@ export async function getInterviewSessionReplay(viewer: Viewer, projectPublicId:
     workflow: { type: row.workflow_type, version: row.workflow_version, status: row.status },
     skill: row.skill_slug ? { slug: row.skill_slug, version: row.skill_version } : null,
     strategy: { key: row.strategy_key, version: row.strategy_version },
-    context: row.context_public_id ? { retrievalPublicId: row.context_public_id, strategy: row.context_strategy, citations: citations.rows } : null,
+    context: row.context_public_id ? {
+      retrievalPublicId: row.context_public_id,
+      strategy: row.context_strategy,
+      purpose: row.context_purpose ?? "general",
+      policyVersion: row.context_policy_version ?? "memory-policy-v1",
+      policyDecision: row.context_policy_decision ? parseJson(row.context_policy_decision) : {},
+      citations: citations.rows,
+    } : null,
     startedAt: row.started_at,
     completedAt: row.completed_at,
     metadata: parseJson(row.metadata),

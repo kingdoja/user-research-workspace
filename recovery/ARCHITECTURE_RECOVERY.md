@@ -1,6 +1,6 @@
 # atypica.AI / GEA 架构恢复审计
 
-日期：2026-08-14
+日期：2026-08-15
 
 ## 结论
 
@@ -13,14 +13,18 @@
 - 研究计划确认、可恢复的 Plan-and-Execute harness、工具调用记录、checkpoint、artifact、租约队列和 SSE 事件。
 - 两类访谈入口：AI 合成访谈和公开链接真人访谈。
 - Persona / Panel / Interview / Report 的研究对象模型。
+- 版本化 Skill Gateway、工作区启停、不可变 Run Binding、受控 HTTP/MCP executor 与执行审计。
+- 版本化 Context Asset/Chunk/Edge、混合检索、Retrieval Snapshot、重建索引与离线评估。
+- 版本化 `research-intent-v1`、确认版 Plan、编译后 `workflow-definition-v1` 与 Run 的不可变绑定；Intent Planning 使用 purpose-bound Context Snapshot。
+- DAG wave、多层限流、租约恢复、策略实验、实时与批量两类工作流。
 
-当前代码尚未形成独立的：
+当前代码尚未形成完整的：
 
-- 意图解析服务边界（目前主要由 study plan 与本地规则/Provider 调用承担）。
+- 独立部署的 Intent 服务；当前已是单体内明确逻辑边界，但尚未作为跨产品服务拆分。
 - 可跨业务线复用的编排 Runtime（目前 `research-harness.ts` 是研究产品专用 Runtime）。
-- Skill Gateway（没有版本化 manifest、能力注册、权限、输入输出契约和安装/发布生命周期）。
-- Context System（没有统一的 context asset、版本、chunk、embedding、实体/本体关系和检索 API）。
-- 多 Agent 并行调度、限流、实验分组和策略评估闭环。
+- 任意代码 Skill 沙箱、`.skill` 包安装/签名/市场和 capability grant 审批。
+- 生产 embedding/pgvector、完整本体与 Subjective World Model 训练评估闭环。
+- 对外 MCP server、scoped API key，以及经第三条业务线和外部调用验证的 Universal Agent 契约。
 
 因此，用户提出的四层架构是适合作为恢复目标的目标架构，但不能被描述为当前仓库已经实现。
 
@@ -87,8 +91,10 @@ API / Web / MCP clients
 - [x] 增加 Skill 注册、版本发布、输入输出 schema、workspace 权限和审计事件 API。
 - [x] 增加 Context 资产创建、版本发布和 PostgreSQL 关键词/元数据检索；结果带 source/version/chunk citation。
 - [x] 研究 Runtime 锁定内建 Skill 版本和 Context retrieval，并将引用事件写入研究时间线。
-- [ ] 增加 Skill 启停、声明式执行器或受控沙箱；当前上传的 workspace Skill 仅保存契约，不执行任意代码。
-- [ ] 增加可替换 embedding provider 和向量索引；当前策略为 `lexical_metadata_v1`。
+- [x] 增加 workspace 级 Skill 启停、不可变 Run Skill Binding、声明式 HTTP JSON 与 MCP Streamable HTTP 受控执行器；仍不执行任意上传代码。
+- [x] 增加 `hybrid_v1`、可替换 embedding 契约、PostgreSQL FTS/GIN 和离线检索评估；默认 `hash-ngram-128@v1` 是确定性基线，不冒充生产语义模型。
+- [x] 接入生产 embedding provider 的离线候选评估与升级门槛；默认检索仍为 `hash-ngram-128@v1`，仅候选胜出后才进入 pgvector/HNSW 索引试验。
+- [ ] 在通过门槛的候选模型上引入 pgvector/HNSW，并以 shadow retrieval 验证后才切换默认策略。
 - 将团队 core memory、用户 profile、研究项目 working memory 统一映射为 context assets。
 
 ### P2：通用 Runtime 和调度
@@ -114,29 +120,47 @@ API / Web / MCP clients
 - [x] Worker 租约过期时将遗留 task attempt 标为 `interrupted`，重置任务为 pending；完成的 checkpoint/artifact 保持不变。
 - [x] 增加来源拒绝/不可用/下架状态、内容 hash 去重、快照引用和 Scout Console 审计视图。
 - [x] 增加逐题覆盖率、追问命中率，以及批量工具调用/失败/重试指标；session 快照和 experiment 聚合均可回放。
+- [x] Plan 确认生成不可变 `study_plan_versions` 快照和内容 hash；每个 Run 通过同 Study 复合外键锁定精确 Plan Version。
+- [x] 增加批量研究跨 Run 并排回放，可比较 Plan/Workflow/Strategy/Reasoning/Prompt/Provider/Context/Skill、任务图、checkpoint、决策、artifact 和事件时间线。
+- [x] Plan 前生成版本化 Intent Contract，保存目标、受众、预算、数据范围、合规、允许的 Context purpose、澄清答案、解析版本、Context Snapshot 和内容 hash。
+- [x] 确认时原子生成 confirmed Intent、Plan Version、WorkflowDefinition 和 Run 绑定；Runtime 从锁定 WorkflowDefinition 的任务图物化任务，历史 Run 不做 Intent/Workflow 推测回填。
 
 ### P3：多产品线与世界模型
 
+- [x] 增加独立 Market Insight workflow，以相同 Intent/Plan/Workflow/Run/Skill/Context 契约验证第二产品线复用；其默认任务图不包含 Persona、Panel 或合成访谈。
 - 通过稳定 API/MCP 暴露 research、market insight、product research workflow。
 - 只有在具备合法、可追溯的研究样本和离线评估集后，才实现 Subjective World Model 的训练/蒸馏/评估；它不是简单增加一个 embedding 表。
 
 ## 是否需要现在加 Skills / Context
 
-需要加“边界和数据契约”，不需要现在伪造完整能力。
+边界和数据契约已经落地，仍不需要伪造完整能力。
 
-- Skills：现在加 manifest/version/权限/schema/审计，后续再接上传 `.skill`、沙箱执行和发布市场。
-- Context：现在加资产版本、来源、chunk、关系和检索接口；先用可解释的关键词/元数据检索，embedding 作为可替换实现。
-- 多 Agent：现有 queue/checkpoint 是基础，但在并发 claim、限流、实验分组补齐前，不应宣称已支持。
+- Skills：manifest/version/schema/启停/Run Binding/远程执行审计已完成；后续再接上传 `.skill`、签名、沙箱和发布市场。
+- Context：资产版本、chunk、受控关系、来源/hash、同意/PII/保留期、审核队列、混合检索和评估已完成；Core/Working/Team Memory 复用同一 Context Asset 底座，通过用途、主体、有效期和不可变 policy version 在排序前执行门禁。研究报告、Persona 和 Memory 晋升结果只能进入待审核候选，不会未经批准进入 Runtime。生产 embedding 必须先通过现有评估门槛。
+- Persona：Claim/Evidence 精确关联、证据强度、有效期和保留/退役审计已完成。Context asset 批准与 Persona 可复用保留是两道独立门禁；新生成 Persona 默认 pending，只有 retained 且未过期者能进入 Runtime。
+- 多 Agent：DAG wave、限流、租约、实验分组已完成；Research 与 Market Insight 已复用同一持久化 Runtime 契约，但仍不宣称全部业务线已经通用化。
 
 ## P1 已实现接口
 
 - `GET /api/skills`：列出可执行内建 Skill 与工作区 Skill manifest。
-- `POST /api/skills`：创建不可执行的工作区 Skill manifest v1。
+- `POST /api/skills`：创建默认禁用的工作区 Skill manifest v1，可配置 HTTP JSON 或 MCP executor。
 - `POST /api/skills/:publicId/versions`：发布新的 Skill 契约版本。
+- `PATCH /api/skills/settings`：启用或禁用内置/工作区 Skill；workspace Skill 启用时固定当前版本。
+- `POST /api/skills/:publicId/execute`：执行已启用的工作区远程 Skill，并持久化输入输出 hash、状态和错误。
+- `/skills`：工作区 Skill Gateway，展示内置/远程 Executor、版本、hash 和启停状态，并可注册 MCP/HTTP Skill。
 - `GET /api/context`：列出当前用户可见的 Context assets。
-- `POST /api/context`：创建资产、首版本与确定性 chunks。
-- `POST /api/context/:publicId/versions`：发布不可变新版本并切换 current version。
+- `POST /api/context`：导入带 provenance、治理标签和来源 hash 的资产，创建首版本与确定性 chunks；工作台导入默认进入待审核状态。
+- `PATCH /api/context/:publicId`：管理员批准或拒绝候选；只有批准后的 active asset 可进入检索。
+- `POST /api/context/:publicId/versions`：发布不可变新版本并切换 current version，同时重新进入待审核状态。
+- `POST /api/context/:publicId/edges`：在受控关系集合内建立资产来源/支持/冲突/提及/替代/相关关系。
 - `POST /api/context/search`：执行带持久化 retrieval/items 的可审计检索。
+- `/context`：工作区资产导入、治理筛选、审核、关系、reindex 和 tombstone 控制台。
+- `GET /api/context/memory/policies`：返回 Core/Working/Team 当前 active policy 及版本、用途、保留、衰减和晋升门槛。
+- `PATCH /api/context/memory/policies/:publicId`：管理员发布不可变新版 policy，旧版保留为 superseded。
+- `GET|POST|PATCH /api/context/:publicId/memory`：按需读取 Memory 治理详情，提交/审核证据化行为观察，并将 Working Memory 晋升为待审核 Core/Team 候选。
+- `GET /api/personas/:publicId/evidence`：返回 Persona 的 Evidence、Claim、grounding 统计、保留状态和治理事件。
+- `PATCH /api/personas/:publicId/evidence`：管理员或创建者明确保留/退役 Persona，并设置有效期与复核备注。
+- `/persona`：Persona Library 展示证据状态、置信度、Claim/Evidence 数量和保留门禁，并提供证据与审计抽屉。
 
 安全边界：`private` Skill 只对 owner 可见；`user` Context 只对创建者可见；其他 workspace 资源要求 workspace membership。服务端数据库连接仍负责写入，浏览器 authenticated role 只有读取授权。
 
@@ -211,6 +235,95 @@ Runtime 默认值：每 run 2 个并发 task、每 workspace 2 个活跃研究 r
 - 批量研究终态统计 `study_tool_invocations`、`study_task_attempts` 的调用、失败、重试和重试率，写入 assignment 指标；同 assignment 重跑不会产生重复 metric 行。
 - `/interview/experiments` 的 Variant 表新增覆盖率、追问命中率和重试列，双侧 Replay 显示 session 级覆盖/追问/任务重试。
 - 隔离数据库 smoke：`INTERVIEW_METRICS_SMOKE_CONFIRM=1 pnpm smoke:interview-metrics`，仅允许连接 localhost / `127.0.0.1`。
+
+## 2026-08-14 Context Hybrid Retrieval 部署记录
+
+- 远端 Supabase 已应用 `20260814050000_context_hybrid_retrieval.sql`；历史 Context asset/chunk/retrieval 均为 0，6 个研究和 21 个既有任务保持不变。
+- `hybrid_v1` 以 PostgreSQL stored `tsvector` + GIN 为全文检索主路径，并以 `hash-ngram-128@v1` 确定性向量作为可复现基线；每次 retrieval 固定 strategy、embedding model/version 和 0.7/0.3 权重。
+- Context 新增 tombstone 与 reindex generation：下架资产不进入新检索，历史 retrieval items 不被删除；重建索引记录独立 `context_reindex_runs` 审计。
+- 新增版本化 evaluation set/case/relevance/run/result，保存 Precision@K、Recall@K 和 MRR；管理员 API 可创建评估集并运行对比。
+- 隔离 PostgreSQL 15 完整迁移链 smoke 通过：目标 chunk 排名第一、reindex generation 1→2、Recall@K=1、MRR=1、tombstone 排除且历史 retrieval snapshot 仍可回放。
+- 完整迁移链可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated context-hybrid`；已有测试库可直接运行 `CONTEXT_HYBRID_SMOKE_CONFIRM=1 pnpm smoke:context-hybrid`。两者都拒绝非 localhost / `127.0.0.1` 数据库。
+
+## 2026-08-14 Production Embedding Evaluation Gate
+
+- `POST /api/context/evaluations/:publicId/run` 默认运行确定性 `baseline`；管理员可显式提交 `{ "provider": "openai", "model": "text-embedding-3-small" }` 评测候选生产 embedding。
+- `GET /api/context/evaluations` 返回当前工作区评估集及每个评估集最近 10 次 run，包含候选 model/version、状态、指标、gate 与失败原因。
+- 候选与基线复用同一批 PostgreSQL FTS 候选、workspace/user 权限过滤、metadata filters 和 0.7/0.3 hybrid 权重。OpenAI 向量只驻留本次离线评测内存，不写入 `context_chunks`，不改变线上 `hybrid_v1`。
+- 每次 run 保存候选 P@K / R@K / MRR、基线指标、差值、provider/model/version、请求数、输入数、维度、token usage、延迟及门槛结论。进入 pgvector/HNSW 索引试验的最低条件是至少 20 个 case、MRR 至少提升 `0.03` 且 P@K、R@K 不低于基线；通过评估不自动切换生产检索。
+- 配置项：`OPENAI_EMBEDDING_PROVIDER_NAME`、`OPENAI_EMBEDDING_MODEL`（默认 `text-embedding-3-small`）、`OPENAI_EMBEDDING_VERSION`、`OPENAI_EMBEDDING_API_KEY`、`OPENAI_EMBEDDING_BASE_URL`、`CONTEXT_EMBEDDING_EVALUATION_BATCH_SIZE`（1-128，默认 64）和 `CONTEXT_EMBEDDING_EVALUATION_TIMEOUT_MS`（5-120 秒，默认 60 秒）。专用 key/base URL 未配置时才回退服务端 `OPENAI_API_KEY` / `OPENAI_BASE_URL`。
+
+## 2026-08-14 Plan Version 与跨 Run Replay 部署记录
+
+- 远端 Supabase 已在单事务应用 `20260814060000_plan_versions_run_replay.sql`；迁移前后 7 个 Study、7 份当前 Plan、6 个 Run 和 21 个 Task 保持不变。
+- 6 个历史 Run 均获得稳定 `run_*` public ID，并锁定到 6 个 `legacy_backfill` Plan Version；该标记只表示部署时可见的当前计划，不伪造已经丢失的历史修改过程。
+- 新 Plan 确认会在同一事务创建不可变 `research-plan-v1` 快照、SHA-256 内容 hash 和确认人/时间；Runtime 按 `study_runs.plan_version_id` 读取，不再读取可能变化的当前 Plan。
+- 新增 `GET /api/studies/[publicId]/runs/comparison` 和 `/study/[publicId]/compare`；可选择任意两个 Run，并排检查版本、任务图、checkpoint、Context、Skill、决策、artifact 与事件时间线。
+- 隔离 smoke 创建 Plan v1/v2 与两个 Run，验证十类差异、不可变触发器、同 Study 外键、跨 workspace 隔离；reasoning/evidence/source/task-recovery 四条旧 smoke 完整迁移链继续通过。
+- 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated plan-version-replay`，仅允许 localhost / `127.0.0.1` 数据库。
+
+## 2026-08-14 Skill 执行控制与 MCP Executor 部署记录
+
+- 远端 Supabase 已在单事务应用 `20260814070000_skill_execution_control.sql`；迁移前后 7 个 Study、7 个 Run 和 11 条 Invocation 保持不变。
+- 历史 Invocation 没有旧版 `skill_slug/version`，因此没有伪造 Run Binding；新批量 Run 在首次物化任务前锁定精确内置 Skill 版本、启用状态、executor 类型和内容 hash。
+- `workspace_skill_settings` 管理工作区启停；`study_run_skill_bindings` 禁止直接更新/删除但允许父 workspace/run 级联清理；`skill_executions` 和 `skill_control_events` 保存远程执行与控制审计。
+- 工作区 Skill 支持 `declarative_http` JSON POST 与标准 MCP Streamable HTTP client；两者均要求服务端 origin allowlist，密钥只引用 `SKILL_SECRET_*` 环境变量，并限制超时、响应大小、重定向和输入输出 JSON Schema。
+- 内置研究 Skill 继续调用现有受控 TypeScript 实现，不开放任意代码上传；实时访谈 Skill 的禁用只阻止新会话，已开始会话继续使用启动时锁定的版本。
+- 隔离 PostgreSQL 15 完整迁移链 smoke 验证 HTTP/MCP 各一次成功执行、schema 失败审计、4 条控制事件、禁用状态 Run Binding、不可变约束和跨 workspace 隔离；Plan Replay、Reasoning Runtime 与 Task Recovery 回归继续通过。
+- 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated skill-executor`，仅允许 localhost / `127.0.0.1` 数据库。
+
+## 2026-08-15 Context Asset Flywheel 验收记录
+
+- 远端 Supabase 已在单事务应用 `20260815010000_context_asset_flywheel.sql`；部署前 Context asset/version 均为 0，部署后既有 7 个 Study、5 份 Report 和 7 个 Run 保持不变。
+- 新增 provenance 与治理契约：ingestion method、来源名称/MIME/URI/hash、human/synthetic/mixed、consent、PII、retention、origin 和 metadata；版本与当前资产均保存 SHA-256 内容 hash。
+- 新增 pending/approved/rejected 审核生命周期和 `context_asset_events` 审计；待审核、拒绝和 tombstone 资产不会进入 Runtime 检索，发布新版本会强制回到待审核。
+- 研究完成后自动提议一份 `research_sample` 报告资产和本 Run 新生成的 synthetic Persona，并建立 `derived_from` 关系；origin 唯一约束和应用层检查保证重试幂等。复用的既有 Persona 不重复沉淀。
+- `/context` 工作台支持 TXT/Markdown/CSV/JSON 或手工导入、来源/治理标签、审核、筛选、关系、reindex 与 tombstone；导航已接入主工作区。
+- 浏览器端实际走通“导入 pending → 管理员批准 → active/可检索”；顶部资产统计与同一客户端资产状态同步更新。1280 桌面和 390×844 移动端均无横向溢出、框架错误覆盖层或 console error/warn，QA 资产已在验证后清理。
+- 隔离 PostgreSQL 15 完整迁移链 smoke 已通过：pending 排除、approve 后召回、新版本重新待审、reject 排除、provenance/hash、1 条人工关系、5 条资产事件、3 个自动候选和 2 条 Persona→Report 关系均已验证；同一批产物再次提议新增数为 0。
+- 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated context-asset-flywheel`，仅允许 localhost / `127.0.0.1` 数据库。
+
+## 2026-08-15 Evidence-grounded Persona 部署与验收记录
+
+- 远端 Supabase 已在单事务应用 `20260815020000_evidence_grounded_personas.sql`；迁移前后 7 个 Study、7 个 Run、5 份 Report 和 27 个 Persona 保持不变。
+- 27 个历史 Persona 统一保留为 `retained + ungrounded`，不伪造已丢失的 Claim/Evidence 链接；部署时 Evidence Source/Item/Claim 均为 0，因此没有历史精确匹配候选。
+- 自动 grounding 只接受同 Study/Run 中 `evidence_items.locator.personaPublicId/personaName` 的精确匹配；Source 级标签、语义相似和 Report 内所有 Claim 都不会扩大关联范围。
+- 新生成 Persona 默认 `pending`；只有 `retained` 且 `valid_until` 未过期的 Persona 可被 Runtime 检索或新访谈项目选用。编辑 Persona 会删除旧链接、重置为 `ungrounded` 并记录失效事件。
+- `/persona` 浏览器验收已走通证据抽屉、退役和恢复保留；Persona 退役后立即从新访谈选择器消失，恢复后重新可选。1280 桌面和 390×844 移动端无横向溢出、框架错误或 console error/warn；QA 治理事件和复核字段已清理。
+- 隔离 PostgreSQL 15 完整迁移链 smoke 已验证：2 条精确 Evidence 链接、无关证据排除、pending/retained/expired/retired 复用门禁、编辑失效、重新 grounding 和 5 条幂等治理事件；Context Asset Flywheel 与 Evidence Graph 回归继续通过。
+- 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated persona-evidence`，仅允许 localhost / `127.0.0.1` 数据库。
+
+## 2026-08-15 Memory 与 Context Policy 部署与验收记录
+
+- 远端 Supabase 已在单事务应用 `20260815030000_memory_context_policy.sql`；部署前后 7 个 Study、27 个 Persona 和 0 个 Context asset 保持不变，没有伪造历史 Memory 或行为观察回填。
+- Replay 回归发现旧版 Plan Version 不可变触发器会误拦 workspace/study 级联删除；远端已在独立单事务应用 `20260815031000_plan_version_cascade_cleanup.sql`。直接 update/delete 仍被拒绝，只允许外键触发器深度内的父级级联清理；7 个既有 Plan Version 保持不变。
+- 当前唯一工作区创建 Core/Working/Team 三个 active policy v1；`context_memory_bindings`、`context_behavior_observations`、`context_memory_events` 部署后均为 0。
+- Memory 不使用第二套存储；`core_memory`、`working_memory`、`team_memory` 都是受治理的 Context Asset，并通过 binding 锁定主体、置信度、有效期和 policy。
+- 检索支持 `general`、`intent_planning`、`research_execution`、`realtime_interview`、`report_generation`、`skill_execution` 六种用途；SQL 在 FTS/混合排序前完成 purpose、主体和时效门禁，Retrieval Snapshot 保存 policy version 和允许/拒绝摘要。
+- Working Memory 晋升只计算已审核且未过期的行为观察；达到门槛后也只创建 pending Core/Team 候选和 `derived_from` 边，必须再经 Context asset 审核才能进入检索。
+- `/context` 已增加 Memory 筛选/指标、三类 policy 版本控制、观察审核、晋升与治理事件详情；详情按需加载，首屏 assets/policies 并行读取。
+- 隔离 PostgreSQL 15 完整迁移链 smoke 已验证默认 policy、purpose 拒绝、跨用户隔离、过期排除、2 条观察审核、双重晋升门禁、policy v2、snapshot 持久化与事件幂等；Context Hybrid、Asset Flywheel 和 Persona Evidence 回归继续通过。
+- 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated context-memory-policy`，仅允许 localhost / `127.0.0.1` 数据库。
+
+## 2026-08-15 Intent Contract 与 Workflow Definition 实现记录
+
+- 远端 Supabase 已在单事务应用 `20260815040000_intent_workflow_contracts.sql`；部署前后 7 个 Study、7 个 Plan Version 和 7 个 Run 保持不变。新增 Intent/Workflow 表均为 0，历史 Plan/Run 契约绑定保持 `null`，两条不可变触发器已启用。
+- 新增 `20260815040000_intent_workflow_contracts.sql`：`study_intent_versions` 与 `workflow_definitions` 内容不可更新/直接删除，Plan Version 和 Run 通过同 Study 复合外键锁定精确 Intent/Workflow；历史 Plan/Run 字段保持 `null`，不推测回填。
+- 新 Study 创建与澄清都会先运行 `purpose=intent_planning` 的受治理 Context 检索，再生成 Intent/Plan；Snapshot 保存 Memory policy 允许/拒绝摘要，生成型 Persona Context 还必须对应 retained 且未过期的 Persona。Intent 保存引用版本、目标、受众、预算、数据范围、合规、方法、排除项、假设、开放问题和解析 provenance。
+- 用户确认会在同一事务生成 confirmed Intent、不可变 Plan Version、`workflow-definition-v1` 与首个 Run。Workflow 保存任务图、精确 Skill 要求、Runtime 限制、Context policy、输出契约、证据 gate、compiler version 和内容 hash。
+- Runtime 优先从 Run 锁定的 WorkflowDefinition 物化任务；旧 Run 才回退现有 research DAG 生成器。Study 规划界面显示 Intent/Planning Context provenance，跨 Run Replay 分开展示 Intent Planning 与 research execution Context。
+- 隔离 PostgreSQL 完整迁移链 smoke 已验证 draft → clarified draft → confirmed supersession、purpose denial、Context Snapshot、不可变 hash、四重 Run 绑定、重复确认幂等、跨 workspace 隔离和 legacy null semantics；Memory Policy、Hybrid Retrieval、Plan Replay 与 Reasoning Runtime 回归继续通过。
+- 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated intent-workflow-contract`，仅允许 localhost / `127.0.0.1` 数据库。
+
+## 2026-08-15 Market Insight 第二产品线部署与验收记录
+
+- 远端 Supabase 已在单事务应用 `20260815050000_market_insight_workflow.sql`；部署前后 7 个 Study、7 个 Plan Version 和 7 个 Run 保持不变，历史 Study 全部明确保留为 `research`，没有推测回填 Market Insight Intent、Workflow 或 Run。
+- Study 创建入口新增 `research | market_insight` 产品线选择；产品线写入 Study、Intent 和不可变 Plan Version，并进入内容 hash、详情页和跨 Run Replay。
+- Research 继续编译为 `batch_research@research-dag-v3-dynamic`；Market Insight 编译为 `market_insight@market-insight-dag-v1`，输出契约锁定为 market landscape、opportunity map、competitive signals、evidence 和 report。
+- Market Insight 默认任务图只复用受控 `designStudy`、`deepResearch` / `scoutSocialTrends` 和 `generateReport` Skill，不创建 Persona、Panel、合成访谈或讨论任务。Runtime 继续从 Run 锁定的 `workflow_definitions.task_graph` 执行，策略实验按 Run 的 workflow type 分配。
+- 隔离完整迁移链 smoke 同时创建 Research 与 Market Insight，验证 Intent/Plan/Workflow/Run 四重绑定、Context purpose、任务图边界、输出契约、不可变 hash、重复确认幂等、跨 workspace 隔离、回放身份和 Market Insight 策略分配；Intent Workflow、Plan Replay、Reasoning、Skill Executor 与 Memory Policy 回归继续通过。
+- `/newstudy` 桌面和 390×844 移动端已验证产品线切换、差异化文案与场景模板；无横向溢出、框架错误覆盖层或 console error/warn。
+- 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated market-insight-workflow`，仅允许 localhost / `127.0.0.1` 数据库。
 
 ## 验收标准
 

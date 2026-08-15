@@ -269,7 +269,7 @@ type SkillManifest = {
 - `generateReport`
 - `publishArtifact`
 
-Workspace 上传 Skill 第一阶段只保存和解析 `SKILL.md`，不执行任意脚本。受控沙箱属于后续能力。
+Workspace Skill 当前可以绑定受控 `declarative_http` 或 MCP Streamable HTTP executor；地址必须命中服务端 allowlist，secret 只允许引用 `SKILL_SECRET_*` 环境变量。上传 Skill 包和任意脚本仍不执行，通用代码沙箱属于后续能力。
 
 ### 5.5 Context System
 
@@ -456,9 +456,10 @@ Source
 
 ### 8.4 Skill 和 Context
 
-沿用当前 `/api/skills`、`/api/context` 和版本接口，增加：
+沿用当前 `/api/skills`、`/api/context` 和版本接口：
 
-- Skill enable/disable、permission grants、executor health。
+- [x] Skill enable/disable、不可变 Run Binding、远程执行审计和 MCP/HTTP executor。
+- [ ] capability permission grants 与 executor health probe。
 - Context ingestion job、reindex、delete/tombstone、retention policy。
 - Retrieval debug，仅对 workspace 管理员或开发模式开放。
 
@@ -551,10 +552,13 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 
 ### P2：动态 GEA Runtime，3-5 周
 
+- [x] Brief/澄清先生成版本化 Intent Contract；`intent_planning` Context Snapshot、确认版 Plan、编译后的 WorkflowDefinition 和 Run 保持精确绑定。
+- [x] Plan 确认生成不可变版本和内容 hash，Run 通过同 Study 外键锁定精确 Plan Version；历史仅作明确的 `legacy_backfill`，不推测修改轨迹。
 - [x] 增加版本化 `reasoning_decisions`、候选动作和白名单动态追加任务。
 - [x] 实现 coverage/conflict/novelty/budget 扩展停止条件，并保证固定必需任务继续执行。
 - [x] 完善单 task retry、waiting_input、resume、cancel。
 - [x] Runtime 与 UI 使用同一持久化 decision/task/event 数据源，回放不依赖前端推演。
+- [x] 增加批量研究跨 Run Replay/API，对比 Plan、运行时版本、Context、Skill、任务、决策、checkpoint 和产物 hash。
 
 验收：模拟 Provider 超时、单 Persona 失败、Worker 重启和用户取消，运行可恢复且不重复生成 artifact。
 
@@ -564,16 +568,20 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 - [x] 增加合规 Public Web Connector、robots/公网/重定向/类型/大小/访问限制检查，以及不可变 Snapshot、Observation、hash 和 tombstone。
 - [ ] 接入至少一个有官方 API、授权数据合作方或企业数据合同支持的 Social Connector；当前不声称具备小红书、抖音、X、Instagram 的非公开 API 权限。
 - [ ] 大体积原始内容迁入对象存储；当前 MVP 在 PostgreSQL 保存受大小上限约束的原始正文、hash、locator 和权限元数据。
-- Context 增加 hybrid retrieval 和 retrieval evaluation dataset。
-- 自动沉淀 Persona、研究模板、knowledge gap，但需要显式保留策略。
+- [x] Context 增加 `hybrid_v1`、版本化 retrieval evaluation dataset、tombstone/reindex 和历史 snapshot 保留。
+- [x] 研究报告与新生成 Persona 自动形成带 origin/provenance 的待审核 Context 候选；批准前不进入检索，重试不重复创建。
+- [x] 从报告证据图生成 evidence-grounded Persona，并增加显式保留/淘汰策略；仅允许 Evidence locator 精确匹配，历史 Persona 保留 `ungrounded`，研究模板和 knowledge gap 仍不自动沉淀。
+- [x] 将 Core/Working/Team Memory 统一到 Context Asset；实现用途、主体、有效期、审核和不可变 policy version，Working Memory 只能基于已审核观察晋升为 pending Core/Team 候选。
 
 验收：Scout 每条观察可回到原始来源；下架或无权访问内容不会泄露到公开报告。
 
 ### P4：平台能力，按业务需要推进
 
+- [x] 受控 HTTP JSON / MCP Streamable HTTP client executor、工作区启停与 Run 级版本锁定。
+- [x] Market Insight 第二产品线复用同一 Intent/Plan/Workflow/Run/Skill/Context 契约，并以独立模板、任务图和输出契约锁定到 Run。
 - Universal Agent 与受控 Skill sandbox。
-- MCP servers 和 scoped API keys。
-- 团队 Memory、协作 workspace、审批与发布流。
+- 对外 MCP servers 和 scoped API keys。
+- 跨工作区的团队协作、委托管理和发布流；单工作区 Team Memory 与审核已完成。
 - 多 Provider 成本/质量路由和策略实验后台。
 - Fast Insight、Podcast、Sage 等第二产品线。
 
@@ -592,14 +600,24 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 - Evidence Source/Item → Claim Evidence → Claim → Report Version/Node 证据链，以及逐条引用和公开分享隐私边界。
 - ReasoningDecision → 候选动作 → 动态任务/停止条件 → checkpoint replay 的确定性调度闭环。
 - Connector Run → Source Candidate → immutable Snapshot/hash → Observation → Evidence 的公开来源审计闭环。
+- Context Asset/Version → FTS + embedding baseline → Retrieval Snapshot → Evaluation Run 的可复现检索闭环，以及 tombstone/reindex 审计。
+- Context Candidate → governance/review → active retrieval 的资产飞轮；研究报告与 synthetic Persona 具备 origin 幂等、来源 hash、受控关系和事件审计。
+- Persona → exact Evidence locator → Claim → grounding summary → retention/expiry governance 的可审计复用闭环；Context 批准与 Persona 保留互不替代。
+- Context Asset → Memory Binding → Purpose Policy → Retrieval Decision 的排序前门禁，以及 Working Memory → approved Observation → pending Core/Team candidate 的双重审核闭环。
+- Workspace Skill → Enable Setting → immutable Run Binding / audited Execution 的受控执行闭环，支持 HTTP JSON 与 MCP Streamable HTTP client。
+- Brief → governed `intent_planning` Retrieval Snapshot → immutable Intent Version → confirmed Plan Version → compiled WorkflowDefinition → Run 的版本锁定闭环；Runtime 从锁定任务图执行，Replay 分开展示 Planning/Execution Context。
+- Product Line → Intent/Plan snapshot → Research 或 Market Insight WorkflowDefinition → 同一 Runtime/SkillInvocation/Replay 的跨业务线复用闭环；Market Insight 默认排除 Persona 与合成访谈。
 
 下一批最值得做的工作，按收益排序：
 
-1. 增加 Hybrid retrieval，并保留 lexical/metadata 权限过滤作为可解释基线。
-2. 建立离线检索评估集，记录 precision/recall 和版本化模型参数。
-3. 增加 Context tombstone/reindex 与版本切换审计。
-4. Plan version 与跨 run 完整 replay 对比。
-5. Skill enable/disable 和 MCP executor。
+1. [x] 建立 Evidence-grounded Persona 与 Memory/Context Policy，保证长期资产的证据、用途、主体、时效和审核可追溯。
+2. [x] 实现版本化 `IntentContract -> WorkflowDefinition`：在 Plan 前明确目标、预算、数据范围、合规策略与允许的 Memory purpose，并保存解析依据和用户确认版本。
+3. [x] 让 Intent Planning 真正读取已批准 Team/Core Memory、相似 Study 和可复用 Persona，同时在 Run Replay 中展示哪些 Context 改变了 Plan。
+4. [x] 增加 Market Insight 第二条 workflow，用真实复用验证 `WorkflowDefinition + RuntimeContext + SkillInvocation` 是通用契约，而不是提前重写 Runtime。
+5. [ ] 在现有 Skill Gateway 上增加 `.skill` / `SKILL.md` 导入导出、capability grants、签名/撤销、executor health probe 和 scoped credential；任意代码沙箱继续后置。
+6. [ ] 从合法真实研究样本建立至少 20 个带人工 relevance 标注的 case；当前远端评估集为 0，不引入 pgvector/HNSW。
+7. [ ] 自动沉淀研究模板和 knowledge gap，但先定义审核、重复检测和过期策略。
+8. [ ] `.skill` 治理和第二产品线稳定后，再开放对外 MCP server、scoped API keys 与团队发布流。
 
 不建议现在做：
 

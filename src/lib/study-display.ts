@@ -1,4 +1,4 @@
-import type { StudyMethod } from "@/lib/studies";
+import type { StudyMethod } from "@/lib/research-types";
 
 export const studyTypeLabels: Record<string, string> = {
   user_research: "用户研究",

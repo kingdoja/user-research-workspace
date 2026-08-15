@@ -70,13 +70,13 @@ async function main() {
       await transaction.query("update interview_sessions set experiment_assignment_id = $2 where id = $1", [session.rows[0].id, assignment.rows[0].id]);
       const messages = [
         [0, "agent", "question", "问题一", questions.rows[0].id],
-        [1, "participant", "answer", "这是一个足够具体且超过二十四字符的回答一。", questions.rows[0].id],
+        [1, "participant", "answer", "这是一个包含足够多细节的信息回答，用于验证实质性回答长度统计已经正确生效。", questions.rows[0].id],
         [2, "agent", "followup", "请再补充一个细节。", questions.rows[0].id],
-        [3, "participant", "answer", "这是追问后的具体回答，说明了实际决策过程。", questions.rows[0].id],
+        [3, "participant", "answer", "这是追问后的具体回答，补充了实际决策过程中的具体限制与判断依据。", questions.rows[0].id],
         [4, "agent", "question", "问题二", questions.rows[1].id],
-        [5, "participant", "answer", "这是第二个问题的具体回答，也足够长。", questions.rows[1].id],
+        [5, "participant", "answer", "这是第二个问题的具体回答，包含了方案比较、使用频率和最终选择原因。", questions.rows[1].id],
         [6, "agent", "question", "问题三", questions.rows[2].id],
-        [7, "participant", "answer", "这是第三个问题的具体回答，也足够长。", questions.rows[2].id],
+        [7, "participant", "answer", "这是第三个问题的具体回答，补充了真实场景、情绪反应和后续改进建议。", questions.rows[2].id],
         [8, "agent", "followup", "还有别的原因吗？", questions.rows[2].id],
       ] as const;
       for (const [turn, role, type, content, questionId] of messages) {
@@ -97,6 +97,7 @@ async function main() {
     assert.equal(metrics.followupRequestedCount, 2);
     assert.equal(metrics.followupAnsweredCount, 1);
     assert.equal(metrics.followupHitRate, 0.5);
+    assert.equal(metrics.substantiveAnswerCount, 4);
     await database.transaction((transaction) => materializeRealtimeInterviewMetrics(transaction, seeded.sessionId));
     const snapshot = await database.query<{ rows: number; strategy_rows: number }>(
       `select (select count(*)::int from interview_session_metrics where session_id = $1) as rows,

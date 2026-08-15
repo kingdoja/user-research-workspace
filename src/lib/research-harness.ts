@@ -5,6 +5,7 @@ import { getDatabase, type Queryable } from "@/lib/db";
 import { createPublicId } from "@/lib/identifiers";
 import {
   formatContextForPrompt,
+  proposeStudyContextCandidates,
   retrieveContext,
   type ContextSnapshot,
 } from "@/lib/context-system";
@@ -25,11 +26,19 @@ import {
   REPORT_PROMPT_VERSION,
 } from "@/lib/openai-provider";
 import { materializeReportEvidenceGraph } from "@/lib/evidence-graph";
+import { groundStudyPersonasFromEvidence } from "@/lib/persona-evidence";
 import { buildReportEvidenceCatalog } from "@/lib/report-evidence";
 import { evaluateReasoningCheckpoint, REASONING_POLICY_VERSION } from "@/lib/reasoning-runtime";
 import type { SourceConnectorAuditSummary } from "@/lib/source-connectors";
-import type { StudyMethod } from "@/lib/studies";
-import { resolveBuiltInSkill, type SkillSummary } from "@/lib/skill-gateway";
+import type { StudyMethod, WorkflowType } from "@/lib/research-types";
+import {
+  describeBuiltInSkills,
+  getRunSkillBinding,
+  lockRunBuiltInSkills,
+  resolveBuiltInSkill,
+  type SkillSummary,
+} from "@/lib/skill-gateway";
+import { hashJson } from "@/lib/skill-executor";
 import {
   TaskTerminalFailure,
   classifyTaskError,
@@ -75,6 +84,9 @@ type HarnessStudy = {
   audience: string;
   personaCount: number;
   estimatedTokens: number;
+  workflowType: Exclude<WorkflowType, "realtime_agent">;
+  workflowVersion: string;
+  workflowTaskGraph: ResearchTaskDefinition[] | null;
 };
 
 type StoredTask = {
@@ -406,6 +418,8 @@ const searchPersonasTool: ResearchTool<Record<string, never>, z.infer<typeof per
        where workspace_id = $1
          and (visibility = 'workspace' or created_by = $2)
          and (study_id is null or study_id <> $3)
+         and retention_status = 'retained'
+         and (valid_until is null or valid_until > now())
        order by updated_at desc, id desc
        limit 80`,
       [study.workspaceId, study.createdBy, study.studyId],
@@ -720,17 +734,15 @@ const researchTools = {
 export type ResearchToolName = keyof typeof researchTools;
 
 export function listResearchSkills(): SkillSummary[] {
-  return Object.values(researchTools).map((tool) => ({
-    publicId: null,
+  return describeBuiltInSkills(Object.values(researchTools).map((tool) => ({
     slug: tool.name,
     version: tool.version,
     name: tool.displayName,
     description: tool.description,
     capabilities: tool.capabilities,
-    source: "builtin",
-    status: "active",
-    executable: true,
-  }));
+    inputSchema: tool.inputSchema,
+    outputSchema: tool.outputSchema,
+  })));
 }
 
 export function createResearchTaskPlan(input: {
@@ -846,6 +858,54 @@ export function createResearchTaskPlan(input: {
   return tasks;
 }
 
+export function createMarketInsightTaskPlan(input: {
+  methods: StudyMethod[];
+  brief?: string;
+}): ResearchTaskDefinition[] {
+  const sourceTool: ResearchToolName = input.methods.includes("Scout Agent")
+    ? "scoutSocialTrends"
+    : "deepResearch";
+  const sourceLabel = sourceTool === "scoutSocialTrends" ? "公开趋势与社交信号" : "公开市场与行业资料";
+
+  return [
+    {
+      key: "design",
+      title: "定义市场边界、证据标准与分析维度",
+      toolName: "designStudy",
+      dependsOn: [],
+      input: { productLine: "market_insight", brief: input.brief ?? "" },
+    },
+    {
+      key: "market_landscape",
+      title: "建立市场格局与品类变化基线",
+      toolName: "deepResearch",
+      dependsOn: ["design"],
+      input: { focus: "市场规模信号、品类结构、增长驱动、政策与渠道变化" },
+    },
+    {
+      key: "competitive_signals",
+      title: "梳理竞争信号与替代方案",
+      toolName: "deepResearch",
+      dependsOn: ["design"],
+      input: { focus: "主要竞品、替代方案、定位差异、定价动作与能力缺口" },
+    },
+    {
+      key: "opportunity_signals",
+      title: `扫描${sourceLabel}中的机会信号`,
+      toolName: sourceTool,
+      dependsOn: ["design"],
+      input: { focus: "新兴需求、未满足场景、用户自然语言、弱信号与反向证据" },
+    },
+    {
+      key: "report",
+      title: "生成市场洞察与机会地图",
+      toolName: "generateReport",
+      dependsOn: ["market_landscape", "competitive_signals", "opportunity_signals"],
+      input: { outputType: "market_insight", evidenceRequired: true },
+    },
+  ];
+}
+
 async function appendEvent(
   database: Awaited<ReturnType<typeof getDatabase>>,
   studyId: string,
@@ -882,16 +942,21 @@ async function loadHarnessStudy(runId: string): Promise<HarnessStudy | null> {
     persona_filters: { audience?: string } | string;
     persona_count: number;
     estimated_tokens: string;
+    workflow_type: Exclude<WorkflowType, "realtime_agent">;
+    workflow_version: string;
+    workflow_task_graph: ResearchTaskDefinition[] | string | null;
   }>(
     `select study.id::text as study_id, study.public_id,
             study.workspace_id::text as workspace_id, study.created_by::text as created_by,
             app_user.public_id as user_public_id, run.id::text as run_id,
             run.status as run_status, run.started_at::text as run_started_at,
             study.brief, study.study_type, study.estimated_tokens::text as estimated_tokens,
-            plan.framework, plan.methods, plan.persona_filters, plan.persona_count
+            plan.framework, plan.methods, plan.persona_filters, plan.persona_count,
+            run.workflow_type, run.workflow_version, workflow.task_graph as workflow_task_graph
      from study_runs run
      join studies study on study.id = run.study_id
-     join study_plans plan on plan.study_id = study.id
+     join study_plan_versions plan on plan.id = run.plan_version_id
+     left join workflow_definitions workflow on workflow.id = run.workflow_definition_id
      join users app_user on app_user.id = study.created_by
      where run.id = $1
      limit 1`,
@@ -916,13 +981,26 @@ async function loadHarnessStudy(runId: string): Promise<HarnessStudy | null> {
     audience: filters.audience ?? "由研究 Brief 确定的目标人群",
     personaCount: row.persona_count,
     estimatedTokens: Number(row.estimated_tokens),
+    workflowType: row.workflow_type,
+    workflowVersion: row.workflow_version,
+    workflowTaskGraph: row.workflow_task_graph ? parseJson(row.workflow_task_graph) : null,
   };
 }
 
 async function ensureTasks(study: HarnessStudy) {
   const database = await getDatabase();
-  const definitions = createResearchTaskPlan(study);
+  const definitions = study.workflowTaskGraph?.length ? study.workflowTaskGraph : createResearchTaskPlan(study);
   await database.transaction(async (transaction) => {
+    await lockRunBuiltInSkills({
+      queryable: transaction,
+      workspaceId: study.workspaceId,
+      studyId: study.studyId,
+      runId: study.runId,
+      skills: definitions.map((definition) => ({
+        slug: definition.toolName,
+        version: researchTools[definition.toolName].version,
+      })),
+    });
     const existing = await transaction.query<{ count: string }>(
       "select count(*)::text as count from study_tasks where run_id = $1",
       [study.runId],
@@ -1074,6 +1152,8 @@ async function executeTask(input: {
     throw abortError("RUNTIME_CANCELLED");
   }
   const tool = resolveBuiltInSkill(researchTools, input.task.toolName) as ResearchTool<unknown, unknown>;
+  const binding = await getRunSkillBinding(input.study.runId, input.task.toolName);
+  if (!binding) throw new Error(`SKILL_BINDING_MISSING:${input.task.toolName}`);
   const database = await getDatabase();
   const providerBacked = tool.capabilities.some((capability) => [
     "web.search", "persona.generate", "interview.synthetic", "audience.validate",
@@ -1085,12 +1165,14 @@ async function executeTask(input: {
   const abortFromRun = () => controller.abort(input.runSignal.reason ?? abortError("RUNTIME_CANCELLED"));
   input.runSignal.addEventListener("abort", abortFromRun, { once: true });
   const timer = setTimeout(() => controller.abort(abortError("RUNTIME_TASK_TIMEOUT")), timeout);
-  const invocation = await beginInvocation(input.study, input.task, tool.version, input.context.retrievalId);
+  const invocation = await beginInvocation(input.study, input.task, binding, input.context.retrievalId);
   await appendEvent(database, input.study.studyId, input.study.runId, `task.${input.task.key}.started`, {
     taskKey: input.task.key,
     taskPublicId: input.task.publicId,
     toolName: input.task.toolName,
     skillVersion: tool.version,
+    skillBindingPublicId: binding.publicId,
+    executorType: binding.executorType,
     contextRetrievalId: input.context.retrievalPublicId,
     invocationId: invocation.invocationPublicId,
     strategyVersion: input.strategy.strategyVersion,
@@ -1100,11 +1182,17 @@ async function executeTask(input: {
     taskPublicId: input.task.publicId,
     toolName: input.task.toolName,
     skillVersion: tool.version,
+    skillBindingPublicId: binding.publicId,
+    executorType: binding.executorType,
     contextRetrievalId: input.context.retrievalPublicId,
     invocationId: invocation.invocationPublicId,
     arguments: input.task.input,
   });
   try {
+    if (!binding.enabledAtLock) throw new Error(`SKILL_DISABLED:${binding.slug}`);
+    if (binding.version !== tool.version) {
+      throw new Error(`SKILL_VERSION_UNAVAILABLE:${binding.slug}@${binding.version}`);
+    }
     if (providerBacked) {
       const rateAccepted = await consumeProviderRateToken(database, getOpenAIProviderStatus().providerName, input.study.workspaceId);
       if (!rateAccepted) throw new Error("RUNTIME_RATE_LIMITED");
@@ -1158,7 +1246,7 @@ async function executeTask(input: {
 async function beginInvocation(
   study: HarnessStudy,
   task: StoredTask,
-  skillVersion: number,
+  binding: NonNullable<Awaited<ReturnType<typeof getRunSkillBinding>>>,
   contextRetrievalId: string | null,
 ) {
   const database = await getDatabase();
@@ -1168,7 +1256,9 @@ async function beginInvocation(
     taskId: task.id,
     taskKey: task.key,
     toolName: task.toolName,
-    skillVersion,
+    skillVersion: binding.version,
+    skillBindingId: binding.id,
+    executorType: binding.executorType,
     contextRetrievalId,
     arguments: task.input,
   }));
@@ -1188,9 +1278,9 @@ async function completeInvocation(input: {
   await database.transaction(async (transaction) => {
     await transaction.query(
       `update study_tool_invocations
-       set status = 'completed', result = $2::jsonb, finished_at = now()
+       set status = 'completed', result = $2::jsonb, response_hash = $3, finished_at = now()
        where id = $1`,
-      [input.invocationId, JSON.stringify(input.output)],
+      [input.invocationId, JSON.stringify(input.output), hashJson(input.output)],
     );
     await transaction.query(
       `update study_task_attempts set status = 'completed', error_class = null, error_code = null,
@@ -1359,6 +1449,7 @@ async function materializeStudy(study: HarnessStudy, state: HarnessState) {
 
   await database.transaction(async (transaction) => {
     const personaIdsByName = new Map<string, string>();
+    const personaContextCandidates: Array<{ publicId: string; name: string; profile: unknown }> = [];
     if (personaResult.success) {
       const compositionByName = new Map(personaResult.data.composition.map((item) => [item.name, item]));
       for (const persona of personaResult.data.personas) {
@@ -1374,17 +1465,18 @@ async function materializeStudy(study: HarnessStudy, state: HarnessState) {
             continue;
           }
         }
-        const inserted = await transaction.query<{ id: string }>(
+        const inserted = await transaction.query<{ id: string; public_id: string }>(
           `insert into study_personas (
-             public_id, workspace_id, created_by, study_id, run_id, name, archetype, profile
-           ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
-           returning id::text as id`,
+             public_id, workspace_id, created_by, study_id, run_id, name, archetype, profile, retention_status
+           ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 'pending')
+           returning id::text as id, public_id`,
           [
             createPublicId("per"), study.workspaceId, study.createdBy, study.studyId, study.runId,
             persona.name, persona.archetype, JSON.stringify(persona),
           ],
         );
         personaIdsByName.set(persona.name, inserted.rows[0].id);
+        personaContextCandidates.push({ publicId: inserted.rows[0].public_id, name: persona.name, profile: persona });
       }
 
       const panel = panelResult.success ? panelResult.data : personaResult.data.panel;
@@ -1419,14 +1511,14 @@ async function materializeStudy(study: HarnessStudy, state: HarnessState) {
 
     if (reportResult.success) {
       const content = { ...reportResult.data.report, citations: reportResult.data.citations };
-      const storedReport = await transaction.query<{ id: string }>(
+      const storedReport = await transaction.query<{ id: string; public_id: string }>(
         `insert into reports (public_id, study_id, title, description, content_html, content_json)
          values ($1, $2, $3, $4, $5, $6::jsonb)
          on conflict (study_id) do update set
            title = excluded.title, description = excluded.description,
            content_html = excluded.content_html, content_json = excluded.content_json,
            generated_at = now()
-         returning id::text as id`,
+         returning id::text as id, public_id`,
         [
           createPublicId("rpt"), study.studyId, reportResult.data.report.title,
           reportResult.data.report.executiveSummary, renderReportHtml(reportResult.data.report),
@@ -1460,6 +1552,24 @@ async function materializeStudy(study: HarnessStudy, state: HarnessState) {
         providerModel: reportResult.data.model,
         providerResponseId: reportResult.data.responseId,
         promptVersion: REPORT_PROMPT_VERSION,
+      });
+      await groundStudyPersonasFromEvidence(transaction, {
+        workspaceId: study.workspaceId,
+        studyId: study.studyId,
+        runId: study.runId,
+        personas: personaContextCandidates.map((persona) => ({ publicId: persona.publicId, name: persona.name })),
+      });
+      await proposeStudyContextCandidates(transaction, {
+        workspaceId: study.workspaceId,
+        userId: study.createdBy,
+        studyPublicId: study.publicId,
+        report: {
+          publicId: storedReport.rows[0].public_id,
+          title: reportResult.data.report.title,
+          executiveSummary: reportResult.data.report.executiveSummary,
+          content,
+        },
+        personas: personaContextCandidates,
       });
     }
 
@@ -1511,15 +1621,18 @@ export async function runStudyHarness(runId: string) {
       studyId: study.studyId,
       runId: study.runId,
       subjectKey: `study:${study.publicId}`,
-      workflowType: "batch_research",
+      workflowType: study.workflowType,
     });
     const runTimeoutSeconds = Number(assigned.config.runTimeoutSeconds ?? getRuntimeLimits().runTimeoutSeconds);
     await transaction.query(
-      `update study_runs set workflow_type = 'batch_research', workflow_version = 'research-dag-v3-dynamic',
-              strategy_key = $2, strategy_version = $3, experiment_assignment_id = $4,
-              timeout_seconds = $5, reasoning_policy_version = $6
+      `update study_runs set workflow_type = $2, workflow_version = $3,
+              strategy_key = $4, strategy_version = $5, experiment_assignment_id = $6,
+              timeout_seconds = $7, reasoning_policy_version = $8
        where id = $1`,
-      [study.runId, assigned.variantKey, assigned.strategyVersion, assigned.assignmentId, runTimeoutSeconds, REASONING_POLICY_VERSION],
+      [
+        study.runId, study.workflowType, study.workflowVersion, assigned.variantKey,
+        assigned.strategyVersion, assigned.assignmentId, runTimeoutSeconds, REASONING_POLICY_VERSION,
+      ],
     );
     return assigned;
   });
@@ -1538,7 +1651,7 @@ export async function runStudyHarness(runId: string) {
   await appendEvent(database, study.studyId, study.runId, resuming ? "run.resumed" : "run.started", {
     provider: provider.providerName,
     model: provider.researchModel,
-    harness: "research-dag-v3-dynamic",
+    harness: study.workflowVersion,
     strategy: {
       experimentKey: strategy.experimentKey,
       variantKey: strategy.variantKey,
@@ -1567,6 +1680,7 @@ export async function runStudyHarness(runId: string) {
     studyId: study.studyId,
     runId: study.runId,
     query: `${study.brief}\n${study.audience}\n${study.framework}`,
+    purpose: "research_execution",
     limit: 8,
   });
   await appendEvent(database, study.studyId, study.runId, resuming ? "context.reused" : "context.retrieved", {

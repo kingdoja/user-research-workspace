@@ -1,9 +1,10 @@
 "use client";
 
-import { ArrowUp, Clock3, Lightbulb, LoaderCircle, Paperclip, Sparkles } from "lucide-react";
+import { ArrowUp, ChartNoAxesCombined, Clock3, Lightbulb, LoaderCircle, Paperclip, Search, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useState, useTransition } from "react";
 import type { StudySummary } from "@/lib/studies";
+import type { StudyProductLine } from "@/lib/research-types";
 import {
   formatStudyDate,
   methodLabels,
@@ -11,7 +12,7 @@ import {
   studyTypeLabels,
 } from "@/lib/study-display";
 
-const scenarioPrompts = [
+const researchScenarioPrompts = [
   ["消费者洞察", "研究目标消费者在选择新品类时的真实动机、顾虑与决策路径。"],
   ["产品研发", "寻找现有产品体验中的关键问题，并评估最值得优先投入的改进方向。"],
   ["概念测试", "比较三个产品概念对目标人群的吸引力、理解偏差和购买阻力。"],
@@ -20,8 +21,18 @@ const scenarioPrompts = [
   ["内容策略", "研究目标受众会主动分享、收藏和信任哪类内容及其原因。"],
 ] as const;
 
+const marketInsightScenarioPrompts = [
+  ["市场格局", "梳理中国咖啡订阅市场的品类结构、增长驱动、渠道变化和关键不确定性。"],
+  ["竞争信号", "比较主要 AI 会议助手的定位、定价、能力边界与近期产品动作，识别竞争空白。"],
+  ["机会地图", "分析家庭储能市场的新兴需求、未满足场景和进入机会，并标记证据强弱。"],
+  ["趋势扫描", "扫描社交媒体与公开行业资料中的宠物健康消费趋势、弱信号和反向证据。"],
+  ["市场进入", "评估面向东南亚中小企业的财务自动化产品进入机会、渠道约束与主要风险。"],
+  ["品类演化", "研究无酒精饮品品类近两年的消费场景、品牌动作和增长方向。"],
+] as const;
+
 export function StudyWorkspace({ studies }: { studies: StudySummary[] }) {
   const [brief, setBrief] = useState("");
+  const [productLine, setProductLine] = useState<StudyProductLine>("research");
   const [error, setError] = useState("");
   const [pending, startTransition] = useTransition();
 
@@ -34,7 +45,7 @@ export function StudyWorkspace({ studies }: { studies: StudySummary[] }) {
         const response = await fetch("/api/studies", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ brief }),
+          body: JSON.stringify({ brief, productLine }),
         });
         const result = (await response.json()) as { error?: string; redirectTo?: string };
 
@@ -50,22 +61,38 @@ export function StudyWorkspace({ studies }: { studies: StudySummary[] }) {
     });
   }
 
+  const isMarketInsight = productLine === "market_insight";
+  const scenarioPrompts = isMarketInsight ? marketInsightScenarioPrompts : researchScenarioPrompts;
+
   return (
     <div className="workspace-content-grid">
       <section className="study-entry-column">
         <div className="workspace-heading-row">
           <div>
-            <h1>开始新研究</h1>
-            <p>提出关于人类行为和决策的商业问题，我们会先生成一份可确认的研究计划。</p>
+            <h1>{isMarketInsight ? "开始市场洞察" : "开始新研究"}</h1>
+            <p>{isMarketInsight
+              ? "提出市场、品类或竞争问题，系统会锁定证据范围并生成可确认的市场洞察工作流。"
+              : "提出关于人类行为和决策的商业问题，我们会先生成一份可确认的研究计划。"}</p>
           </div>
           <Link className="workspace-text-link" href="/studies">我的项目</Link>
+        </div>
+
+        <div className="study-product-line" role="group" aria-label="产品线">
+          <button type="button" className={productLine === "research" ? "active" : ""} aria-pressed={productLine === "research"} onClick={() => setProductLine("research")}>
+            <Search size={15} /><span>用户研究</span>
+          </button>
+          <button type="button" className={isMarketInsight ? "active" : ""} aria-pressed={isMarketInsight} onClick={() => setProductLine("market_insight")}>
+            <ChartNoAxesCombined size={15} /><span>市场洞察</span>
+          </button>
         </div>
 
         <form className="study-composer" onSubmit={submitStudy}>
           <textarea
             value={brief}
             onChange={(event) => setBrief(event.target.value)}
-            placeholder="提出任何关于人类行为和决策的商业问题。我们将为驱动真实选择的主观因素建模。"
+            placeholder={isMarketInsight
+              ? "描述要判断的市场、品类、地区、时间范围与业务决策。系统将建立市场格局、竞争信号和机会地图。"
+              : "提出任何关于人类行为和决策的商业问题。我们将为驱动真实选择的主观因素建模。"}
             maxLength={4000}
             aria-label="研究问题"
           />
@@ -86,7 +113,7 @@ export function StudyWorkspace({ studies }: { studies: StudySummary[] }) {
         <div className="scenario-section">
           <div className="scenario-title">
             <Sparkles size={17} />
-            <h2>研究场景</h2>
+            <h2>{isMarketInsight ? "市场洞察场景" : "研究场景"}</h2>
           </div>
           <div className="scenario-grid">
             {scenarioPrompts.map(([label, prompt]) => (
@@ -121,7 +148,7 @@ export function StudyWorkspace({ studies }: { studies: StudySummary[] }) {
                       <td>
                         <Link href={`/study/${study.publicId}`}>
                           <strong>{study.title}</strong>
-                          <span>{studyTypeLabels[study.studyType] ?? study.studyType}</span>
+                          <span>{study.productLine === "market_insight" ? "Market Insight" : "Research"} · {studyTypeLabels[study.studyType] ?? study.studyType}</span>
                         </Link>
                       </td>
                       <td><span className={`study-status status-${study.status}`}>{studyStatusLabels[study.status] ?? study.status}</span></td>
@@ -146,12 +173,14 @@ export function StudyWorkspace({ studies }: { studies: StudySummary[] }) {
           <li className="active"><span>1</span><div><strong>Brief</strong><p>描述需要研究的问题</p></div></li>
           <li><span>2</span><div><strong>澄清</strong><p>补充目标与范围</p></div></li>
           <li><span>3</span><div><strong>确认计划</strong><p>确认方法与研究范围</p></div></li>
-          <li><span>4</span><div><strong>执行</strong><p>研究执行与资料检索</p></div></li>
-          <li><span>5</span><div><strong>报告</strong><p>生成洞察报告</p></div></li>
+          <li><span>4</span><div><strong>执行</strong><p>{isMarketInsight ? "市场、竞争与趋势检索" : "研究执行与资料检索"}</p></div></li>
+          <li><span>5</span><div><strong>报告</strong><p>{isMarketInsight ? "生成机会地图" : "生成洞察报告"}</p></div></li>
         </ol>
         <div className="progress-note">
           <Lightbulb size={18} />
-          <p>完整描述业务背景、目标人群和决策场景，可以减少后续澄清轮次。</p>
+          <p>{isMarketInsight
+            ? "明确地区、品类边界、时间范围和要支持的决策，可以提高市场信号的可比性。"
+            : "完整描述业务背景、目标人群和决策场景，可以减少后续澄清轮次。"}</p>
         </div>
       </aside>
     </div>

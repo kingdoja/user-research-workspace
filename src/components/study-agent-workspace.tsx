@@ -7,6 +7,7 @@ import {
   FileCheck2,
   Files,
   FileText,
+  GitCompareArrows,
   Link2,
   LoaderCircle,
   Menu,
@@ -206,6 +207,7 @@ function PlanningTrace({ study }: { study: StudyDetail }) {
             : "我已分析研究需求和澄清答案，并把业务目标、范围、方法与执行约束整理成可确认的计划。"}</p>
           <ToolCall name="analyzeBrief">
             <dl className="agent-tool-fields">
+              <div><dt>产品线</dt><dd>{study.productLine === "market_insight" ? "Market Insight" : "Research"}</dd></div>
               <div><dt>研究类型</dt><dd>{studyTypeLabels[study.studyType] ?? study.studyType}</dd></div>
               <div><dt>框架</dt><dd>{study.plan.framework}</dd></div>
               <div><dt>目标受众</dt><dd>{study.plan.personaFilters.audience}</dd></div>
@@ -226,6 +228,21 @@ function PlanningTrace({ study }: { study: StudyDetail }) {
               </div>
             </ToolCall>
           ) : null}
+          {!clarificationPending && study.intent ? (
+            <ToolCall name="resolveIntentContract">
+              <dl className="agent-tool-fields">
+                <div><dt>Intent</dt><dd>v{study.intent.version} · {study.intent.lifecycleStatus}</dd></div>
+                <div><dt>产品线</dt><dd>{study.intent.productLine === "market_insight" ? "Market Insight" : "Research"}</dd></div>
+                <div><dt>Schema</dt><dd>{study.intent.schemaVersion}</dd></div>
+                <div><dt>Hash</dt><dd title={study.intent.contentHash}>{study.intent.contentHash.slice(0, 12)}…</dd></div>
+                <div><dt>Context purpose</dt><dd>{study.intent.context?.purpose ?? "intent_planning"}</dd></div>
+                <div><dt>Context snapshot</dt><dd>{study.intent.context?.retrievalPublicId ?? "无命中"}</dd></div>
+                <div><dt>Context 引用</dt><dd>{study.intent.context?.citationCount ?? 0} 条</dd></div>
+                <div><dt>Policy 拒绝</dt><dd>{typeof study.intent.context?.policyDecision.deniedMemoryChunks === "number" ? study.intent.context.policyDecision.deniedMemoryChunks : 0} 条 Memory</dd></div>
+                <div><dt>Prompt</dt><dd>{study.intent.promptVersion}</dd></div>
+              </dl>
+            </ToolCall>
+          ) : null}
           {!clarificationPending ? <ToolCall name="makeStudyPlan">
             <section className="agent-plan-card">
               <header><div><span>研究计划</span><h2>{study.title}</h2></div><FileText size={20} /></header>
@@ -235,7 +252,7 @@ function PlanningTrace({ study }: { study: StudyDetail }) {
                 <section><h3>预计周期</h3><p>{formatDuration(study.plan.estimatedDurationMinutes)}</p></section>
                 <section><h3>预计用量</h3><p>{formatTokens(study.plan.estimatedTokens)} Tokens</p></section>
               </div>
-              {study.plan.status === "confirmed" ? <div className="agent-plan-confirmed"><Check size={15} />研究计划已确认，执行记录已锁定</div> : <StudyDetailActions publicId={study.publicId} />}
+              {study.plan.status === "confirmed" ? <div className="agent-plan-confirmed"><Check size={15} />Plan v{study.plan.version} 已确认 · {study.plan.contentHash ? `${study.plan.contentHash.slice(0, 10)}…` : "执行版本已锁定"}{study.workflow ? ` · Workflow v${study.workflow.version}` : ""}</div> : <StudyDetailActions publicId={study.publicId} />}
             </section>
           </ToolCall> : null}
         </div>
@@ -378,6 +395,7 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
         {study.runHistory.length > 0 ? (
           <details className="agent-run-history" open={study.runHistory.length > 1}>
             <summary><ChevronRight size={15} /><strong>执行历史</strong><span>{study.runHistory.length} 次</span></summary>
+            {study.runHistory.length > 1 ? <Link className="agent-run-compare-link" href={`/study/${study.publicId}/compare`}><GitCompareArrows size={14} />对比 Run 回放</Link> : null}
             <ol>{study.runHistory.toReversed().map((run) => {
               const statusLabel = run.status === "completed" ? "已完成" : run.status === "failed" ? "失败" : run.status === "waiting_input" ? "等待输入" : run.status === "running" ? "执行中" : "排队中";
               const started = new Date(run.startedAt ?? run.createdAt);

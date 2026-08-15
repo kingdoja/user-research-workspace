@@ -8,6 +8,7 @@ export const maxDuration = 120;
 
 const createStudySchema = z.object({
   brief: z.string().trim().min(12, "请再具体描述一些研究问题").max(4000, "研究问题不能超过 4000 个字符"),
+  productLine: z.enum(["research", "market_insight"]).default("research"),
   sourcePanelPublicId: z.string().trim().min(8).max(120).optional(),
 });
 
@@ -42,7 +43,12 @@ export async function POST(request: Request) {
   }
 
   try {
-    const publicId = await createStudy(viewer, parsed.data.brief, parsed.data.sourcePanelPublicId);
+    const publicId = await createStudy(
+      viewer,
+      parsed.data.brief,
+      parsed.data.productLine,
+      parsed.data.sourcePanelPublicId,
+    );
     return NextResponse.json({ publicId, redirectTo: `/study/${publicId}` }, { status: 201 });
   } catch (error) {
     if (error instanceof Error && error.message === "PANEL_NOT_FOUND") {

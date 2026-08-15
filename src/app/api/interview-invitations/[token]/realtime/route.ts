@@ -14,5 +14,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
   if (result === "not_found") return NextResponse.json({ error: "邀请链接无效或已过期" }, { status: 404 });
   if (result === "no_questions") return NextResponse.json({ error: "该访谈尚未配置问题" }, { status: 409 });
   if (result === "provider_missing") return NextResponse.json({ error: "实时访谈 Agent 尚未配置模型服务" }, { status: 503 });
+  if (result === "skill_disabled") return NextResponse.json({ error: "实时访谈 Skill 已被工作区禁用" }, { status: 409 });
   return NextResponse.json(result, { status: 201 });
 }

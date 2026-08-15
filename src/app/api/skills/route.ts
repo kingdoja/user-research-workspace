@@ -4,7 +4,7 @@ import { isSameOriginRequest } from "@/lib/request-security";
 import { listResearchSkills } from "@/lib/research-harness";
 import {
   createWorkspaceSkill,
-  listWorkspaceSkills,
+  listSkillCatalog,
   skillManifestInputSchema,
 } from "@/lib/skill-gateway";
 import { REALTIME_INTERVIEW_SKILL } from "@/lib/realtime-interviews";
@@ -12,23 +12,25 @@ import { REALTIME_INTERVIEW_SKILL } from "@/lib/realtime-interviews";
 export async function GET() {
   const viewer = await getViewer();
   if (!viewer) return NextResponse.json({ error: "请先登录" }, { status: 401 });
-  const workspaceSkills = await listWorkspaceSkills(viewer);
+  const skills = await listSkillCatalog(viewer, [
+    ...listResearchSkills(),
+    {
+      publicId: null,
+      slug: REALTIME_INTERVIEW_SKILL.slug,
+      version: REALTIME_INTERVIEW_SKILL.version,
+      name: "实时访谈 Agent",
+      description: "基于固定研究问题进行逐轮追问、持久化恢复、版本回放和质量评估。",
+      capabilities: ["interview.realtime", "interview.followup", "interview.replay"],
+      source: "builtin",
+      status: "active",
+      executable: true,
+      enabled: true,
+      executorType: "builtin",
+      contentHash: null,
+    },
+  ]);
   return NextResponse.json({
-    skills: [
-      ...listResearchSkills(),
-      {
-        publicId: null,
-        slug: REALTIME_INTERVIEW_SKILL.slug,
-        version: REALTIME_INTERVIEW_SKILL.version,
-        name: "实时访谈 Agent",
-        description: "基于固定研究问题进行逐轮追问、持久化恢复、版本回放和质量评估。",
-        capabilities: ["interview.realtime", "interview.followup", "interview.replay"],
-        source: "builtin",
-        status: "active",
-        executable: true,
-      },
-      ...workspaceSkills,
-    ],
+    skills,
   });
 }
 

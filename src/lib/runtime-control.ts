@@ -2,8 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Viewer } from "@/lib/auth";
 import { getDatabase, type Queryable } from "@/lib/db";
 import { createPublicId } from "@/lib/identifiers";
+import type { WorkflowType } from "@/lib/research-types";
 
-export type WorkflowType = "realtime_agent" | "batch_research";
+export type { WorkflowType } from "@/lib/research-types";
 
 export type StrategyAssignment = {
   assignmentId: string | null;
@@ -272,12 +273,10 @@ export async function recordBatchTaskMetrics(queryable: Queryable, assignmentId:
   const failures = Number(row.failures);
   const retries = Number(row.retries);
   const metadata = { metricVersion: "batch-task-metrics-v1", runId };
-  await Promise.all([
-    recordStrategyMetric(queryable, assignmentId, "task_invocations", invocations, metadata),
-    recordStrategyMetric(queryable, assignmentId, "task_failures", failures, metadata),
-    recordStrategyMetric(queryable, assignmentId, "task_retries", retries, metadata),
-    recordStrategyMetric(queryable, assignmentId, "task_retry_rate", invocations ? retries / invocations : 0, metadata),
-  ]);
+  await recordStrategyMetric(queryable, assignmentId, "task_invocations", invocations, metadata);
+  await recordStrategyMetric(queryable, assignmentId, "task_failures", failures, metadata);
+  await recordStrategyMetric(queryable, assignmentId, "task_retries", retries, metadata);
+  await recordStrategyMetric(queryable, assignmentId, "task_retry_rate", invocations ? retries / invocations : 0, metadata);
   return { invocations, failures, retries, retryRate: invocations ? retries / invocations : 0 };
 }
 

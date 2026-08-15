@@ -1,6 +1,7 @@
 import { createPublicId } from "@/lib/identifiers";
 import { type Queryable } from "@/lib/db";
 import { describeOpenAIError } from "@/lib/openai-provider";
+import { hashJson } from "@/lib/skill-executor";
 
 export type TaskFailureClass = "cancelled" | "timeout" | "rate_limited" | "upstream" | "response" | "input_required" | "configuration" | "validation" | "unknown";
 export type TaskFailureDisposition = "retry" | "waiting_input" | "terminal" | "cancelled";
@@ -81,7 +82,14 @@ export function classifyTaskError(error: unknown): TaskFailure {
       },
     };
   }
-  if (described.code === "OPENAI_API_KEY_MISSING" || messageIncludes(error, "API_KEY_MISSING", "UNSAFE", "FORBIDDEN")) {
+  if (
+    described.code === "OPENAI_API_KEY_MISSING"
+    || messageIncludes(
+      error,
+      "API_KEY_MISSING", "UNSAFE", "FORBIDDEN", "SKILL_DISABLED",
+      "SKILL_BINDING_MISSING", "SKILL_VERSION_UNAVAILABLE", "SKILL_EXECUTOR_", "SKILL_MCP_",
+    )
+  ) {
     return { className: "configuration", code: described.code, message: described.message, retryable: false, disposition: "terminal" };
   }
   if (
@@ -114,6 +122,8 @@ export async function startTaskAttempt(queryable: Queryable, input: {
   taskKey: string;
   toolName: string;
   skillVersion: number;
+  skillBindingId?: string | null;
+  executorType?: "builtin" | "declarative_http" | "mcp";
   contextRetrievalId: string | null;
   arguments: Record<string, unknown>;
 }) : Promise<StartedTaskAttempt> {
@@ -131,17 +141,20 @@ export async function startTaskAttempt(queryable: Queryable, input: {
   const invocation = await queryable.query<{ id: string; public_id: string }>(
     `insert into study_tool_invocations (
        public_id, study_id, run_id, task_id, tool_name, idempotency_key, arguments,
-       skill_slug, skill_version, context_retrieval_id
-     ) values ($1, $2, $3, $4, $5, $6, $7::jsonb, $5, $8, $9)
+       skill_slug, skill_version, context_retrieval_id, skill_binding_id, executor_type, request_hash
+     ) values ($1, $2, $3, $4, $5, $6, $7::jsonb, $5, $8, $9, $10, $11, $12)
      on conflict (idempotency_key) do update set
        status = 'running', arguments = excluded.arguments, error_message = null,
        skill_slug = excluded.skill_slug, skill_version = excluded.skill_version,
        context_retrieval_id = excluded.context_retrieval_id,
+       skill_binding_id = excluded.skill_binding_id, executor_type = excluded.executor_type,
+       request_hash = excluded.request_hash, response_hash = null,
        attempt = study_tool_invocations.attempt + 1, started_at = now(), finished_at = null
      returning id::text as id, public_id`,
     [
       createPublicId("inv"), input.studyId, input.runId, input.taskId, input.toolName,
       `${input.runId}:${input.taskKey}`, JSON.stringify(input.arguments), input.skillVersion, input.contextRetrievalId,
+      input.skillBindingId ?? null, input.executorType ?? "builtin", hashJson(input.arguments),
     ],
   );
   const row = invocation.rows[0];
@@ -152,7 +165,15 @@ export async function startTaskAttempt(queryable: Queryable, input: {
      on conflict (task_id, attempt) do update set
        invocation_id = excluded.invocation_id, status = 'running', error_class = null, error_code = null,
        error_message = null, retryable = null, finished_at = null, metadata = excluded.metadata`,
-    [createPublicId("tat"), input.studyId, input.runId, input.taskId, row.id, attempt, JSON.stringify({ toolName: input.toolName, skillVersion: input.skillVersion })],
+    [
+      createPublicId("tat"), input.studyId, input.runId, input.taskId, row.id, attempt,
+      JSON.stringify({
+        toolName: input.toolName,
+        skillVersion: input.skillVersion,
+        skillBindingId: input.skillBindingId ?? null,
+        executorType: input.executorType ?? "builtin",
+      }),
+    ],
   );
   return { invocationId: row.id, invocationPublicId: row.public_id, attempt };
 }
