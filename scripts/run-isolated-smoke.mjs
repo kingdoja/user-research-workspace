@@ -14,9 +14,11 @@ const allowedSmokes = new Map([
   ["context-hybrid", { command: "pnpm", args: ["smoke:context-hybrid"], confirmation: "CONTEXT_HYBRID_SMOKE_CONFIRM" }],
   ["context-asset-flywheel", { command: "pnpm", args: ["smoke:context-asset-flywheel"], confirmation: "CONTEXT_ASSET_FLYWHEEL_SMOKE_CONFIRM" }],
   ["context-memory-policy", { command: "pnpm", args: ["smoke:context-memory-policy"], confirmation: "CONTEXT_MEMORY_POLICY_SMOKE_CONFIRM" }],
+  ["agent-eval-dynamic-context", { command: "pnpm", args: ["smoke:agent-eval-dynamic-context"], confirmation: "AGENT_EVAL_DYNAMIC_CONTEXT_SMOKE_CONFIRM" }],
   ["persona-evidence", { command: "pnpm", args: ["smoke:persona-evidence"], confirmation: "PERSONA_EVIDENCE_SMOKE_CONFIRM" }],
   ["plan-version-replay", { command: "pnpm", args: ["smoke:plan-version-replay"], confirmation: "PLAN_VERSION_REPLAY_SMOKE_CONFIRM" }],
   ["skill-executor", { command: "pnpm", args: ["smoke:skill-executor"], confirmation: "SKILL_EXECUTOR_SMOKE_CONFIRM" }],
+  ["skill-package-governance", { command: "pnpm", args: ["smoke:skill-package-governance"], confirmation: "SKILL_PACKAGE_GOVERNANCE_SMOKE_CONFIRM" }],
   ["intent-workflow-contract", { command: "pnpm", args: ["smoke:intent-workflow-contract"], confirmation: "INTENT_WORKFLOW_CONTRACT_SMOKE_CONFIRM" }],
   ["market-insight-workflow", { command: "pnpm", args: ["smoke:market-insight-workflow"], confirmation: "MARKET_INSIGHT_WORKFLOW_SMOKE_CONFIRM" }],
 ]);

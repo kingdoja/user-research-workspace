@@ -14,5 +14,10 @@ export async function PATCH(request: Request) {
   if (result === "forbidden") return NextResponse.json({ error: "当前角色无权修改该 Skill" }, { status: 403 });
   if (result === "unconfigured") return NextResponse.json({ error: "Skill 尚未配置 Executor" }, { status: 409 });
   if (result === "archived") return NextResponse.json({ error: "已归档 Skill 不能启用" }, { status: 409 });
+  if (result === "revoked") return NextResponse.json({ error: "已撤销 Skill 不能启用" }, { status: 409 });
+  if (result === "pending_approval") return NextResponse.json({ error: "导入的 Skill 需要管理员审批权限后才能启用" }, { status: 409 });
+  if (typeof result === "object" && "error" in result && result.error === "capability_denied") {
+    return NextResponse.json({ error: `Skill 缺少权限授予：${result.missing.join(", ")}` }, { status: 409 });
+  }
   return NextResponse.json(result);
 }

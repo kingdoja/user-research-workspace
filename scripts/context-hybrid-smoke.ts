@@ -96,6 +96,10 @@ async function main() {
       sourceUri: null,
       content: "雨天通勤时，受访者优先选择公交车，因为换乘少并且到达时间更稳定。",
       changeNote: "smoke",
+      evidenceKind: "human",
+      consentStatus: "confirmed",
+      piiStatus: "redacted",
+      reviewStatus: "approved",
     });
     assert.notEqual(relevant, "forbidden");
     assert.notEqual(relevant, "study_not_found");
@@ -136,12 +140,14 @@ async function main() {
     const evaluationSet = await createContextEvaluationSet(viewer, {
       name: "通勤检索评估",
       description: "smoke",
+      labelingProtocol: "human_relevance_v1",
       cases: [{
         query: "下雨时怎样选择公交通勤",
         assetTypes: [],
         scopes: ["workspace"],
         topK: 2,
         expectedChunkPublicIds: [chunk.rows[0].public_id],
+        labelNote: "人工复核：该访谈片段直接回答雨天通勤的选择依据。",
       }],
     });
     assert.equal(typeof evaluationSet, "object");

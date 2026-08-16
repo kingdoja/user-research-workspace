@@ -3,6 +3,7 @@
 import {
   Archive,
   ArrowUpRight,
+  Beaker,
   BrainCircuit,
   Check,
   CircleAlert,
@@ -14,11 +15,13 @@ import {
   Link2,
   LoaderCircle,
   Plus,
+  Play,
   RefreshCw,
   Search,
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
+  Trash2,
   Upload,
   UserRound,
   X,
@@ -27,13 +30,29 @@ import { FormEvent, useCallback, useDeferredValue, useEffect, useMemo, useState 
 import type {
   getContextMemoryDetail,
   listContextAssets,
+  listContextEvaluationSets,
+  listContextEvaluationSourceChunks,
   listContextMemoryPolicies,
 } from "@/lib/context-system";
+import type { listAgentEvalSuites } from "@/lib/agent-evals";
 
 type ContextAsset = Awaited<ReturnType<typeof listContextAssets>>[number];
 type MemoryPolicy = Awaited<ReturnType<typeof listContextMemoryPolicies>>[number];
 type MemoryDetailResult = Awaited<ReturnType<typeof getContextMemoryDetail>>;
 type MemoryDetail = Exclude<MemoryDetailResult, "not_found">;
+type AgentEvalSuite = Awaited<ReturnType<typeof listAgentEvalSuites>>[number];
+type ContextEvaluationSet = Awaited<ReturnType<typeof listContextEvaluationSets>>[number];
+type ContextEvaluationSource = Awaited<ReturnType<typeof listContextEvaluationSourceChunks>>[number];
+type ContextEvaluationCaseDraft = {
+  query: string;
+  assetTypes: ["research_sample"];
+  scopes: ["workspace"];
+  topK: number;
+  expectedChunkPublicIds: [string];
+  labelNote: string;
+  sourceTitle: string;
+  sourcePreview: string;
+};
 type Notice = { kind: "success" | "error"; text: string } | null;
 type Filter = "all" | "memory" | "pending" | "active" | "attention";
 
@@ -83,19 +102,40 @@ function governanceAttention(asset: ContextAsset) {
   return asset.consentStatus === "unknown" || asset.piiStatus === "not_reviewed" || asset.piiStatus === "present";
 }
 
+function evaluationMetric(metrics: Record<string, unknown>, key: string) {
+  const value = Number(metrics[key]);
+  return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "—";
+}
+
+function evaluationGate(metrics: Record<string, unknown>) {
+  const gate = metrics.gate;
+  if (!gate || typeof gate !== "object" || Array.isArray(gate)) return null;
+  return gate as { eligibleForIndexTrial?: boolean; reasons?: string[] };
+}
+
 export function ContextAssetWorkspace({
   initialAssets,
   initialPolicies,
+  initialAgentEvalSuites,
+  initialEvaluationSets,
+  initialEvaluationSources,
   canCreate,
   canReview,
 }: {
   initialAssets: ContextAsset[];
   initialPolicies: MemoryPolicy[];
+  initialAgentEvalSuites: AgentEvalSuite[];
+  initialEvaluationSets: ContextEvaluationSet[];
+  initialEvaluationSources: ContextEvaluationSource[];
   canCreate: boolean;
   canReview: boolean;
 }) {
   const [assets, setAssets] = useState(initialAssets);
   const [policies, setPolicies] = useState(initialPolicies);
+  const [evaluationSets, setEvaluationSets] = useState(initialEvaluationSets);
+  const [evaluationSources, setEvaluationSources] = useState(initialEvaluationSources);
+  const [evaluationCases, setEvaluationCases] = useState<ContextEvaluationCaseDraft[]>([]);
+  const [evaluationBuilderOpen, setEvaluationBuilderOpen] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
@@ -162,6 +202,105 @@ export function ContextAssetWorkspace({
     const body = await response.json() as { policies?: MemoryPolicy[]; error?: string };
     if (!response.ok || !body.policies) throw new Error(body.error ?? "Memory policy 刷新失败");
     setPolicies(body.policies);
+  }
+
+  async function reloadEvaluations() {
+    const [setsResponse, sourcesResponse] = await Promise.all([
+      fetch("/api/context/evaluations", { cache: "no-store" }),
+      fetch("/api/context/evaluation-sources", { cache: "no-store" }),
+    ]);
+    const setsBody = await setsResponse.json() as { evaluationSets?: ContextEvaluationSet[]; error?: string };
+    const sourcesBody = await sourcesResponse.json() as { sources?: ContextEvaluationSource[]; error?: string };
+    if (!setsResponse.ok || !setsBody.evaluationSets) throw new Error(setsBody.error ?? "检索评估集刷新失败");
+    if (!sourcesResponse.ok || !sourcesBody.sources) throw new Error(sourcesBody.error ?? "评估样本刷新失败");
+    setEvaluationSets(setsBody.evaluationSets);
+    setEvaluationSources(sourcesBody.sources);
+  }
+
+  function addEvaluationCase(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const sourcePublicId = String(data.get("sourcePublicId") ?? "");
+    const source = evaluationSources.find((item) => item.publicId === sourcePublicId);
+    if (!source) {
+      setNotice({ kind: "error", text: "请选择已授权的真实研究样本 chunk" });
+      return;
+    }
+    const query = String(data.get("query") ?? "").trim();
+    const labelNote = String(data.get("labelNote") ?? "").trim();
+    setEvaluationCases((current) => [...current, {
+      query,
+      assetTypes: ["research_sample"],
+      scopes: ["workspace"],
+      topK: Number(data.get("topK") ?? 8),
+      expectedChunkPublicIds: [source.publicId],
+      labelNote,
+      sourceTitle: source.title,
+      sourcePreview: source.contentPreview,
+    }]);
+    form.reset();
+    setNotice(null);
+  }
+
+  async function createEvaluationSet(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!evaluationCases.length) return;
+    setBusy("evaluation:create");
+    setNotice(null);
+    try {
+      const data = new FormData(event.currentTarget);
+      const response = await fetch("/api/context/evaluations", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: data.get("name"),
+          description: data.get("description"),
+          labelingProtocol: "human_relevance_v1",
+          cases: evaluationCases.map((item) => ({
+            query: item.query,
+            assetTypes: item.assetTypes,
+            scopes: item.scopes,
+            topK: item.topK,
+            expectedChunkPublicIds: item.expectedChunkPublicIds,
+            labelNote: item.labelNote,
+          })),
+        }),
+      });
+      const body = await response.json() as { caseCount?: number; error?: string };
+      if (!response.ok) throw new Error(body.error ?? "检索评估集创建失败");
+      setEvaluationCases([]);
+      setEvaluationBuilderOpen(false);
+      await reloadEvaluations();
+      setNotice({ kind: "success", text: `已保存 ${body.caseCount ?? 0} 条人工相关性标签` });
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "检索评估集创建失败" });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runEvaluation(publicId: string, provider: "baseline" | "openai") {
+    setBusy(`evaluation:${publicId}:${provider}`);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/context/evaluations/${publicId}/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider }),
+      });
+      const body = await response.json() as { gate?: { eligibleForIndexTrial?: boolean }; error?: string };
+      if (!response.ok) throw new Error(body.error ?? "检索评估运行失败");
+      await reloadEvaluations();
+      const status = provider === "baseline"
+        ? "基线评估已完成"
+        : body.gate?.eligibleForIndexTrial ? "候选已通过 shadow index 试验门槛" : "候选未通过 shadow index 试验门槛";
+      setNotice({ kind: "success", text: status });
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "检索评估运行失败" });
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function refreshMemory(publicId: string) {
@@ -441,6 +580,47 @@ export function ContextAssetWorkspace({
         <div><ShieldAlert size={18} /><span>治理待处理</span><strong>{metrics.attention}</strong></div>
       </section>
       {notice ? <div className={`context-notice ${notice.kind}`} role="status">{notice.kind === "success" ? <Check size={15} /> : <CircleAlert size={15} />}<span>{notice.text}</span><button type="button" aria-label="关闭提示" onClick={() => setNotice(null)}><X size={14} /></button></div> : null}
+
+      <section className="context-retrieval-evals" aria-label="检索评估">
+        <header><div><Beaker size={15} /><strong>检索评估</strong><span>HUMAN RELEVANCE · GATE 20</span></div>{canReview ? <button className="button button-muted" type="button" onClick={() => setEvaluationBuilderOpen((value) => !value)}>{evaluationBuilderOpen ? <X size={14} /> : <Plus size={14} />}{evaluationBuilderOpen ? "取消" : "新建评估集"}</button> : null}</header>
+        {evaluationBuilderOpen ? <div className="context-evaluation-builder">
+          <form className="context-evaluation-case-form" onSubmit={addEvaluationCase}>
+            <label><span>真实用户会使用的检索问题</span><input name="query" required minLength={2} maxLength={1000} /></label>
+            <label><span>人工确认相关的样本 chunk</span><select name="sourcePublicId" required defaultValue=""><option value="">选择已授权样本</option>{evaluationSources.map((source) => <option key={source.publicId} value={source.publicId}>{source.title} · {source.contentPreview.slice(0, 72)}</option>)}</select></label>
+            <div><label><span>Top K</span><input name="topK" type="number" min={1} max={20} defaultValue={8} /></label><label><span>相关性判断依据</span><input name="labelNote" required minLength={2} maxLength={1000} /></label></div>
+            <button className="button button-muted" type="submit" disabled={!evaluationSources.length}><Plus size={14} />加入标签</button>
+          </form>
+          <form className="context-evaluation-set-form" onSubmit={createEvaluationSet}>
+            <header><strong>待保存标签</strong><span>{evaluationCases.length} / 20</span></header>
+            <div className="context-evaluation-case-drafts">{evaluationCases.map((item, index) => <article key={`${item.expectedChunkPublicIds[0]}:${index}`}><div><strong>{item.query}</strong><span>{item.sourceTitle}</span><small>{item.labelNote}</small></div><button type="button" title="移除标签" onClick={() => setEvaluationCases((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={14} /></button></article>)}{evaluationCases.length === 0 ? <p>尚无标签</p> : null}</div>
+            <div><label><span>评估集名称</span><input name="name" required minLength={2} maxLength={180} /></label><label><span>描述</span><input name="description" maxLength={1000} /></label></div>
+            <footer><span>{evaluationSources.length} 个合规样本 chunk 可标注</span><button className="button button-green" type="submit" disabled={!evaluationCases.length || busy !== null}>{busy === "evaluation:create" ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}保存评估集</button></footer>
+          </form>
+        </div> : null}
+        <div className="context-evaluation-list">{evaluationSets.map((evaluationSet) => {
+          const latestRun = evaluationSet.runs[0] ?? null;
+          const gate = latestRun ? evaluationGate(latestRun.metrics) : null;
+          const ready = evaluationSet.humanLabeledCaseCount >= 20;
+          return <article key={evaluationSet.publicId}>
+            <div className="context-evaluation-heading"><div><strong>{evaluationSet.name}</strong><code>{evaluationSet.labelingProtocol}</code></div><span className={ready ? "ready" : "pending"}>{evaluationSet.humanLabeledCaseCount} / 20</span></div>
+            <div className="context-evaluation-progress"><span style={{ width: `${Math.min(100, evaluationSet.humanLabeledCaseCount * 5)}%` }} /></div>
+            <dl><div><dt>Precision@K</dt><dd>{latestRun ? evaluationMetric(latestRun.metrics, "precisionAtK") : "—"}</dd></div><div><dt>Recall@K</dt><dd>{latestRun ? evaluationMetric(latestRun.metrics, "recallAtK") : "—"}</dd></div><div><dt>MRR</dt><dd>{latestRun ? evaluationMetric(latestRun.metrics, "meanReciprocalRank") : "—"}</dd></div></dl>
+            <footer><span>{gate?.eligibleForIndexTrial ? "已通过 shadow index 门槛" : latestRun ? gate?.reasons?.[0] ?? latestRun.status : "尚未运行"}</span>{canReview ? <div><button type="button" title="运行确定性基线" disabled={busy !== null} onClick={() => runEvaluation(evaluationSet.publicId, "baseline")}>{busy === `evaluation:${evaluationSet.publicId}:baseline` ? <LoaderCircle className="spin" size={14} /> : <Play size={14} />}Baseline</button><button type="button" title="评估生产 embedding 候选" disabled={busy !== null || !ready} onClick={() => runEvaluation(evaluationSet.publicId, "openai")}>{busy === `evaluation:${evaluationSet.publicId}:openai` ? <LoaderCircle className="spin" size={14} /> : <Beaker size={14} />}Candidate</button></div> : null}</footer>
+          </article>;
+        })}{evaluationSets.length === 0 ? <p className="context-agent-eval-empty">尚无人工相关性评估集。</p> : null}</div>
+      </section>
+
+      <section className="context-agent-evals" aria-label="Agent Eval">
+        <header><FileCheck2 size={15} /><strong>Agent Eval</strong><span>授权源 · 人工标签与裁决分离</span></header>
+        {initialAgentEvalSuites.length ? <div className="context-agent-eval-list">
+          {initialAgentEvalSuites.map((suite) => <article key={suite.publicId}>
+            <div className="context-agent-eval-name"><strong>{suite.name}</strong><code>{suite.suiteKey} · v{suite.version}</code></div>
+            <div className="context-agent-eval-dimensions">{suite.trustDimensions.map((dimension) => <span key={dimension}>{dimension === "fabricated_citation" ? "引用真实性" : "Persona 收敛"}</span>)}</div>
+            <dl><div><dt>Cases</dt><dd>{suite.caseCount}</dd></div><div><dt>状态</dt><dd>{suite.status === "active" ? "已启用" : suite.status}</dd></div><div><dt>最近运行</dt><dd>{suite.latestRun ? `${suite.latestRun.passedCount} 通过 / ${suite.latestRun.failedCount} 失败` : "未运行"}</dd></div></dl>
+            {suite.latestRun?.failedCount ? <small className="context-agent-eval-failure">{suite.latestRun.failedCount} 个失败等待人工复核</small> : null}
+          </article>)}
+        </div> : <p className="context-agent-eval-empty">尚无 Agent Eval。仅能使用已授权的 Context 版本、报告版本或保留 Persona 创建评估集。</p>}
+      </section>
 
       <section className="context-memory-policies" aria-label="Memory policy">
         <header><SlidersHorizontal size={15} /><strong>Memory policy</strong><span>目的约束 · 版本化</span></header>

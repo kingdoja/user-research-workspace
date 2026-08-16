@@ -39,6 +39,7 @@ export type ContextCitation = {
 export type ContextSnapshot = {
   retrievalId: string | null;
   retrievalPublicId: string | null;
+  retrievedAt: string | null;
   strategy: "lexical_metadata_v1" | "hybrid_v1";
   query: string;
   purpose: ContextPurpose;
@@ -195,12 +196,15 @@ export const contextTombstoneInputSchema = z.object({
 export const contextEvaluationSetInputSchema = z.object({
   name: z.string().trim().min(2).max(180),
   description: z.string().trim().max(1000).default(""),
+  labelingProtocol: z.literal("human_relevance_v1").default("human_relevance_v1"),
   cases: z.array(z.object({
     query: z.string().trim().min(2).max(1000),
     assetTypes: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
     scopes: z.array(z.enum(["user", "workspace", "study", "system"])).max(4).default([]),
     topK: z.number().int().min(1).max(20).default(8),
-    expectedChunkPublicIds: z.array(z.string().trim().min(8).max(120)).min(1).max(30),
+    expectedChunkPublicIds: z.array(z.string().trim().min(8).max(120)).min(1).max(30)
+      .refine((publicIds) => new Set(publicIds).size === publicIds.length, "期望 chunk 不能重复"),
+    labelNote: z.string().trim().min(2).max(1000),
   })).min(1).max(100),
 });
 
@@ -1578,58 +1582,113 @@ export async function createContextEvaluationSet(
   input: z.infer<typeof contextEvaluationSetInputSchema>,
 ) {
   if (viewer.role !== "owner" && viewer.role !== "admin") return "forbidden" as const;
+  const normalized = contextEvaluationSetInputSchema.parse(input);
   const database = await getDatabase();
   return database.transaction(async (transaction) => {
-    const expectedPublicIds = [...new Set(input.cases.flatMap((item) => item.expectedChunkPublicIds))];
-    const chunks = await transaction.query<{ id: string; public_id: string }>(
-      `select chunk.id::text as id, chunk.public_id
+    const expectedPublicIds = [...new Set(normalized.cases.flatMap((item) => item.expectedChunkPublicIds))];
+    const chunks = await transaction.query<{
+      id: string; public_id: string; asset_public_id: string; asset_version_public_id: string; content_hash: string;
+    }>(
+      `select chunk.id::text as id, chunk.public_id, asset.public_id as asset_public_id,
+              version.public_id as asset_version_public_id, version.content_hash
        from context_chunks chunk
        join context_asset_versions version on version.id = chunk.asset_version_id
        join context_assets asset on asset.id = version.asset_id
        where chunk.public_id = any($1::text[]) and asset.workspace_id = $2
-         and asset.current_version = version.version and asset.status = 'active'`,
+         and asset.scope = 'workspace' and asset.current_version = version.version
+         and asset.status = 'active' and asset.review_status = 'approved'
+         and asset.asset_type = 'research_sample' and asset.evidence_kind = 'human'
+         and asset.consent_status = 'confirmed' and asset.pii_status in ('none', 'redacted')
+         and (asset.retention_expires_at is null or asset.retention_expires_at > now())`,
       [expectedPublicIds, viewer.workspaceId],
     );
-    if (chunks.rows.length !== expectedPublicIds.length) return "chunk_not_found" as const;
-    const chunkIds = new Map(chunks.rows.map((chunk) => [chunk.public_id, chunk.id]));
+    if (chunks.rows.length !== expectedPublicIds.length) return "chunk_not_authorized" as const;
+    const chunksByPublicId = new Map(chunks.rows.map((chunk) => [chunk.public_id, chunk]));
     const evaluationSet = await transaction.query<{ id: string; public_id: string }>(
       `insert into context_evaluation_sets (
-         public_id, workspace_id, created_by, name, description, status
-       ) values ($1, $2, $3, $4, $5, 'active') returning id::text as id, public_id`,
-      [createPublicId("ces"), viewer.workspaceId, viewer.userId, input.name, input.description],
+         public_id, workspace_id, created_by, name, description, labeling_protocol, status
+       ) values ($1, $2, $3, $4, $5, $6, 'active') returning id::text as id, public_id`,
+      [createPublicId("ces"), viewer.workspaceId, viewer.userId, normalized.name, normalized.description, normalized.labelingProtocol],
     );
-    for (const item of input.cases) {
+    for (const item of normalized.cases) {
+      const sourceSnapshot = item.expectedChunkPublicIds.map((publicId) => {
+        const chunk = chunksByPublicId.get(publicId);
+        if (!chunk) throw new Error("CONTEXT_EVALUATION_SOURCE_CHANGED");
+        return {
+          chunkPublicId: chunk.public_id,
+          assetPublicId: chunk.asset_public_id,
+          assetVersionPublicId: chunk.asset_version_public_id,
+          contentHash: chunk.content_hash,
+        };
+      });
       const evaluationCase = await transaction.query<{ id: string }>(
         `insert into context_evaluation_cases (
-           public_id, evaluation_set_id, query, filters, top_k
-         ) values ($1, $2, $3, $4::jsonb, $5) returning id::text as id`,
+           public_id, evaluation_set_id, query, filters, top_k, labeling_method,
+           labeled_by, labeled_at, label_note, expected_chunk_snapshot
+         ) values ($1, $2, $3, $4::jsonb, $5, 'human_annotated', $6, now(), $7, $8::jsonb)
+         returning id::text as id`,
         [
           createPublicId("cec"), evaluationSet.rows[0].id, item.query,
           JSON.stringify({ assetTypes: item.assetTypes, scopes: item.scopes }), item.topK,
+          viewer.userId, item.labelNote, JSON.stringify(sourceSnapshot),
         ],
       );
       for (const chunkPublicId of item.expectedChunkPublicIds) {
         await transaction.query(
           `insert into context_evaluation_relevance (evaluation_case_id, chunk_id, relevance)
            values ($1, $2, 1)`,
-          [evaluationCase.rows[0].id, chunkIds.get(chunkPublicId)],
+          [evaluationCase.rows[0].id, chunksByPublicId.get(chunkPublicId)?.id],
         );
       }
     }
-    return { publicId: evaluationSet.rows[0].public_id, caseCount: input.cases.length };
+    return { publicId: evaluationSet.rows[0].public_id, caseCount: normalized.cases.length };
   });
+}
+
+export async function listContextEvaluationSourceChunks(viewer: Viewer) {
+  if (viewer.role !== "owner" && viewer.role !== "admin") return [];
+  const database = await getDatabase();
+  const result = await database.query<{
+    public_id: string; asset_public_id: string; asset_version_public_id: string; title: string;
+    source_name: string | null; content: string; content_hash: string;
+  }>(
+    `select chunk.public_id, asset.public_id as asset_public_id, version.public_id as asset_version_public_id,
+            asset.title, asset.source_name, left(chunk.content, 360) as content, version.content_hash
+     from context_chunks chunk
+     join context_asset_versions version on version.id = chunk.asset_version_id
+     join context_assets asset on asset.id = version.asset_id
+     where asset.workspace_id = $1 and asset.scope = 'workspace'
+       and asset.current_version = version.version and asset.status = 'active'
+       and asset.review_status = 'approved' and asset.asset_type = 'research_sample'
+       and asset.evidence_kind = 'human' and asset.consent_status = 'confirmed'
+       and asset.pii_status in ('none', 'redacted')
+       and (asset.retention_expires_at is null or asset.retention_expires_at > now())
+     order by asset.updated_at desc, chunk.ordinal
+     limit 300`,
+    [viewer.workspaceId],
+  );
+  return result.rows.map((chunk) => ({
+    publicId: chunk.public_id,
+    assetPublicId: chunk.asset_public_id,
+    assetVersionPublicId: chunk.asset_version_public_id,
+    title: chunk.title,
+    sourceName: chunk.source_name,
+    contentPreview: chunk.content,
+    contentHash: chunk.content_hash,
+  }));
 }
 
 export async function listContextEvaluationSets(viewer: Viewer) {
   const database = await getDatabase();
   const [sets, runs] = await Promise.all([
     database.query<{
-      id: string; public_id: string; name: string; description: string; status: string;
-      case_count: number; created_at: string; updated_at: string;
+      id: string; public_id: string; name: string; description: string; status: string; labeling_protocol: string;
+      case_count: number; human_labeled_case_count: number; created_at: string; updated_at: string;
     }>(
       `select evaluation_set.id::text as id, evaluation_set.public_id, evaluation_set.name,
-              evaluation_set.description, evaluation_set.status,
+              evaluation_set.description, evaluation_set.status, evaluation_set.labeling_protocol,
               count(evaluation_case.id)::int as case_count,
+              count(evaluation_case.id) filter (where evaluation_case.labeling_method = 'human_annotated')::int as human_labeled_case_count,
               evaluation_set.created_at::text as created_at, evaluation_set.updated_at::text as updated_at
        from context_evaluation_sets evaluation_set
        left join context_evaluation_cases evaluation_case on evaluation_case.evaluation_set_id = evaluation_set.id
@@ -1666,7 +1725,9 @@ export async function listContextEvaluationSets(viewer: Viewer) {
     name: evaluationSet.name,
     description: evaluationSet.description,
     status: evaluationSet.status,
+    labelingProtocol: evaluationSet.labeling_protocol,
     caseCount: evaluationSet.case_count,
+    humanLabeledCaseCount: evaluationSet.human_labeled_case_count,
     createdAt: evaluationSet.created_at,
     updatedAt: evaluationSet.updated_at,
     runs: (runsBySet.get(evaluationSet.id) ?? []).map((run) => ({
@@ -2178,15 +2239,16 @@ export async function retrieveContextWithQueryable(database: Queryable, input: {
   interviewSessionId?: string;
   audit?: boolean;
   purpose?: ContextPurpose;
+  reuseExistingRunSnapshot?: boolean;
 }): Promise<ContextSnapshot> {
   const purpose = input.purpose ?? "general";
-  if (input.runId && input.audit !== false) {
+  if (input.runId && input.audit !== false && input.reuseExistingRunSnapshot !== false) {
     const existing = await loadRunContextSnapshot(database, input.runId, input.workspaceId);
-    if (existing) return existing;
+    if (existing !== null) return existing;
   }
   if (input.interviewSessionId && input.audit !== false) {
     const existing = await loadInterviewContextSnapshot(database, input.interviewSessionId, input.workspaceId);
-    if (existing) return existing;
+    if (existing !== null) return existing;
   }
   const [loadedCandidates, policyDecision] = await Promise.all([
     loadContextRetrievalCandidates(database, { ...input, purpose }),
@@ -2222,6 +2284,7 @@ export async function retrieveContextWithQueryable(database: Queryable, input: {
     return {
       retrievalId: null,
       retrievalPublicId: null,
+      retrievedAt: null,
       strategy: "hybrid_v1",
       query: input.query,
       purpose,
@@ -2253,7 +2316,7 @@ export async function retrieveContextWithQueryable(database: Queryable, input: {
       : input.interviewSessionId
         ? await loadInterviewContextSnapshot(database, input.interviewSessionId, input.workspaceId)
         : null;
-    if (existing) return existing;
+    if (existing !== null) return existing;
     throw new Error("CONTEXT_RETRIEVAL_CONFLICT");
   }
   for (const [index, item] of ranked.entries()) {
@@ -2266,6 +2329,7 @@ export async function retrieveContextWithQueryable(database: Queryable, input: {
   return {
     retrievalId: retrieval.rows[0].id,
     retrievalPublicId: retrieval.rows[0].public_id,
+    retrievedAt: new Date().toISOString(),
     strategy: "hybrid_v1" as const,
     query: input.query,
     purpose,
@@ -2287,10 +2351,83 @@ export async function retrieveContext(input: {
   interviewSessionId?: string;
   audit?: boolean;
   purpose?: ContextPurpose;
+  reuseExistingRunSnapshot?: boolean;
 }): Promise<ContextSnapshot> {
   const database = await getDatabase();
   if (input.audit === false) return retrieveContextWithQueryable(database, input);
   return database.transaction((transaction) => retrieveContextWithQueryable(transaction, input));
+}
+
+export async function retrieveContextForReasoningDecision(queryable: Queryable, input: {
+  workspaceId: string;
+  userId: string | null;
+  studyId: string;
+  runId: string;
+  taskId: string | null;
+  reasoningDecisionPublicId: string;
+  triggerType: "insufficient" | "conflicted" | "stale";
+  triggerReason: string;
+  query: string;
+  assetTypes?: string[];
+  scopes?: ContextScope[];
+  limit?: number;
+  purpose?: ContextPurpose;
+}) {
+  const existing = await queryable.query<{ retrieval_id: string }>(
+    `select binding.retrieval_id::text as retrieval_id
+     from context_retrieval_bindings binding
+     join reasoning_decisions decision on decision.id = binding.reasoning_decision_id
+     where decision.public_id = $1 and binding.workspace_id = $2`,
+    [input.reasoningDecisionPublicId, input.workspaceId],
+  );
+  if (existing.rows[0]) {
+    const snapshot = await loadContextSnapshotByRetrievalId(queryable, existing.rows[0].retrieval_id, input.workspaceId);
+    if (snapshot) return snapshot;
+    throw new Error("DYNAMIC_CONTEXT_RETRIEVAL_MISSING");
+  }
+  const decision = await queryable.query<{ id: string }>(
+    `select id::text as id from reasoning_decisions
+     where public_id = $1 and workspace_id = $2 and study_id = $3 and run_id = $4`,
+    [input.reasoningDecisionPublicId, input.workspaceId, input.studyId, input.runId],
+  );
+  if (!decision.rows[0]) throw new Error("REASONING_DECISION_NOT_FOUND");
+  const snapshot = await retrieveContextWithQueryable(queryable, {
+    workspaceId: input.workspaceId,
+    userId: input.userId,
+    studyId: input.studyId,
+    runId: input.runId,
+    query: input.query,
+    assetTypes: input.assetTypes,
+    scopes: input.scopes,
+    limit: input.limit,
+    purpose: input.purpose ?? "research_execution",
+    reuseExistingRunSnapshot: false,
+  });
+  if (!snapshot.retrievalId) throw new Error("DYNAMIC_CONTEXT_RETRIEVAL_NOT_AUDITED");
+  const binding = await queryable.query<{ retrieval_id: string }>(
+    `insert into context_retrieval_bindings (
+       public_id, workspace_id, study_id, run_id, task_id, reasoning_decision_id,
+       retrieval_id, trigger_type, trigger_reason, request_snapshot
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+     on conflict (reasoning_decision_id) do nothing
+     returning retrieval_id::text as retrieval_id`,
+    [
+      createPublicId("crb"), input.workspaceId, input.studyId, input.runId, input.taskId,
+      decision.rows[0].id, snapshot.retrievalId, input.triggerType, input.triggerReason,
+      JSON.stringify({ query: input.query, assetTypes: input.assetTypes ?? [], scopes: input.scopes ?? [], purpose: input.purpose ?? "research_execution" }),
+    ],
+  );
+  if (binding.rows[0]) return snapshot;
+  const concurrent = await queryable.query<{ retrieval_id: string }>(
+    `select retrieval_id::text as retrieval_id from context_retrieval_bindings
+     where reasoning_decision_id = $1`,
+    [decision.rows[0].id],
+  );
+  const concurrentSnapshot = concurrent.rows[0]
+    ? await loadContextSnapshotByRetrievalId(queryable, concurrent.rows[0].retrieval_id, input.workspaceId)
+    : null;
+  if (concurrentSnapshot) return concurrentSnapshot;
+  throw new Error("DYNAMIC_CONTEXT_RETRIEVAL_BINDING_CONFLICT");
 }
 
 async function loadInterviewContextSnapshot(
@@ -2306,20 +2443,39 @@ async function loadRunContextSnapshot(
   runId: string,
   workspaceId: string,
 ): Promise<ContextSnapshot | null> {
+  const refreshed = await database.query<{ retrieval_id: string }>(
+    `select binding.retrieval_id::text as retrieval_id
+     from context_retrieval_bindings binding
+     where binding.run_id = $1 and binding.workspace_id = $2
+     order by binding.created_at desc, binding.id desc limit 1`,
+    [runId, workspaceId],
+  );
+  if (refreshed.rows[0]) {
+    const snapshot = await loadContextSnapshotByRetrievalId(database, refreshed.rows[0].retrieval_id, workspaceId);
+    if (snapshot) return snapshot;
+  }
   return loadContextSnapshot(database, "run_id", runId, workspaceId);
+}
+
+async function loadContextSnapshotByRetrievalId(
+  database: Queryable,
+  retrievalId: string,
+  workspaceId: string,
+): Promise<ContextSnapshot | null> {
+  return loadContextSnapshot(database, "id", retrievalId, workspaceId);
 }
 
 async function loadContextSnapshot(
   database: Queryable,
-  binding: "run_id" | "interview_session_id",
+  binding: "run_id" | "interview_session_id" | "id",
   bindingId: string,
   workspaceId: string,
 ): Promise<ContextSnapshot | null> {
   const retrieval = await database.query<{
-    id: string; public_id: string; query: string; strategy: "lexical_metadata_v1" | "hybrid_v1";
+    id: string; public_id: string; created_at: string; query: string; strategy: "lexical_metadata_v1" | "hybrid_v1";
     purpose: ContextPurpose; policy_version: string; policy_decision: Partial<ContextPolicyDecision> | string;
   }>(
-    `select id::text as id, public_id, query, strategy, purpose, policy_version, policy_decision
+    `select id::text as id, public_id, created_at::text as created_at, query, strategy, purpose, policy_version, policy_decision
      from context_retrievals where ${binding} = $1 and workspace_id = $2
      order by created_at, id limit 1`,
     [bindingId, workspaceId],
@@ -2359,6 +2515,7 @@ async function loadContextSnapshot(
   return {
     retrievalId: record.id,
     retrievalPublicId: record.public_id,
+    retrievedAt: record.created_at,
     strategy: record.strategy,
     query: record.query,
     purpose: record.purpose,

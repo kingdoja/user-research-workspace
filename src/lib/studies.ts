@@ -209,6 +209,13 @@ export type StudyDetail = StudySummary & {
     chosenAction: Record<string, unknown>;
     reason: string;
     createdAt: string;
+    contextRefresh: {
+      retrievalPublicId: string;
+      triggerType: "insufficient" | "conflicted" | "stale";
+      triggerReason: string;
+      targetTaskKey: string | null;
+      citationCount: number;
+    } | null;
     candidates: Array<{
       actionType: string;
       score: number;
@@ -2391,12 +2398,22 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
       chosen_action: Record<string, unknown> | string;
       reason: string;
       created_at: string;
+      context_retrieval_public_id: string | null;
+      context_trigger_type: "insufficient" | "conflicted" | "stale" | null;
+      context_trigger_reason: string | null;
+      context_target_task_key: string | null;
+      context_citation_count: number | null;
       candidates: unknown[] | string;
     }>(
       `select decision.public_id, decision.run_id::text as run_id, decision.sequence,
               decision.trigger_type, decision.policy_version, decision.metrics,
               decision.budget_snapshot, decision.chosen_action, decision.reason,
               decision.created_at::text as created_at,
+              refresh.retrieval_public_id as context_retrieval_public_id,
+              refresh.trigger_type as context_trigger_type,
+              refresh.trigger_reason as context_trigger_reason,
+              refresh.task_key as context_target_task_key,
+              refresh.citation_count as context_citation_count,
               coalesce(jsonb_agg(jsonb_build_object(
                 'actionType', candidate.action_type,
                 'score', candidate.score,
@@ -2406,9 +2423,20 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
                 'rejectionReasons', candidate.rejection_reasons
               ) order by candidate.position) filter (where candidate.id is not null), '[]'::jsonb) as candidates
        from reasoning_decisions decision
+       left join lateral (
+         select retrieval.public_id as retrieval_public_id, binding.trigger_type, binding.trigger_reason,
+                task.task_key,
+                (select count(*)::int from context_retrieval_items item where item.retrieval_id = retrieval.id) as citation_count
+         from context_retrieval_bindings binding
+         join context_retrievals retrieval on retrieval.id = binding.retrieval_id
+         left join study_tasks task on task.id = binding.task_id
+         where binding.reasoning_decision_id = decision.id
+         limit 1
+       ) refresh on true
        left join reasoning_decision_candidates candidate on candidate.decision_id = decision.id
        where decision.study_id = $1 and ($2::bigint is null or decision.run_id = $2)
-       group by decision.id
+       group by decision.id, refresh.retrieval_public_id, refresh.trigger_type, refresh.trigger_reason,
+                refresh.task_key, refresh.citation_count
        order by decision.sequence, decision.id`,
       [row.id, row.run_id],
     ),
@@ -2644,6 +2672,15 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
       chosenAction: typeof decision.chosen_action === "string" ? JSON.parse(decision.chosen_action) : decision.chosen_action,
       reason: decision.reason,
       createdAt: decision.created_at,
+      contextRefresh: decision.context_retrieval_public_id && decision.context_trigger_type && decision.context_trigger_reason
+        ? {
+          retrievalPublicId: decision.context_retrieval_public_id,
+          triggerType: decision.context_trigger_type,
+          triggerReason: decision.context_trigger_reason,
+          targetTaskKey: decision.context_target_task_key,
+          citationCount: decision.context_citation_count ?? 0,
+        }
+        : null,
       candidates: (typeof decision.candidates === "string" ? JSON.parse(decision.candidates) : decision.candidates) as StudyDetail["reasoningDecisions"][number]["candidates"],
     })),
     artifacts: artifactsResult.rows.map((artifact) => ({

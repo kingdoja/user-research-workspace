@@ -269,7 +269,7 @@ type SkillManifest = {
 - `generateReport`
 - `publishArtifact`
 
-Workspace Skill 当前可以绑定受控 `declarative_http` 或 MCP Streamable HTTP executor；地址必须命中服务端 allowlist，secret 只允许引用 `SKILL_SECRET_*` 环境变量。上传 Skill 包和任意脚本仍不执行，通用代码沙箱属于后续能力。
+Workspace Skill 当前可以绑定受控 `declarative_http` 或 MCP Streamable HTTP executor；地址必须命中服务端 allowlist，secret 只允许引用 `SKILL_SECRET_*` 环境变量。`atypica.skill/v1` 包只包含严格 manifest、`SKILL.md` 文本和可选的未验证签名声明，导入后必须由管理员授予版本精确的 capability。上传包和任意脚本均不执行，通用代码沙箱属于后续能力。
 
 ### 5.5 Context System
 
@@ -459,7 +459,7 @@ Source
 沿用当前 `/api/skills`、`/api/context` 和版本接口：
 
 - [x] Skill enable/disable、不可变 Run Binding、远程执行审计和 MCP/HTTP executor。
-- [ ] capability permission grants 与 executor health probe。
+- [x] 声明式 `.skill` / `SKILL.md` 导入导出、不可变 capability permission grants、签名声明、撤销与管理员按需 executor health probe。
 - Context ingestion job、reindex、delete/tombstone、retention policy。
 - Retrieval debug，仅对 workspace 管理员或开发模式开放。
 
@@ -572,6 +572,8 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 - [x] 研究报告与新生成 Persona 自动形成带 origin/provenance 的待审核 Context 候选；批准前不进入检索，重试不重复创建。
 - [x] 从报告证据图生成 evidence-grounded Persona，并增加显式保留/淘汰策略；仅允许 Evidence locator 精确匹配，历史 Persona 保留 `ungrounded`，研究模板和 knowledge gap 仍不自动沉淀。
 - [x] 将 Core/Working/Team Memory 统一到 Context Asset；实现用途、主体、有效期、审核和不可变 policy version，Working Memory 只能基于已审核观察晋升为 pending Core/Team 候选。
+- [x] 建立授权 source 的版本化 Agent Eval 和可回放动态 Context retrieval：自动 judge 与人工标签分离，Reasoning 只在不足、冲突或时效到期时受预算上限控制地刷新 Context。
+- [x] 建立人工 relevance 标注工作台和合法来源门禁；标签保存标注人、时间、理由及不可变来源快照，历史未验证 case 不回填为人工标签。
 
 验收：Scout 每条观察可回到原始来源；下架或无权访问内容不会泄露到公开报告。
 
@@ -579,7 +581,7 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 
 - [x] 受控 HTTP JSON / MCP Streamable HTTP client executor、工作区启停与 Run 级版本锁定。
 - [x] Market Insight 第二产品线复用同一 Intent/Plan/Workflow/Run/Skill/Context 契约，并以独立模板、任务图和输出契约锁定到 Run。
-- Universal Agent 与受控 Skill sandbox。
+- [ ] Universal Agent 与通用代码 Skill sandbox；当前仅有声明式、受治理的远程 Skill 包。
 - 对外 MCP servers 和 scoped API keys。
 - 跨工作区的团队协作、委托管理和发布流；单工作区 Team Memory 与审核已完成。
 - 多 Provider 成本/质量路由和策略实验后台。
@@ -601,10 +603,12 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 - ReasoningDecision → 候选动作 → 动态任务/停止条件 → checkpoint replay 的确定性调度闭环。
 - Connector Run → Source Candidate → immutable Snapshot/hash → Observation → Evidence 的公开来源审计闭环。
 - Context Asset/Version → FTS + embedding baseline → Retrieval Snapshot → Evaluation Run 的可复现检索闭环，以及 tombstone/reindex 审计。
+- Approved Human Research Sample → Human Relevance Label → immutable source snapshot → Baseline/Candidate Gate 的人工检索评估闭环；当前真实数据仍为 0。
 - Context Candidate → governance/review → active retrieval 的资产飞轮；研究报告与 synthetic Persona 具备 origin 幂等、来源 hash、受控关系和事件审计。
 - Persona → exact Evidence locator → Claim → grounding summary → retention/expiry governance 的可审计复用闭环；Context 批准与 Persona 保留互不替代。
 - Context Asset → Memory Binding → Purpose Policy → Retrieval Decision 的排序前门禁，以及 Working Memory → approved Observation → pending Core/Team candidate 的双重审核闭环。
 - Workspace Skill → Enable Setting → immutable Run Binding / audited Execution 的受控执行闭环，支持 HTTP JSON 与 MCP Streamable HTTP client。
+- `.skill` / `SKILL.md` → submitted → immutable capability grants → approved/active → health/revoke 的声明式包治理闭环；secret 仅引用环境变量，Run 绑定快照保留授权范围。
 - Brief → governed `intent_planning` Retrieval Snapshot → immutable Intent Version → confirmed Plan Version → compiled WorkflowDefinition → Run 的版本锁定闭环；Runtime 从锁定任务图执行，Replay 分开展示 Planning/Execution Context。
 - Product Line → Intent/Plan snapshot → Research 或 Market Insight WorkflowDefinition → 同一 Runtime/SkillInvocation/Replay 的跨业务线复用闭环；Market Insight 默认排除 Persona 与合成访谈。
 
@@ -614,10 +618,11 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 2. [x] 实现版本化 `IntentContract -> WorkflowDefinition`：在 Plan 前明确目标、预算、数据范围、合规策略与允许的 Memory purpose，并保存解析依据和用户确认版本。
 3. [x] 让 Intent Planning 真正读取已批准 Team/Core Memory、相似 Study 和可复用 Persona，同时在 Run Replay 中展示哪些 Context 改变了 Plan。
 4. [x] 增加 Market Insight 第二条 workflow，用真实复用验证 `WorkflowDefinition + RuntimeContext + SkillInvocation` 是通用契约，而不是提前重写 Runtime。
-5. [ ] 在现有 Skill Gateway 上增加 `.skill` / `SKILL.md` 导入导出、capability grants、签名/撤销、executor health probe 和 scoped credential；任意代码沙箱继续后置。
-6. [ ] 从合法真实研究样本建立至少 20 个带人工 relevance 标注的 case；当前远端评估集为 0，不引入 pgvector/HNSW。
-7. [ ] 自动沉淀研究模板和 knowledge gap，但先定义审核、重复检测和过期策略。
-8. [ ] `.skill` 治理和第二产品线稳定后，再开放对外 MCP server、scoped API keys 与团队发布流。
+5. [x] 在现有 Skill Gateway 上增加 `.skill` / `SKILL.md` 导入导出、capability grants、签名声明/撤销、executor health probe 和 scoped credential reference；任意代码沙箱继续后置。
+6. [x] 建立授权 source 的“虚构引用”和“Persona 回答趋同”Agent Eval 契约，并让 Reasoning 在不足、冲突或时效到期时产生可回放的动态 Context retrieval；真实黄金样本仍须经独立审批后导入。
+7. [ ] 从合法真实研究样本建立至少 20 个分层人工 relevance case；已导入 20 份 CC BY 4.0、匿名化且明确同意发布的英文访谈转录（273 个可标注 chunk），但人工 case 仍为 0，不引入 pgvector/HNSW。
+8. [ ] 自动沉淀研究模板和 knowledge gap，但先定义审核、重复检测和过期策略。
+9. [ ] `.skill` 治理和第二产品线稳定后，再开放对外 MCP server、scoped API keys 与团队发布流。
 
 不建议现在做：
 

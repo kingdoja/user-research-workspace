@@ -7,6 +7,7 @@ import {
   formatContextForPrompt,
   proposeStudyContextCandidates,
   retrieveContext,
+  retrieveContextForReasoningDecision,
   type ContextSnapshot,
 } from "@/lib/context-system";
 import {
@@ -28,7 +29,11 @@ import {
 import { materializeReportEvidenceGraph } from "@/lib/evidence-graph";
 import { groundStudyPersonasFromEvidence } from "@/lib/persona-evidence";
 import { buildReportEvidenceCatalog } from "@/lib/report-evidence";
-import { evaluateReasoningCheckpoint, REASONING_POLICY_VERSION } from "@/lib/reasoning-runtime";
+import {
+  evaluateContextRefreshDecision,
+  evaluateReasoningCheckpoint,
+  REASONING_POLICY_VERSION,
+} from "@/lib/reasoning-runtime";
 import type { SourceConnectorAuditSummary } from "@/lib/source-connectors";
 import type { StudyMethod, WorkflowType } from "@/lib/research-types";
 import {
@@ -291,8 +296,7 @@ function readState<Output>(state: HarnessState, key: string, schema: z.ZodType<O
 }
 
 function mergedResearchState(state: HarnessState): ProviderResearchSources {
-  const packets = Object.entries(state).flatMap(([key, value]) => {
-    if (key !== "research" && !key.startsWith("research_")) return [];
+  const packets = Object.values(state).flatMap((value) => {
     const parsed = webResearchSchema.safeParse(value);
     return parsed.success ? [parsed.data] : [];
   });
@@ -1674,7 +1678,7 @@ export async function runStudyHarness(runId: string) {
   }, 1_000);
 
   const state = await loadCheckpoint(runId);
-  const context = await retrieveContext({
+  let context = await retrieveContext({
     workspaceId: study.workspaceId,
     userId: study.createdBy,
     studyId: study.studyId,
@@ -1695,6 +1699,61 @@ export async function runStudyHarness(runId: string) {
       score: citation.score,
     })),
   });
+  const activeStudy = study;
+  async function refreshContextAfterCheckpoint(checkpointDecisionPublicId: string) {
+    const refreshed = await database.transaction(async (transaction) => {
+      const decision = await evaluateContextRefreshDecision(transaction, {
+        workspaceId: activeStudy.workspaceId,
+        studyId: activeStudy.studyId,
+        runId: activeStudy.runId,
+        checkpointDecisionPublicId,
+        contextCitationCount: context.citations.length,
+        contextRetrievedAt: context.retrievedAt,
+        strategyConfig: strategy.config,
+      });
+      const triggerType = decision.triggerType;
+      if (decision.chosenAction !== "refresh_context" || !triggerType) return { decision, snapshot: null };
+      const snapshot = await retrieveContextForReasoningDecision(transaction, {
+        workspaceId: activeStudy.workspaceId,
+        userId: activeStudy.createdBy,
+        studyId: activeStudy.studyId,
+        runId: activeStudy.runId,
+        taskId: decision.targetTaskId,
+        reasoningDecisionPublicId: decision.publicId,
+        triggerType,
+        triggerReason: decision.reason,
+        query: [
+          activeStudy.brief,
+          activeStudy.audience,
+          activeStudy.framework,
+          decision.targetTaskKey ? `下一任务：${decision.targetTaskKey}` : "",
+          triggerType === "conflicted" ? "优先检索可验证冲突或限制条件的受授权 Context。" : "",
+        ].filter(Boolean).join("\n"),
+        purpose: "research_execution",
+        limit: 8,
+      });
+      return { decision, snapshot };
+    });
+    const { decision, snapshot } = refreshed;
+    const triggerType = decision.triggerType;
+    if (!snapshot || !triggerType) return;
+    context = snapshot;
+    await appendEvent(database, activeStudy.studyId, activeStudy.runId, "context.refreshed", {
+      decisionPublicId: decision.publicId,
+      triggerType,
+      triggerReason: decision.reason,
+      targetTaskKey: decision.targetTaskKey,
+      retrievalId: context.retrievalPublicId,
+      citationCount: context.citations.length,
+      citations: context.citations.map((citation) => ({
+        assetPublicId: citation.assetPublicId,
+        assetVersionPublicId: citation.assetVersionPublicId,
+        chunkPublicId: citation.chunkPublicId,
+        title: citation.title,
+        score: citation.score,
+      })),
+    });
+  }
   const startedAt = Date.now();
   try {
     for (;;) {
@@ -1776,7 +1835,7 @@ export async function runStudyHarness(runId: string) {
       }
       const remainingTasks = (await loadTasks(runId)).some((task) => task.status !== "completed" && task.status !== "skipped");
       if (remainingTasks) {
-        await database.transaction((transaction) => evaluateReasoningCheckpoint(transaction, {
+        const checkpointDecision = await database.transaction((transaction) => evaluateReasoningCheckpoint(transaction, {
           workspaceId: study.workspaceId,
           studyId: study.studyId,
           runId: study.runId,
@@ -1785,6 +1844,7 @@ export async function runStudyHarness(runId: string) {
           elapsedMs: Date.now() - startedAt,
           triggerType: resuming ? "resume" : "checkpoint",
         }));
+        await refreshContextAfterCheckpoint(checkpointDecision.publicId);
       }
     }
     await materializeStudy(study, state);

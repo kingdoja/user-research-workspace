@@ -275,6 +275,7 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
   const actionLabels: Record<string, string> = {
     continue: "继续固定 DAG",
     append_task: "追加受控任务",
+    refresh_context: "刷新受授权 Context",
     stop_expansion: "停止动态扩展",
     finish_run: "结束运行",
   };
@@ -385,7 +386,9 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
                     {conflict !== null ? <div><dt>conflict</dt><dd>{conflict}%</dd></div> : null}
                     {novelty !== null ? <div><dt>novelty</dt><dd>{novelty}%</dd></div> : null}
                     {tokenUsage !== null && tokenBudget !== null ? <div><dt>budget</dt><dd>{formatTokens(tokenUsage)} / {formatTokens(tokenBudget)}</dd></div> : null}
+                    {decision.contextRefresh ? <div><dt>context</dt><dd>{decision.contextRefresh.citationCount} 条 · {decision.contextRefresh.triggerType}</dd></div> : null}
                   </dl>
+                  {decision.contextRefresh ? <small>快照 {decision.contextRefresh.retrievalPublicId} · {decision.contextRefresh.targetTaskKey ?? "下一任务"}</small> : null}
                   {selected ? <small>policy {decision.policyVersion} · score {selected.score.toFixed(2)}</small> : null}
                 </li>
               );

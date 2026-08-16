@@ -1,7 +1,7 @@
 import { createPublicId } from "@/lib/identifiers";
 import type { Queryable } from "@/lib/db";
 
-export const REASONING_POLICY_VERSION = "deterministic-research-v1";
+export const REASONING_POLICY_VERSION = "deterministic-research-v2";
 
 type StoredReasoningTask = {
   id: string;
@@ -18,7 +18,7 @@ type StoredReasoningTask = {
 };
 
 export type ReasoningCandidate = {
-  actionType: "continue" | "append_task" | "stop_expansion" | "finish_run";
+  actionType: "continue" | "append_task" | "stop_expansion" | "finish_run" | "refresh_context";
   score: number;
   allowed: boolean;
   selected: boolean;
@@ -33,11 +33,26 @@ export type ReasoningDecisionResult = {
   chosenAction: ReasoningCandidate["actionType"];
   reason: string;
   appendedTaskKey: string | null;
+  contextTriggerType?: "insufficient" | "conflicted" | "stale";
+  reused: boolean;
+};
+
+export type ContextRefreshDecisionResult = {
+  publicId: string;
+  chosenAction: "continue" | "refresh_context";
+  triggerType: "insufficient" | "conflicted" | "stale" | null;
+  reason: string;
+  targetTaskId: string | null;
+  targetTaskKey: string | null;
   reused: boolean;
 };
 
 function parseJson<T>(value: T | string): T {
   return typeof value === "string" ? JSON.parse(value) as T : value;
+}
+
+function parseContextRefreshTrigger(value: unknown): "insufficient" | "conflicted" | "stale" | null {
+  return value === "insufficient" || value === "conflicted" || value === "stale" ? value : null;
 }
 
 function numberInRange(value: unknown, fallback: number, minimum: number, maximum: number) {
@@ -121,7 +136,9 @@ async function loadTasks(queryable: Queryable, runId: string): Promise<StoredRea
 
 async function existingDecision(queryable: Queryable, runId: string, decisionKey: string) {
   const result = await queryable.query<{
-    public_id: string; sequence: number; chosen_action: { type?: string; taskKey?: string } | string; reason: string;
+    public_id: string; sequence: number;
+    chosen_action: { type?: string; taskKey?: string; targetTaskKey?: string; triggerType?: string } | string;
+    reason: string;
   }>(
     `select public_id, sequence, chosen_action, reason
      from reasoning_decisions where run_id = $1 and decision_key = $2 limit 1`,
@@ -136,7 +153,10 @@ async function existingDecision(queryable: Queryable, runId: string, decisionKey
     sequence: row.sequence,
     chosenAction: (action.type ?? "continue") as ReasoningDecisionResult["chosenAction"],
     reason: row.reason,
-    appendedTaskKey: typeof action.taskKey === "string" ? action.taskKey : null,
+    appendedTaskKey: typeof action.taskKey === "string"
+      ? action.taskKey
+      : typeof action.targetTaskKey === "string" ? action.targetTaskKey : null,
+    contextTriggerType: parseContextRefreshTrigger(action.triggerType) ?? undefined,
     reused: true,
   };
 }
@@ -332,6 +352,145 @@ export async function evaluateReasoningCheckpoint(queryable: Queryable, input: {
     chosenAction,
     reason,
     appendedTaskKey,
+    reused: false,
+  };
+}
+
+export async function evaluateContextRefreshDecision(queryable: Queryable, input: {
+  workspaceId: string;
+  studyId: string;
+  runId: string;
+  checkpointDecisionPublicId: string;
+  contextCitationCount: number;
+  contextRetrievedAt: string | null;
+  strategyConfig?: Record<string, unknown>;
+}): Promise<ContextRefreshDecisionResult> {
+  const checkpoint = await queryable.query<{ metrics: Record<string, unknown> | string }>(
+    `select metrics from reasoning_decisions
+     where public_id = $1 and workspace_id = $2 and study_id = $3 and run_id = $4`,
+    [input.checkpointDecisionPublicId, input.workspaceId, input.studyId, input.runId],
+  );
+  const checkpointRow = checkpoint.rows[0];
+  if (!checkpointRow) throw new Error("CHECKPOINT_REASONING_DECISION_NOT_FOUND");
+  const decisionKey = `context_refresh:${input.checkpointDecisionPublicId}`;
+  const reused = await existingDecision(queryable, input.runId, decisionKey);
+  if (reused) {
+    const action = reused.chosenAction === "refresh_context" ? "refresh_context" : "continue";
+    let target = await queryable.query<{ task_id: string | null; task_key: string | null }>(
+      `select binding.task_id::text as task_id, task.task_key
+       from context_retrieval_bindings binding
+       left join study_tasks task on task.id = binding.task_id
+       join reasoning_decisions decision on decision.id = binding.reasoning_decision_id
+       where decision.public_id = $1`,
+      [reused.publicId],
+    );
+    if (!target.rows[0] && reused.appendedTaskKey) {
+      target = await queryable.query<{ task_id: string | null; task_key: string | null }>(
+        `select id::text as task_id, task_key from study_tasks
+         where run_id = $1 and task_key = $2 limit 1`,
+        [input.runId, reused.appendedTaskKey],
+      );
+    }
+    return {
+      publicId: reused.publicId,
+      chosenAction: action,
+      triggerType: action === "refresh_context" ? parseContextRefreshTrigger(reused.contextTriggerType) : null,
+      reason: reused.reason,
+      targetTaskId: target.rows[0]?.task_id ?? null,
+      targetTaskKey: target.rows[0]?.task_key ?? null,
+      reused: true,
+    };
+  }
+  const metrics = parseJson(checkpointRow.metrics);
+  const conflictScore = numberInRange(metrics.conflict, 0, 0, 1);
+  const conflictThreshold = numberInRange(input.strategyConfig?.contextRefreshConflictThreshold, 0.5, 0, 1);
+  const maxAgeMinutes = numberInRange(input.strategyConfig?.contextRefreshMaxAgeMinutes, 30, 1, 720);
+  const maxRefreshes = numberInRange(input.strategyConfig?.maxContextRefreshes, 2, 0, 8);
+  const refreshCount = await queryable.query<{ count: number }>(
+    "select count(*)::int as count from context_retrieval_bindings where run_id = $1",
+    [input.runId],
+  );
+  const ageMs = input.contextRetrievedAt ? Date.now() - new Date(input.contextRetrievedAt).getTime() : Number.POSITIVE_INFINITY;
+  const stale = !Number.isFinite(ageMs) || ageMs >= maxAgeMinutes * 60_000;
+  const triggerType = input.contextCitationCount === 0
+    ? "insufficient" as const
+    : conflictScore >= conflictThreshold
+      ? "conflicted" as const
+      : stale
+        ? "stale" as const
+        : null;
+  const allowed = Boolean(triggerType) && refreshCount.rows[0].count < maxRefreshes;
+  const target = await queryable.query<{ id: string; task_key: string }>(
+    `select id::text as id, task_key from study_tasks
+     where run_id = $1 and status = 'pending'
+     order by position, id limit 1`,
+    [input.runId],
+  );
+  const targetTask = target.rows[0] ?? null;
+  const reason = !triggerType
+    ? "当前 Context 仍满足覆盖、冲突和时效约束，继续复用已记录快照。"
+    : !allowed
+      ? `Context ${triggerType === "insufficient" ? "覆盖不足" : triggerType === "conflicted" ? "与新证据冲突" : "已过策略时效"}，但刷新次数已达到 ${maxRefreshes} 次上限。`
+      : triggerType === "insufficient"
+        ? "初始 Context 没有可用引用，为下一项任务检索受授权的研究执行上下文。"
+        : triggerType === "conflicted"
+          ? `证据冲突评分 ${conflictScore.toFixed(2)} 达到 ${conflictThreshold.toFixed(2)}，为下一项任务刷新 Context。`
+          : `Context 已超过 ${maxAgeMinutes} 分钟策略时效，为下一项任务刷新快照。`;
+  const sequence = await queryable.query<{ value: number }>(
+    "select coalesce(max(sequence), -1)::int + 1 as value from reasoning_decisions where run_id = $1",
+    [input.runId],
+  );
+  const chosenAction = allowed ? "refresh_context" as const : "continue" as const;
+  const publicId = createPublicId("rsn");
+  const decision = await queryable.query<{ id: string }>(
+    `insert into reasoning_decisions (
+       public_id, workspace_id, study_id, run_id, decision_key, sequence, trigger_type,
+       policy_version, input_snapshot, artifact_refs, evidence_refs, budget_snapshot,
+       metrics, chosen_action, reason
+     ) values ($1, $2, $3, $4, $5, $6, 'context_refresh', $7, $8::jsonb, '[]'::jsonb,
+               '[]'::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12)
+     returning id::text as id`,
+    [
+      publicId, input.workspaceId, input.studyId, input.runId, decisionKey, sequence.rows[0].value,
+      REASONING_POLICY_VERSION,
+      JSON.stringify({ checkpointDecisionPublicId: input.checkpointDecisionPublicId, contextCitationCount: input.contextCitationCount, contextRetrievedAt: input.contextRetrievedAt, targetTaskKey: targetTask?.task_key ?? null }),
+      JSON.stringify({ maxContextRefreshes: maxRefreshes, refreshCount: refreshCount.rows[0].count }),
+      JSON.stringify({ conflict: conflictScore, conflictThreshold, contextAgeMs: Number.isFinite(ageMs) ? ageMs : null, maxAgeMinutes }),
+      JSON.stringify({ type: chosenAction, triggerType, targetTaskKey: targetTask?.task_key ?? null }), reason,
+    ],
+  );
+  const candidates: ReasoningCandidate[] = [
+    { actionType: "continue", score: chosenAction === "continue" ? 1 : 0.25, allowed: true, selected: chosenAction === "continue", payload: {}, rejectionReasons: [] },
+    {
+      actionType: "refresh_context", score: allowed ? 1 : 0, allowed, selected: chosenAction === "refresh_context",
+      payload: { triggerType, targetTaskKey: targetTask?.task_key ?? null },
+      rejectionReasons: [
+        ...(!triggerType ? ["context_sufficient_fresh_and_consistent"] : []),
+        ...(Boolean(triggerType) && refreshCount.rows[0].count >= maxRefreshes ? ["context_refresh_limit_reached"] : []),
+      ],
+    },
+  ];
+  for (const [position, candidate] of candidates.entries()) {
+    await queryable.query(
+      `insert into reasoning_decision_candidates (
+         decision_id, position, action_type, score, allowed, selected, payload, rejection_reasons
+       ) values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb)`,
+      [decision.rows[0].id, position, candidate.actionType, candidate.score, candidate.allowed,
+        candidate.selected, JSON.stringify(candidate.payload), JSON.stringify(candidate.rejectionReasons)],
+    );
+  }
+  await queryable.query(
+    `insert into study_events (study_id, run_id, event_type, payload)
+     values ($1, $2, 'context.refresh.decision.recorded', $3::jsonb)`,
+    [input.studyId, input.runId, JSON.stringify({ decisionPublicId: publicId, chosenAction, triggerType, targetTaskKey: targetTask?.task_key ?? null, reason })],
+  );
+  return {
+    publicId,
+    chosenAction,
+    triggerType: allowed ? triggerType : null,
+    reason,
+    targetTaskId: targetTask?.id ?? null,
+    targetTaskKey: targetTask?.task_key ?? null,
     reused: false,
   };
 }

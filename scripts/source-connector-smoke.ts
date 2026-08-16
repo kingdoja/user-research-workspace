@@ -24,7 +24,7 @@ const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
 const authUserId = randomUUID();
 let workspaceId: string | null = null;
 
-const sharedPage = `<!doctype html><html><head><title>Auditable source</title></head><body><main>${"Public research evidence with stable content and a verifiable source boundary. ".repeat(8)}</main></body></html>`;
+const sharedPage = `<!doctype html><html><head><title>Auditable source</title></head><body><main>${"Public research evidence with stable content and a verifiable source boundary. ".repeat(8)}${String.fromCharCode(0)}</main></body></html>`;
 const accessPage = `<!doctype html><html><head><title>Sign in to continue</title></head><body><main>${"Sign in to continue and verify you are human before viewing this protected content. ".repeat(8)}</main></body></html>`;
 
 const mockFetch: typeof fetch = async (input) => {
@@ -83,6 +83,8 @@ async function main() {
     assert.equal(collected[5].rejectionReason, "SOURCE_UNSAFE_URL");
     assert.equal(collected[7].rejectionReason, "SOURCE_ACCESS_RESTRICTED");
     assert.equal(collected[0].snapshot?.contentHash, collected[1].snapshot?.contentHash, "identical content must share a hash");
+    assert(!collected[0].snapshot?.rawContent?.includes(String.fromCharCode(0)));
+    assert(!collected[0].snapshot?.normalizedText?.includes(String.fromCharCode(0)));
 
     const seeded = await database.transaction(async (transaction) => {
       await transaction.query(

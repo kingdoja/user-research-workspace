@@ -3,16 +3,25 @@ import { redirect } from "next/navigation";
 import { ContextAssetWorkspace } from "@/components/context-asset-workspace";
 import { WorkspaceShell } from "@/components/workspace-shell";
 import { getViewer } from "@/lib/auth";
-import { listContextAssets, listContextMemoryPolicies } from "@/lib/context-system";
+import { listAgentEvalSuites } from "@/lib/agent-evals";
+import {
+  listContextAssets,
+  listContextEvaluationSets,
+  listContextEvaluationSourceChunks,
+  listContextMemoryPolicies,
+} from "@/lib/context-system";
 
 export const metadata = { title: "Context 资产" };
 
 export default async function ContextPage() {
   const viewer = await getViewer();
   if (!viewer) redirect("/auth/signin?callbackUrl=%2Fcontext");
-  const [assets, policies] = await Promise.all([
+  const [assets, policies, agentEvalSuites, evaluationSets, evaluationSources] = await Promise.all([
     listContextAssets(viewer),
     listContextMemoryPolicies(viewer),
+    listAgentEvalSuites(viewer),
+    listContextEvaluationSets(viewer),
+    listContextEvaluationSourceChunks(viewer),
   ]);
 
   return (
@@ -25,6 +34,9 @@ export default async function ContextPage() {
         <ContextAssetWorkspace
           initialAssets={assets}
           initialPolicies={policies}
+          initialAgentEvalSuites={agentEvalSuites}
+          initialEvaluationSets={evaluationSets}
+          initialEvaluationSources={evaluationSources}
           canCreate={viewer.role !== "viewer"}
           canReview={viewer.role === "owner" || viewer.role === "admin"}
         />

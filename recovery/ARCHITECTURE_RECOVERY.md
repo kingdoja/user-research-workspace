@@ -14,7 +14,7 @@
 - 两类访谈入口：AI 合成访谈和公开链接真人访谈。
 - Persona / Panel / Interview / Report 的研究对象模型。
 - 版本化 Skill Gateway、工作区启停、不可变 Run Binding、受控 HTTP/MCP executor 与执行审计。
-- 版本化 Context Asset/Chunk/Edge、混合检索、Retrieval Snapshot、重建索引与离线评估。
+- 版本化 Context Asset/Chunk/Edge、混合检索、Retrieval Snapshot、重建索引与离线评估；Reasoning 可按不足、冲突或时效条件生成有上限的动态 Context 刷新并回放。
 - 版本化 `research-intent-v1`、确认版 Plan、编译后 `workflow-definition-v1` 与 Run 的不可变绑定；Intent Planning 使用 purpose-bound Context Snapshot。
 - DAG wave、多层限流、租约恢复、策略实验、实时与批量两类工作流。
 
@@ -22,7 +22,7 @@
 
 - 独立部署的 Intent 服务；当前已是单体内明确逻辑边界，但尚未作为跨产品服务拆分。
 - 可跨业务线复用的编排 Runtime（目前 `research-harness.ts` 是研究产品专用 Runtime）。
-- 任意代码 Skill 沙箱、`.skill` 包安装/签名/市场和 capability grant 审批。
+- 任意代码 Skill 沙箱、加密签名信任链、Skill 市场和团队发布流。
 - 生产 embedding/pgvector、完整本体与 Subjective World Model 训练评估闭环。
 - 对外 MCP server、scoped API key，以及经第三条业务线和外部调用验证的 Universal Agent 契约。
 
@@ -92,6 +92,7 @@ API / Web / MCP clients
 - [x] 增加 Context 资产创建、版本发布和 PostgreSQL 关键词/元数据检索；结果带 source/version/chunk citation。
 - [x] 研究 Runtime 锁定内建 Skill 版本和 Context retrieval，并将引用事件写入研究时间线。
 - [x] 增加 workspace 级 Skill 启停、不可变 Run Skill Binding、声明式 HTTP JSON 与 MCP Streamable HTTP 受控执行器；仍不执行任意上传代码。
+- [x] 增加受限 `atypica.skill/v1` / `SKILL.md` 包导入导出、版本化 capability grants、签名声明元数据、管理员审批/撤销与按需 executor health probe；包只保存声明和文档，不接受脚本、二进制或任意代码执行。
 - [x] 增加 `hybrid_v1`、可替换 embedding 契约、PostgreSQL FTS/GIN 和离线检索评估；默认 `hash-ngram-128@v1` 是确定性基线，不冒充生产语义模型。
 - [x] 接入生产 embedding provider 的离线候选评估与升级门槛；默认检索仍为 `hash-ngram-128@v1`，仅候选胜出后才进入 pgvector/HNSW 索引试验。
 - [ ] 在通过门槛的候选模型上引入 pgvector/HNSW，并以 shadow retrieval 验证后才切换默认策略。
@@ -135,8 +136,8 @@ API / Web / MCP clients
 
 边界和数据契约已经落地，仍不需要伪造完整能力。
 
-- Skills：manifest/version/schema/启停/Run Binding/远程执行审计已完成；后续再接上传 `.skill`、签名、沙箱和发布市场。
-- Context：资产版本、chunk、受控关系、来源/hash、同意/PII/保留期、审核队列、混合检索和评估已完成；Core/Working/Team Memory 复用同一 Context Asset 底座，通过用途、主体、有效期和不可变 policy version 在排序前执行门禁。研究报告、Persona 和 Memory 晋升结果只能进入待审核候选，不会未经批准进入 Runtime。生产 embedding 必须先通过现有评估门槛。
+- Skills：manifest/version/schema/启停/Run Binding/远程执行审计、受限 `.skill` / `SKILL.md` 导入导出、capability grant 审批、撤销、健康审计已完成。签名目前只是如实保存为“已声明、未验证”的元数据；加密信任链、任意代码沙箱和发布市场仍后置。
+- Context：资产版本、chunk、受控关系、来源/hash、同意/PII/保留期、审核队列、混合检索和评估已完成；Core/Working/Team Memory 复用同一 Context Asset 底座，通过用途、主体、有效期和不可变 policy version 在排序前执行门禁。Reasoning 的动态刷新只允许在 Context 不足、证据冲突或策略时效到期时触发，并绑定决策、Run、下一任务和完整检索快照。研究报告、Persona 和 Memory 晋升结果只能进入待审核候选，不会未经批准进入 Runtime。生产 embedding 必须先通过现有评估门槛。
 - Persona：Claim/Evidence 精确关联、证据强度、有效期和保留/退役审计已完成。Context asset 批准与 Persona 可复用保留是两道独立门禁；新生成 Persona 默认 pending，只有 retained 且未过期者能进入 Runtime。
 - 多 Agent：DAG wave、限流、租约、实验分组已完成；Research 与 Market Insight 已复用同一持久化 Runtime 契约，但仍不宣称全部业务线已经通用化。
 
@@ -147,7 +148,11 @@ API / Web / MCP clients
 - `POST /api/skills/:publicId/versions`：发布新的 Skill 契约版本。
 - `PATCH /api/skills/settings`：启用或禁用内置/工作区 Skill；workspace Skill 启用时固定当前版本。
 - `POST /api/skills/:publicId/execute`：执行已启用的工作区远程 Skill，并持久化输入输出 hash、状态和错误。
-- `/skills`：工作区 Skill Gateway，展示内置/远程 Executor、版本、hash 和启停状态，并可注册 MCP/HTTP Skill。
+- `POST /api/skills/packages/import`：导入严格的 `atypica.skill/v1` JSON 包，包含 manifest 和 `SKILL.md` 文本；未知字段、脚本载荷与超限内容被拒绝，导入后为 `submitted`。
+- `POST /api/skills/:publicId/approval`：管理员以精确 capability grant 审批包；grant 为不可变版本记录，scope 与 Run Binding 一起锁定。
+- `GET /api/skills/:publicId/package`：仅导出已审批的声明式 `.skill` 包。
+- `POST /api/skills/:publicId/health`、`POST /api/skills/:publicId/revoke`：管理员触发 allowlist 约束下的 HTTP/MCP 健康探测，或撤销 Skill 阻断未来执行；既有 Run Binding 仍可回放。
+- `/skills`：工作区 Skill Gateway，展示内置/远程 Executor、版本、hash、包生命周期、权限、签名声明和健康状态，并可注册或导入受控 Skill。
 - `GET /api/context`：列出当前用户可见的 Context assets。
 - `POST /api/context`：导入带 provenance、治理标签和来源 hash 的资产，创建首版本与确定性 chunks；工作台导入默认进入待审核状态。
 - `PATCH /api/context/:publicId`：管理员批准或拒绝候选；只有批准后的 active asset 可进入检索。
@@ -158,7 +163,12 @@ API / Web / MCP clients
 - `GET /api/context/memory/policies`：返回 Core/Working/Team 当前 active policy 及版本、用途、保留、衰减和晋升门槛。
 - `PATCH /api/context/memory/policies/:publicId`：管理员发布不可变新版 policy，旧版保留为 superseded。
 - `GET|POST|PATCH /api/context/:publicId/memory`：按需读取 Memory 治理详情，提交/审核证据化行为观察，并将 Working Memory 晋升为待审核 Core/Team 候选。
+- `GET /api/context/evaluation-sources`：仅向管理员列出工作区范围内已批准、已确认同意、已脱敏且未过期的真人研究样本当前 chunk。
+- `GET|POST /api/context/evaluations`：列出检索评估集或保存 `human_relevance_v1` 人工标签；每个 case 固定标注人、时间、判断说明以及 chunk/asset/version/content hash 快照。
+- `POST /api/context/evaluations/:publicId/run`：运行 baseline 或生产 embedding 候选评估；不足 20 条人工 case 时候选不能进入 shadow index 试验。
 - `GET /api/personas/:publicId/evidence`：返回 Persona 的 Evidence、Claim、grounding 统计、保留状态和治理事件。
+- `GET|POST /api/context/agent-evals`：列出或创建版本化 Agent Eval suite；只允许授权的不可变 Context version、已发布 Report version 和 retained Persona 作为 source。
+- `POST /api/context/agent-evals/:publicId/run`：运行确定性可信度判定；`POST /api/context/agent-evals/:publicId/labels`：另行保存人工标签，不覆盖 judge result。
 - `PATCH /api/personas/:publicId/evidence`：管理员或创建者明确保留/退役 Persona，并设置有效期与复核备注。
 - `/persona`：Persona Library 展示证据状态、置信度、Claim/Evidence 数量和保留门禁，并提供证据与审计抽屉。
 
@@ -324,6 +334,41 @@ Runtime 默认值：每 run 2 个并发 task、每 workspace 2 个活跃研究 r
 - 隔离完整迁移链 smoke 同时创建 Research 与 Market Insight，验证 Intent/Plan/Workflow/Run 四重绑定、Context purpose、任务图边界、输出契约、不可变 hash、重复确认幂等、跨 workspace 隔离、回放身份和 Market Insight 策略分配；Intent Workflow、Plan Replay、Reasoning、Skill Executor 与 Memory Policy 回归继续通过。
 - `/newstudy` 桌面和 390×844 移动端已验证产品线切换、差异化文案与场景模板；无横向溢出、框架错误覆盖层或 console error/warn。
 - 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated market-insight-workflow`，仅允许 localhost / `127.0.0.1` 数据库。
+
+## 2026-08-15 受治理 `.skill` 包部署与验收记录
+
+- 远端 Supabase 已在单事务应用 `20260815060000_skill_package_governance.sql`。依赖的 `study_run_skill_bindings` 已存在；部署前新治理表不存在，且没有活跃工作区远程 Skill，因此没有对历史研究、Run 或执行记录进行伪造回填。
+- `atypica.skill/v1` 是严格 JSON 包，只包含显式 manifest、`SKILL.md` 文本和可选签名声明。未知字段会被拒绝，包不允许脚本、二进制、路径、任意文件或任意代码执行。
+- 导入包先进入 `submitted`；管理员必须以版本精确的 `network`、`context_read`、`files_read`、`provider_invoke` grant 审批。HTTP/MCP 执行前再次检查有效 grant，HTTP/MCP 隐含的网络/Provider 权限不会由 Skill 自行扩大。
+- secret 仍只保存 `SKILL_SECRET_*` 环境变量引用，不持久化 secret value。签名当前显式标记为 `declared_unverified`，没有把元数据冒充为加密信任；撤销会禁用并阻止未来执行，但不改写既有不可变 Run Binding/权限快照。
+- 管理员可按需探测受 allowlist、HTTPS、超时、响应大小和重定向约束的 executor；结果写入 `skill_executor_health_checks` 和控制审计，不启动后台探测守护进程。
+- 隔离 PostgreSQL 15 完整迁移链 smoke 已验证非法载荷拒绝、submitted 阻断、最小权限审批、secret reference-only、HTTP health、稳定包哈希导出、不可变 Run grant snapshot、撤销阻断和跨 workspace 隔离；既有 Skill Executor、Intent Workflow、Reasoning Runtime 与 Market Insight 回归通过。
+- `/skills` 在桌面和 390×844 移动端均验证了 `.skill` 导入控件与受控空状态；迁移部署后的新页面加载没有 framework overlay 或新的 console error/warn。
+- 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated skill-package-governance`，仅允许 localhost / `127.0.0.1` 数据库。
+
+## 2026-08-15 Agent Eval 与动态 Context 部署记录
+
+- 远端 Supabase 已在单事务应用 `20260815070000_agent_eval_dynamic_context.sql`；部署前后的 8 个 Study、12 个 Run 和 4 个 Context retrieval 保持不变。新 Eval suite 与动态检索 binding 均为 0，没有伪造黄金集、人工标签或历史刷新记录。
+- 移除“每个 Run 仅一份 Context retrieval”的旧索引，但仍保留初始 Run 快照的幂等复用。只有 `insufficient`、`conflicted`、`stale` 三种确定性触发能追加刷新；每次刷新绑定 Reasoning Decision、Run、下一任务、检索 query/filter/policy 和不可变引用项，重放同一 Decision 复用同一快照。
+- `agent_eval_suites` 以 `suite_key + version` 保存契约；case 只允许 `fabricated_citation` 和 `persona_convergence` 两类信任维度。Context source 必须是当前 active/approved asset 的不可变 version，Report 必须已发布，Persona 必须 retained 且未过期。
+- Judge 使用 `deterministic-trust-v1` 检查未声明引用、缺失必需引用和不足的独立 Persona source；它和人工 `pass/fail/needs_review` 标签分别持久化，不能把自动判断伪装为人工结论。
+- `/context` 显示 suite 状态、信任维度、case 数、最近一次结果和失败数；研究详情的 Reasoning trace 显示 Context 刷新触发、快照、目标任务和引用数。
+- 隔离 PostgreSQL 15 完整迁移链 smoke 已验证未授权 source 拒绝、2 个可信度失败、独立人工标签、动态 Context binding 和同一 Decision 重放复用；不引入 pgvector/HNSW、LangGraph 或未授权数据摄取。
+- 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated agent-eval-dynamic-context`，仅允许 localhost / `127.0.0.1` 数据库。
+
+## 2026-08-16 人工检索评估闭环部署记录
+
+- 远端开发数据库已应用 `20260816080000_human_relevance_evaluation.sql`，并只读确认 6 个新增字段存在；迁移没有创建、修改或伪造任何业务样本与人工标签。
+- 新建 relevance case 只接受 workspace scope、active/approved、`research_sample`、`human`、`confirmed`、PII 为 `none/redacted` 且未过期的当前 Context chunk。普通文档、合成/混合样本、未同意、未脱敏、待审核、历史版本和过期内容都不能进入黄金集。
+- 每个新 case 保存 `human_annotated`、标注人、标注时间、判断说明和不可变来源快照；既有评估数据保持 `legacy_v0 / legacy_unverified`，不会被回填成人工黄金标签。
+- `/context` 已增加检索评估工作台，可批量整理标签、查看 20-case 门槛、运行确定性 baseline，并只在达到门槛后开放生产 embedding candidate 评估。初始部署时数据库为 `0` 个合规样本 chunk、`0` 条人工 relevance case；pgvector/HNSW 保持禁用。
+- `pnpm lint` 与 `pnpm build` 已通过。隔离数据库 smoke 因当前环境没有 localhost PostgreSQL 而未运行；其 localhost 防护没有被绕过。Browser 对 localhost 的 URL 安全策略阻止了自动页面 QA，未改用其他浏览器规避。
+
+## 2026-08-16 合规研究样本导入记录
+
+- 已通过 `scripts/import-zenodo-llm-interviews.ts` 导入 Zenodo `10.5281/zenodo.17484327` 的 20 份英文访谈转录。记录为开放访问、CC BY 4.0，发布说明明确该数据已匿名化且参与者明确同意公开匿名数据。
+- 导入器在写入前核验元数据的开放访问/许可/匿名化/明确同意声明、完整 `P1` 至 `P20` 文件清单、每个发布方 MD5、字节大小以及邮箱/电话/URL 基础 PII 模式；每份资产保留精确 Zenodo 文件 URL、文件名和内容 hash。重复执行按 `source_uri` 跳过既有资产。
+- 工作区目前有 20 个 `approved + active` 的真人研究样本资产、273 个可检索 chunk、0 条人工 relevance case。样本已经具备人工标注的来源基础，但任何检索相关性判断仍必须由授权研究人员在 `/context` 工作台中逐条确认。
 
 ## 验收标准
 

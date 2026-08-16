@@ -455,6 +455,7 @@ export async function submitRealtimeInterviewTurn(invitationToken: string, sessi
   const contextText = formatContextForPrompt({
     retrievalId: claimed.context_retrieval_id,
     retrievalPublicId: null,
+    retrievedAt: null,
     strategy: "lexical_metadata_v1",
     query: claimed.objective,
     purpose: "realtime_interview",

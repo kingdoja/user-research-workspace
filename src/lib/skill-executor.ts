@@ -30,6 +30,9 @@ export const skillExecutorConfigSchema = z.discriminatedUnion("kind", [
 
 export type SkillExecutorConfig = z.infer<typeof skillExecutorConfigSchema>;
 export type ExecutorCapability = "network" | "provider_invoke";
+export type SkillExecutionPolicy = {
+  allowedNetworkOrigins?: string[];
+};
 
 export class SkillExecutionError extends Error {
   readonly code: string;
@@ -61,7 +64,7 @@ function allowedOrigins() {
   return new Set(configured);
 }
 
-function assertAllowedEndpoint(endpoint: string) {
+function assertAllowedEndpoint(endpoint: string, policy?: SkillExecutionPolicy) {
   const url = new URL(endpoint);
   if (url.username || url.password) {
     throw new SkillExecutionError("SKILL_EXECUTOR_URL_CREDENTIALS_FORBIDDEN", "Executor URL 不能包含用户名或密码");
@@ -76,6 +79,9 @@ function assertAllowedEndpoint(endpoint: string) {
     && (origins.has(`http://${url.hostname}`) || origins.has(url.origin));
   if (!exactOrigin && !localOrigin) {
     throw new SkillExecutionError("SKILL_EXECUTOR_ORIGIN_FORBIDDEN", `Executor origin 未加入白名单：${url.origin}`);
+  }
+  if (policy?.allowedNetworkOrigins && !policy.allowedNetworkOrigins.includes(url.origin)) {
+    throw new SkillExecutionError("SKILL_EXECUTOR_NETWORK_SCOPE_DENIED", `Executor origin 未获当前 Skill 版本授权：${url.origin}`);
   }
   return url;
 }
@@ -150,8 +156,9 @@ async function executeDeclarativeHttp(
   config: Extract<SkillExecutorConfig, { kind: "declarative_http" }>,
   input: Record<string, unknown>,
   signal: AbortSignal,
+  policy?: SkillExecutionPolicy,
 ) {
-  const endpoint = assertAllowedEndpoint(config.endpoint);
+  const endpoint = assertAllowedEndpoint(config.endpoint, policy);
   const headers = resolveHeaders(config.headersFromEnv);
   headers.set("content-type", "application/json");
   const response = await fetch(endpoint, {
@@ -172,12 +179,13 @@ async function executeMcp(
   config: Extract<SkillExecutorConfig, { kind: "mcp" }>,
   input: Record<string, unknown>,
   signal: AbortSignal,
+  policy?: SkillExecutionPolicy,
 ) {
-  const endpoint = assertAllowedEndpoint(config.endpoint);
+  const endpoint = assertAllowedEndpoint(config.endpoint, policy);
   const headers = resolveHeaders(config.headersFromEnv);
   const controlledFetch: typeof fetch = async (request, init) => {
     const requestUrl = request instanceof Request ? request.url : request.toString();
-    assertAllowedEndpoint(requestUrl);
+    assertAllowedEndpoint(requestUrl, policy);
     return fetch(request, { ...init, redirect: "error", credentials: "omit" });
   };
   const transport = new StreamableHTTPClientTransport(endpoint, {
@@ -222,6 +230,7 @@ export async function executeConfiguredSkill(input: {
   outputSchema: Record<string, unknown>;
   arguments: Record<string, unknown>;
   signal?: AbortSignal;
+  policy?: SkillExecutionPolicy;
 }) {
   validateSchema(input.inputSchema, input.arguments, "input");
   const timeoutSignal = AbortSignal.timeout(input.config.timeoutMs);
@@ -229,8 +238,8 @@ export async function executeConfiguredSkill(input: {
   let output: Record<string, unknown> | unknown[];
   try {
     output = input.config.kind === "mcp"
-      ? await executeMcp(input.config, input.arguments, signal)
-      : await executeDeclarativeHttp(input.config, input.arguments, signal);
+      ? await executeMcp(input.config, input.arguments, signal, input.policy)
+      : await executeDeclarativeHttp(input.config, input.arguments, signal, input.policy);
   } catch (error) {
     if (signal.aborted && !(error instanceof SkillExecutionError)) {
       throw new SkillExecutionError("SKILL_EXECUTOR_TIMEOUT", "Skill Executor 超时或被取消");
@@ -241,10 +250,10 @@ export async function executeConfiguredSkill(input: {
   return output;
 }
 
-export async function probeConfiguredSkill(config: SkillExecutorConfig) {
+export async function probeConfiguredSkill(config: SkillExecutorConfig, policy?: SkillExecutionPolicy) {
   const startedAt = performance.now();
   if (config.kind === "declarative_http") {
-    const endpoint = assertAllowedEndpoint(config.endpoint);
+    const endpoint = assertAllowedEndpoint(config.endpoint, policy);
     const headers = resolveHeaders(config.headersFromEnv);
     const signal = AbortSignal.timeout(config.timeoutMs);
     const response = await fetch(endpoint, {
@@ -261,12 +270,12 @@ export async function probeConfiguredSkill(config: SkillExecutorConfig) {
     return { latencyMs: Math.round(performance.now() - startedAt), detail: `HTTP ${response.status}` };
   }
 
-  const endpoint = assertAllowedEndpoint(config.endpoint);
+  const endpoint = assertAllowedEndpoint(config.endpoint, policy);
   const headers = resolveHeaders(config.headersFromEnv);
   const signal = AbortSignal.timeout(config.timeoutMs);
   const controlledFetch: typeof fetch = async (request, init) => {
     const requestUrl = request instanceof Request ? request.url : request.toString();
-    assertAllowedEndpoint(requestUrl);
+    assertAllowedEndpoint(requestUrl, policy);
     return fetch(request, { ...init, redirect: "error", credentials: "omit", signal });
   };
   const transport = new StreamableHTTPClientTransport(endpoint, {

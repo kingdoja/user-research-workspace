@@ -1,27 +1,51 @@
 "use client";
 
 import {
+  Ban,
   Blocks,
   Cable,
   Check,
   ChevronDown,
   CircleAlert,
+  Download,
+  FileUp,
+  HeartPulse,
   LoaderCircle,
   Plus,
   ServerCog,
+  ShieldCheck,
   X,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { FormEvent, useState, useTransition } from "react";
-import type { SkillSummary } from "@/lib/skill-gateway";
+import { type ChangeEvent, type FormEvent, useState, useTransition } from "react";
+import type { SkillCapability, SkillSummary } from "@/lib/skill-gateway";
 
 type Notice = { kind: "success" | "error"; text: string } | null;
+
+const capabilityOptions: Array<{ value: SkillCapability; label: string }> = [
+  { value: "network", label: "Network" },
+  { value: "context_read", label: "Context" },
+  { value: "files_read", label: "Files" },
+  { value: "provider_invoke", label: "Provider" },
+];
 
 function executorLabel(type: SkillSummary["executorType"]) {
   if (type === "declarative_http") return "HTTP JSON";
   if (type === "mcp") return "MCP";
   if (type === "builtin") return "Builtin";
   return "未配置";
+}
+
+function statusLabel(status: SkillSummary["status"]) {
+  if (status === "submitted") return "待审批";
+  if (status === "revoked") return "已撤销";
+  if (status === "draft") return "草稿";
+  if (status === "archived") return "已归档";
+  return "已批准";
+}
+
+function grantsFor(skill: SkillSummary) {
+  return (skill.requestedCapabilities ?? []).map((capability) => ({ capability, scope: {} }));
 }
 
 export function SkillControlPanel({
@@ -37,9 +61,18 @@ export function SkillControlPanel({
   const [skills, setSkills] = useState(initialSkills);
   const [notice, setNotice] = useState<Notice>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [executorType, setExecutorType] = useState<"declarative_http" | "mcp">("mcp");
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  function refresh() {
+    startTransition(() => router.refresh());
+  }
+
+  async function readJson(response: Response) {
+    return response.json().catch(() => ({})) as Promise<{ error?: string }>;
+  }
 
   async function toggle(skill: SkillSummary) {
     const key = `${skill.source}:${skill.slug}`;
@@ -49,14 +82,9 @@ export function SkillControlPanel({
       const response = await fetch("/api/skills/settings", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          source: skill.source,
-          slug: skill.slug,
-          publicId: skill.publicId,
-          enabled: !skill.enabled,
-        }),
+        body: JSON.stringify({ source: skill.source, slug: skill.slug, publicId: skill.publicId, enabled: !skill.enabled }),
       });
-      const body = await response.json() as { error?: string };
+      const body = await readJson(response);
       if (!response.ok) throw new Error(body.error ?? "Skill 设置更新失败");
       setSkills((current) => current.map((item) => (
         item.source === skill.source && item.slug === skill.slug
@@ -64,7 +92,7 @@ export function SkillControlPanel({
           : item
       )));
       setNotice({ kind: "success", text: `${skill.name} 已${skill.enabled ? "禁用" : "启用"}` });
-      startTransition(() => router.refresh());
+      refresh();
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "Skill 设置更新失败" });
     } finally {
@@ -102,29 +130,174 @@ export function SkillControlPanel({
         description: String(data.get("description")),
         visibility: "workspace",
         capabilities: String(data.get("capabilities")).split(",").map((item) => item.trim()).filter(Boolean),
+        capabilityRequests: data.getAll("capabilityRequests").map(String),
         inputSchema,
         outputSchema,
         executor,
       }),
     });
-    const body = await response.json() as { error?: string };
+    const body = await readJson(response);
     if (!response.ok) {
       setNotice({ kind: "error", text: body.error ?? "Skill 注册失败" });
       return;
     }
     event.currentTarget.reset();
     setCreateOpen(false);
-    setNotice({ kind: "success", text: "远程 Skill 已注册，启用后可执行" });
-    startTransition(() => router.refresh());
+    setNotice({ kind: "success", text: "远程 Skill 已注册，权限已按最小范围记录" });
+    refresh();
+  }
+
+  async function importPackage(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    if (file.size > 256_000) {
+      setNotice({ kind: "error", text: ".skill 包超过 256 KB 限制" });
+      return;
+    }
+    setBusyKey("package-import");
+    setNotice(null);
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text) as unknown;
+      const response = await fetch("/api/skills/packages/import", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = await readJson(response);
+      if (!response.ok) throw new Error(body.error ?? "Skill 包导入失败");
+      setImportOpen(false);
+      setNotice({ kind: "success", text: "Skill 包已提交，等待管理员审批权限" });
+      refresh();
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : ".skill 包不是有效 JSON" });
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function approve(skill: SkillSummary) {
+    if (!skill.publicId) return;
+    const key = `approve:${skill.publicId}`;
+    setBusyKey(key);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/skills/${skill.publicId}/approval`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ grants: grantsFor(skill) }),
+      });
+      const body = await readJson(response);
+      if (!response.ok) throw new Error(body.error ?? "Skill 审批失败");
+      setNotice({ kind: "success", text: `${skill.name} 已审批，可选择启用` });
+      refresh();
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "Skill 审批失败" });
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function probe(skill: SkillSummary) {
+    if (!skill.publicId) return;
+    const key = `health:${skill.publicId}`;
+    setBusyKey(key);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/skills/${skill.publicId}/health`, { method: "POST" });
+      const body = await readJson(response) as { error?: string; status?: string; latencyMs?: number };
+      if (!response.ok) throw new Error(body.error ?? "Executor 探测失败");
+      setNotice({ kind: "success", text: body.status === "healthy" ? `${skill.name} 可达${body.latencyMs ? `，${body.latencyMs} ms` : ""}` : `${skill.name} 探测未通过` });
+      refresh();
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "Executor 探测失败" });
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function revoke(skill: SkillSummary) {
+    if (!skill.publicId) return;
+    const key = `revoke:${skill.publicId}`;
+    setBusyKey(key);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/skills/${skill.publicId}/revoke`, { method: "POST" });
+      const body = await readJson(response);
+      if (!response.ok) throw new Error(body.error ?? "Skill 撤销失败");
+      setNotice({ kind: "success", text: `${skill.name} 已撤销，未来执行已阻断` });
+      refresh();
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "Skill 撤销失败" });
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function downloadPackage(skill: SkillSummary) {
+    if (!skill.publicId) return;
+    const key = `export:${skill.publicId}`;
+    setBusyKey(key);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/skills/${skill.publicId}/package`);
+      if (!response.ok) {
+        const body = await readJson(response);
+        throw new Error(body.error ?? "Skill 包导出失败");
+      }
+      const content = await response.text();
+      const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${skill.slug}.skill`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setNotice({ kind: "success", text: `${skill.name} 已导出` });
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "Skill 包导出失败" });
+    } finally {
+      setBusyKey(null);
+    }
   }
 
   const builtin = skills.filter((skill) => skill.source === "builtin");
   const workspace = skills.filter((skill) => skill.source === "workspace");
 
+  function renderActions(skill: SkillSummary) {
+    if (skill.source === "builtin") return null;
+    const actionBusy = (prefix: string) => busyKey === `${prefix}:${skill.publicId}` || pending;
+    return (
+      <div className="skill-governance-actions">
+        {skill.status === "submitted" && canManageBuiltins ? (
+          <button type="button" className="button button-green" disabled={actionBusy("approve")} onClick={() => approve(skill)}>
+            {actionBusy("approve") ? <LoaderCircle className="spin" size={13} /> : <ShieldCheck size={13} />}审批
+          </button>
+        ) : null}
+        {skill.status === "active" && skill.packageFormat === "atypica.skill/v1" ? (
+          <button type="button" className="skill-icon-button" title="导出 .skill 包" aria-label={`导出 ${skill.name}`} disabled={actionBusy("export")} onClick={() => downloadPackage(skill)}>
+            {actionBusy("export") ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}
+          </button>
+        ) : null}
+        {skill.status === "active" && canManageBuiltins ? (
+          <button type="button" className="skill-icon-button" title="探测 Executor 健康状态" aria-label={`探测 ${skill.name}`} disabled={actionBusy("health")} onClick={() => probe(skill)}>
+            {actionBusy("health") ? <LoaderCircle className="spin" size={14} /> : <HeartPulse size={14} />}
+          </button>
+        ) : null}
+        {skill.status !== "revoked" && skill.status !== "archived" && canManageBuiltins ? (
+          <button type="button" className="skill-icon-button danger" title="撤销 Skill" aria-label={`撤销 ${skill.name}`} disabled={actionBusy("revoke")} onClick={() => revoke(skill)}>
+            {actionBusy("revoke") ? <LoaderCircle className="spin" size={14} /> : <Ban size={14} />}
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
   function renderSkills(items: SkillSummary[]) {
     return items.map((skill) => {
       const key = `${skill.source}:${skill.slug}`;
       const canToggle = skill.source === "workspace" ? canCreate : canManageBuiltins;
+      const hasPendingCapabilities = skill.capabilityState === "pending";
       return (
         <article className="skill-gateway-row" key={key}>
           <div className={`skill-gateway-icon executor-${skill.executorType}`}>
@@ -134,26 +307,37 @@ export function SkillControlPanel({
             <div><h3>{skill.name}</h3><code>{skill.slug}@{skill.version}</code></div>
             <p>{skill.description || "—"}</p>
             <div className="skill-capability-list">
-              {skill.capabilities.slice(0, 5).map((capability) => <span key={capability}>{capability}</span>)}
+              {skill.capabilities.slice(0, 4).map((capability) => <span key={capability}>{capability}</span>)}
+              {(skill.requestedCapabilities ?? []).map((capability) => <span className="skill-security-capability" key={`requested-${capability}`}>{capability}</span>)}
             </div>
+            {skill.source === "workspace" ? (
+              <div className="skill-governance-meta">
+                <span className={`skill-lifecycle ${skill.status}`}>{statusLabel(skill.status)}</span>
+                <span>{skill.packageFormat === "atypica.skill/v1" ? ".skill / SKILL.md" : "inline manifest"}</span>
+                <span>{hasPendingCapabilities ? "权限待批准" : skill.capabilityState === "granted" ? "权限已锁定" : "无需外部权限"}</span>
+                {skill.packageFormat === "atypica.skill/v1" ? <span>签名：{skill.signatureState === "declared_unverified" ? "已声明，未验证" : "未提供"}</span> : null}
+                {skill.health ? <span className={`skill-health ${skill.health.status}`}>{skill.health.status === "healthy" ? "Executor healthy" : "Executor unhealthy"}</span> : null}
+              </div>
+            ) : null}
           </div>
           <div className="skill-gateway-version">
             <span>{executorLabel(skill.executorType)}</span>
             <code title={skill.contentHash ?? undefined}>{skill.contentHash?.slice(0, 10) ?? "runtime"}</code>
           </div>
           <div className="skill-gateway-state">
-            <span className={skill.enabled ? "is-enabled" : "is-disabled"}>{skill.enabled ? "Enabled" : "Disabled"}</span>
+            <span className={skill.enabled ? "is-enabled" : "is-disabled"}>{skill.enabled ? "Enabled" : statusLabel(skill.status)}</span>
             <button
               className={skill.enabled ? "skill-switch active" : "skill-switch"}
               type="button"
               role="switch"
               aria-checked={skill.enabled}
               aria-label={`${skill.enabled ? "禁用" : "启用"} ${skill.name}`}
-              disabled={!canToggle || !skill.executable || busyKey === key || pending}
+              disabled={!canToggle || !skill.executable || skill.status === "submitted" || skill.status === "revoked" || busyKey === key || pending}
               onClick={() => toggle(skill)}
             >
               <span>{busyKey === key ? <LoaderCircle className="spin" size={12} /> : null}</span>
             </button>
+            {renderActions(skill)}
           </div>
         </article>
       );
@@ -177,9 +361,23 @@ export function SkillControlPanel({
 
       <section className="skill-gateway-section">
         <header>
-          <div><span>工作区能力</span><h2>远程 Skills</h2></div>
-          {canCreate ? <button className="button button-muted" type="button" onClick={() => setCreateOpen((value) => !value)}><Plus size={16} />注册 Skill<ChevronDown className={createOpen ? "rotate" : ""} size={15} /></button> : null}
+          <div><span>工作区能力</span><h2>受治理的远程 Skills</h2></div>
+          {canCreate ? (
+            <div className="skill-section-actions">
+              <button className="button button-muted" type="button" onClick={() => setImportOpen((value) => !value)}><FileUp size={16} />导入 .skill<ChevronDown className={importOpen ? "rotate" : ""} size={15} /></button>
+              <button className="button button-muted" type="button" onClick={() => setCreateOpen((value) => !value)}><Plus size={16} />注册 Skill<ChevronDown className={createOpen ? "rotate" : ""} size={15} /></button>
+            </div>
+          ) : null}
         </header>
+        {importOpen ? (
+          <div className="skill-package-import">
+            <div><strong>导入声明式 `.skill` 包</strong><p>仅接受 manifest 与 `SKILL.md` 文本；不接受脚本、二进制或任意文件。导入后需要管理员审批所请求的权限。</p></div>
+            <label className="button button-green" aria-disabled={busyKey === "package-import"}>
+              {busyKey === "package-import" ? <LoaderCircle className="spin" size={15} /> : <FileUp size={15} />}选择 .skill
+              <input type="file" accept=".skill,application/json" onChange={importPackage} disabled={busyKey === "package-import"} />
+            </label>
+          </div>
+        ) : null}
         {createOpen ? (
           <form className="skill-register-form" onSubmit={createSkill}>
             <div className="skill-form-grid">
@@ -189,7 +387,8 @@ export function SkillControlPanel({
               <label><span>Executor</span><select value={executorType} onChange={(event) => setExecutorType(event.target.value as "declarative_http" | "mcp")}><option value="mcp">MCP Streamable HTTP</option><option value="declarative_http">HTTP JSON POST</option></select></label>
               <label><span>Endpoint</span><input name="endpoint" type="url" required placeholder="https://executor.example.com/mcp" /></label>
               {executorType === "mcp" ? <label><span>Tool name</span><input name="toolName" required placeholder="research_signal" /></label> : null}
-              <label><span>Capabilities</span><input name="capabilities" placeholder="research.read, insight.create" /></label>
+              <label><span>业务能力</span><input name="capabilities" placeholder="research.read, insight.create" /></label>
+              <fieldset className="skill-capability-requests"><legend>请求权限</legend>{capabilityOptions.map((option) => <label key={option.value}><input name="capabilityRequests" type="checkbox" value={option.value} />{option.label}</label>)}</fieldset>
               <label className="skill-form-schema"><span>Input Schema</span><textarea name="inputSchema" defaultValue={'{"type":"object","additionalProperties":true}'} /></label>
               <label className="skill-form-schema"><span>Output Schema</span><textarea name="outputSchema" defaultValue={'{"type":"object"}'} /></label>
             </div>
@@ -197,7 +396,7 @@ export function SkillControlPanel({
           </form>
         ) : null}
         <div className="skill-gateway-list">
-          {workspace.length ? renderSkills(workspace) : <div className="skill-gateway-empty"><Cable size={22} /><span>暂无远程 Skill</span></div>}
+          {workspace.length ? renderSkills(workspace) : <div className="skill-gateway-empty"><Cable size={22} /><span>暂无工作区 Skill</span></div>}
         </div>
       </section>
     </div>

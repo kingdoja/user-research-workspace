@@ -9,6 +9,16 @@ export const SOURCE_CONNECTOR_POLICY_VERSION = "public-source-policy-v1";
 export const SOURCE_RESPONSE_BYTE_LIMIT = 1_500_000;
 export const SOURCE_PAGE_TEXT_LIMIT = 5_000;
 
+function stripNullBytes(value: string | null | undefined) {
+  return value == null ? value ?? null : value.replace(/\u0000/g, "");
+}
+
+function stringifyJson(value: unknown) {
+  return JSON.stringify(value, (_key, nested) => (
+    typeof nested === "string" ? stripNullBytes(nested) : nested
+  )) ?? "null";
+}
+
 export type SourceProvider = "seed" | "tavily" | "bing";
 export type SourceCandidateStatus = "discovered" | "collected" | "rejected" | "unavailable" | "removed";
 
@@ -343,7 +353,8 @@ export async function collectSourceCandidate(candidate: SourceCandidate, options
     if (!contentType.includes("text/html") && !contentType.includes("text/plain") && !contentType.includes("application/xhtml+xml")) {
       throw new SourceCollectionError("SOURCE_NOT_TEXT", { contentType });
     }
-    const { text: rawContent, bytesRead } = await readLimitedText(response);
+    const { text: fetchedContent, bytesRead } = await readLimitedText(response);
+    const rawContent = stripNullBytes(fetchedContent) ?? "";
     const normalizedText = contentType.includes("text/plain")
       ? rawContent.replace(/\s+/g, " ").trim().slice(0, SOURCE_PAGE_TEXT_LIMIT)
       : extractPageText(rawContent);
@@ -513,9 +524,9 @@ export async function materializeSourceConnectorAudit(queryable: Queryable, inpu
     [
       input.audit.publicId, input.workspaceId, input.studyId, input.runId, input.taskKey, input.attempt,
       input.audit.connectorKey, input.audit.provider, input.audit.policyVersion, input.audit.status,
-      JSON.stringify(input.audit.queries), input.audit.candidateCount, input.audit.collectedCount,
-      input.audit.rejectedCount, input.audit.unavailableCount, JSON.stringify(input.audit.metadata),
-      input.audit.startedAt, input.audit.finishedAt,
+      stringifyJson(input.audit.queries), input.audit.candidateCount, input.audit.collectedCount,
+      input.audit.rejectedCount, input.audit.unavailableCount, stringifyJson(input.audit.metadata),
+      stripNullBytes(input.audit.startedAt), stripNullBytes(input.audit.finishedAt),
     ],
   );
   for (const candidate of input.audit.candidates) {
@@ -526,9 +537,9 @@ export async function materializeSourceConnectorAudit(queryable: Queryable, inpu
        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13)
        returning id::text as id`,
       [
-        candidate.publicId, run.rows[0].id, candidate.provider, candidate.query, candidate.rank, candidate.score,
-        candidate.resolvedTitle, candidate.url, candidate.canonicalUrl, candidate.status, candidate.rejectionReason,
-        JSON.stringify(candidate.metadata), candidate.status === "collected" ? candidate.snapshot?.fetchedAt ?? null : null,
+        stripNullBytes(candidate.publicId), run.rows[0].id, stripNullBytes(candidate.provider), stripNullBytes(candidate.query), candidate.rank, candidate.score,
+        stripNullBytes(candidate.resolvedTitle), stripNullBytes(candidate.url), stripNullBytes(candidate.canonicalUrl), stripNullBytes(candidate.status), stripNullBytes(candidate.rejectionReason),
+        stringifyJson(candidate.metadata), candidate.status === "collected" ? stripNullBytes(candidate.snapshot?.fetchedAt) : null,
       ],
     );
     if (!candidate.snapshot) continue;
@@ -539,11 +550,11 @@ export async function materializeSourceConnectorAudit(queryable: Queryable, inpu
        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb)
        returning id::text as id`,
       [
-        candidate.snapshot.publicId, storedCandidate.rows[0].id, candidate.snapshot.status,
-        candidate.snapshot.canonicalUrl, candidate.snapshot.httpStatus, candidate.snapshot.contentType,
-        candidate.snapshot.contentLength, candidate.snapshot.etag, candidate.snapshot.lastModified,
-        candidate.snapshot.contentHash, candidate.snapshot.rawContent, candidate.snapshot.normalizedText,
-        candidate.snapshot.fetchedAt, JSON.stringify(candidate.snapshot.metadata),
+        stripNullBytes(candidate.snapshot.publicId), storedCandidate.rows[0].id, stripNullBytes(candidate.snapshot.status),
+        stripNullBytes(candidate.snapshot.canonicalUrl), candidate.snapshot.httpStatus, stripNullBytes(candidate.snapshot.contentType),
+        candidate.snapshot.contentLength, stripNullBytes(candidate.snapshot.etag), stripNullBytes(candidate.snapshot.lastModified),
+        stripNullBytes(candidate.snapshot.contentHash), stripNullBytes(candidate.snapshot.rawContent), stripNullBytes(candidate.snapshot.normalizedText),
+        stripNullBytes(candidate.snapshot.fetchedAt), stringifyJson(candidate.snapshot.metadata),
       ],
     );
     if (!candidate.observation) continue;
@@ -553,10 +564,10 @@ export async function materializeSourceConnectorAudit(queryable: Queryable, inpu
          confidence, locator, coding, metadata
        ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb)`,
       [
-        candidate.observation.publicId, storedCandidate.rows[0].id, snapshot.rows[0].id,
-        candidate.observation.key, candidate.observation.kind, candidate.observation.content,
-        candidate.observation.confidence, JSON.stringify(candidate.observation.locator),
-        JSON.stringify(candidate.observation.coding), JSON.stringify(candidate.observation.metadata),
+        stripNullBytes(candidate.observation.publicId), storedCandidate.rows[0].id, snapshot.rows[0].id,
+        stripNullBytes(candidate.observation.key), stripNullBytes(candidate.observation.kind), stripNullBytes(candidate.observation.content),
+        stripNullBytes(candidate.observation.confidence), stringifyJson(candidate.observation.locator),
+        stringifyJson(candidate.observation.coding), stringifyJson(candidate.observation.metadata),
       ],
     );
   }
