@@ -29,6 +29,7 @@ export const sendAgentMessageInputSchema = z.object({
   content: z.string().trim().min(1).max(12_000),
   skillPublicIds: z.array(z.string().trim().min(1).max(160)).max(12).default([]),
   externalExecutionAllowed: z.boolean().default(false),
+  requestId: z.string().trim().min(8).max(160).regex(/^[A-Za-z0-9:_-]+$/).optional(),
 }).strict();
 
 export type UniversalAgentWorkspace = {
@@ -39,7 +40,7 @@ export type UniversalAgentWorkspace = {
     status: "active" | "archived";
     updatedAt: string;
     lastMessage: string | null;
-    lastRunStatus: "running" | "completed" | "failed" | "cancelled" | null;
+    lastRunStatus: "queued" | "running" | "completed" | "failed" | "cancelled" | null;
   }>;
   selectedThreadPublicId: string | null;
   messages: Array<{
@@ -62,7 +63,7 @@ export type UniversalAgentWorkspace = {
   recentRuns: Array<{
     publicId: string;
     threadPublicId: string;
-    status: "running" | "completed" | "failed" | "cancelled";
+    status: "queued" | "running" | "completed" | "failed" | "cancelled";
     stepsUsed: number;
     maxSteps: number;
     externalExecutionAllowed: boolean;
@@ -78,6 +79,28 @@ type AgentDecision = Omit<ProviderUniversalAgentTurn, "responseId" | "model" | "
 };
 
 type AgentDecisionProvider = (input: Parameters<typeof generateProviderUniversalAgentTurn>[0]) => Promise<AgentDecision>;
+
+type BoundAgentSkill = {
+  skill_id: string;
+  version_id: string;
+  public_id: string;
+  slug: string;
+  name: string;
+  version: number;
+  executor_type: "declarative_http" | "mcp" | "sandbox";
+  executor_config: Record<string, unknown> | string;
+  input_schema: Record<string, unknown> | string;
+  output_schema: Record<string, unknown> | string;
+  package_content: Record<string, unknown> | string;
+  requested_capabilities: SkillCapability[] | string;
+  content_hash: string;
+  bindingId: string;
+  bindingPublicId: string;
+  grants: CapabilityGrant[];
+};
+
+const AGENT_RUN_LEASE_MS = 5 * 60_000;
+const AGENT_RUN_HEARTBEAT_MS = 60_000;
 
 function jsonValue<T>(value: T | string): T {
   return typeof value === "string" ? JSON.parse(value) as T : value;
@@ -106,6 +129,14 @@ function executionPolicy(config: z.infer<typeof skillExecutorConfigSchema>, gran
   const networkGrant = grants.find((grant) => grant.capability === "network");
   if (!networkGrant) return {};
   const origins = networkGrant.scope.origins;
+  if (config.kind === "sandbox") {
+    return {
+      allowedSandboxNetworkOrigins: Array.isArray(origins)
+        && origins.every((origin) => typeof origin === "string")
+        ? origins.map((origin) => new URL(origin).origin)
+        : [],
+    };
+  }
   if (Array.isArray(origins) && origins.every((origin) => typeof origin === "string")) {
     return { allowedNetworkOrigins: origins.map((origin) => new URL(origin).origin) };
   }
@@ -157,6 +188,7 @@ export async function listUniversalAgentWorkspace(
        join skill_versions version on version.skill_id = skill.id
          and version.version = coalesce(setting.pinned_version, skill.latest_version)
        where skill.workspace_id = $1 and skill.status = 'active'
+         and (skill.visibility = 'workspace' or skill.owner_user_id = $2)
          and version.executor_type in ('declarative_http', 'mcp', 'sandbox')
          and not exists (
            select 1 from jsonb_array_elements_text(version.requested_capabilities) requested(capability)
@@ -167,7 +199,7 @@ export async function listUniversalAgentWorkspace(
            )
          )
        order by skill.name, skill.id`,
-      [viewer.workspaceId],
+      [viewer.workspaceId, viewer.userId],
     ),
     database.query<{
       public_id: string; thread_public_id: string; status: UniversalAgentWorkspace["recentRuns"][number]["status"];
@@ -253,7 +285,7 @@ async function bindAgentSkills(
   viewer: Viewer,
   runId: string,
   publicIds: string[],
-) {
+): Promise<BoundAgentSkill[]> {
   if (!publicIds.length) return [];
   const uniqueIds = [...new Set(publicIds)];
   const result = await queryable.query<{
@@ -272,11 +304,12 @@ async function bindAgentSkills(
      join skill_versions version on version.skill_id = skill.id
        and version.version = coalesce(setting.pinned_version, skill.latest_version)
      where skill.workspace_id = $1 and skill.status = 'active' and skill.public_id = any($2::text[])
+       and (skill.visibility = 'workspace' or skill.owner_user_id = $3)
        and version.executor_type in ('declarative_http', 'mcp', 'sandbox')`,
-    [viewer.workspaceId, uniqueIds],
+    [viewer.workspaceId, uniqueIds, viewer.userId],
   );
   if (result.rows.length !== uniqueIds.length) throw new Error("AGENT_SKILL_NOT_AVAILABLE");
-  const bindings = [];
+  const bindings: BoundAgentSkill[] = [];
   for (const skill of result.rows) {
     const grantsResult = await queryable.query<{ capability: SkillCapability; scope: Record<string, unknown> | string }>(
       `select capability, scope from workspace_skill_capability_grants
@@ -314,7 +347,7 @@ async function executeBoundSkill(input: {
   viewer: Viewer;
   runId: string;
   stepId: string;
-  binding: Awaited<ReturnType<typeof bindAgentSkills>>[number];
+  binding: BoundAgentSkill;
   arguments: Record<string, unknown>;
 }) {
   const configResult = skillExecutorConfigSchema.safeParse(jsonValue(input.binding.executor_config));
@@ -326,11 +359,14 @@ async function executeBoundSkill(input: {
   }
   const skillExecution = await input.queryable.query<{ id: string; public_id: string }>(
     `insert into skill_executions (
-       public_id, workspace_id, skill_id, skill_version_id, actor_user_id, executor_type, input, request_hash
-     ) values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8) returning id::text as id, public_id`,
+       public_id, workspace_id, skill_id, skill_version_id, actor_user_id, executor_type,
+       input, request_hash, agent_run_id, agent_step_id
+     ) values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
+     returning id::text as id, public_id`,
     [
       createPublicId("ske"), input.viewer.workspaceId, input.binding.skill_id, input.binding.version_id,
       input.viewer.userId, input.binding.executor_type, JSON.stringify(input.arguments), hashJson(input.arguments),
+      input.runId, input.stepId,
     ],
   );
   const sandbox = config.kind === "sandbox"
@@ -392,7 +428,7 @@ async function executeAgentTool(input: {
   runId: string;
   stepId: string;
   decision: AgentDecision;
-  bindings: Awaited<ReturnType<typeof bindAgentSkills>>;
+  bindings: BoundAgentSkill[];
   externalExecutionAllowed: boolean;
 }) {
   if (input.decision.action === "list_files") {
@@ -441,82 +477,328 @@ async function executeAgentTool(input: {
   throw new Error("AGENT_TOOL_ACTION_INVALID");
 }
 
+async function expireAgentRunLeases(queryable: Queryable, threadId?: string) {
+  const expired = await queryable.query<{ id: string; thread_id: string }>(
+    `select id::text as id, thread_id::text as thread_id
+     from agent_runs
+     where status = 'running' and lease_expires_at <= now()
+       and ($1::bigint is null or thread_id = $1)
+     order by lease_expires_at, id limit 50
+     for update skip locked`,
+    [threadId ?? null],
+  );
+  if (!expired.rows.length) return 0;
+  const runIds = expired.rows.map((run) => run.id);
+  await queryable.query(
+    `update agent_steps set status = 'failed', error_code = 'AGENT_RUN_LEASE_EXPIRED',
+       error_message = 'Worker lease expired before the step outcome was committed', finished_at = now()
+     where run_id = any($1::bigint[]) and status = 'running'`,
+    [runIds],
+  );
+  await queryable.query(
+    `update skill_executions set status = 'failed', error_code = 'AGENT_RUN_LEASE_EXPIRED',
+       error_message = 'Agent worker lease expired', finished_at = now()
+     where agent_run_id = any($1::bigint[]) and status = 'running'`,
+    [runIds],
+  );
+  await queryable.query(
+    `update sandbox_executions set status = 'cancelled', error_code = 'AGENT_RUN_LEASE_EXPIRED',
+       error_message = 'Agent worker lease expired', finished_at = now()
+     where agent_run_id = any($1::bigint[]) and status = 'running'`,
+    [runIds],
+  );
+  await queryable.query(
+    `update provider_route_decisions set status = 'failed', error_code = 'AGENT_RUN_LEASE_EXPIRED',
+       latency_ms = least(2147483647, greatest(0, extract(epoch from (now() - created_at)) * 1000))::int,
+       finished_at = now()
+     where agent_run_id = any($1::bigint[]) and status = 'selected'`,
+    [runIds],
+  );
+  await queryable.query(
+    `update agent_runs set status = 'failed', error_code = 'AGENT_RUN_LEASE_EXPIRED',
+       error_message = 'Worker lease expired; external effects were not replayed automatically',
+       finished_at = now(), lease_owner = null, lease_expires_at = null, heartbeat_at = null
+     where id = any($1::bigint[]) and status = 'running'`,
+    [runIds],
+  );
+  for (const run of expired.rows) {
+    await queryable.query(
+      `insert into agent_messages (public_id, thread_id, role, content, metadata)
+       values ($1, $2, 'assistant', $3, $4::jsonb)`,
+      [
+        createPublicId("agm"), run.thread_id,
+        "本轮执行未完成：后台 Worker 租约已过期，系统未自动重放可能产生外部副作用的步骤。",
+        JSON.stringify({ errorCode: "AGENT_RUN_LEASE_EXPIRED" }),
+      ],
+    );
+  }
+  await queryable.query(
+    "update agent_threads set updated_at = now() where id = any($1::bigint[])",
+    [[...new Set(expired.rows.map((run) => run.thread_id))]],
+  );
+  return expired.rows.length;
+}
+
 export async function sendAgentMessage(
   viewer: Viewer,
   threadPublicId: string,
   input: z.infer<typeof sendAgentMessageInputSchema>,
-  options?: { decide?: AgentDecisionProvider; maxSteps?: number },
+  options?: { maxSteps?: number },
 ) {
   if (viewer.role === "viewer") return "forbidden" as const;
   const database = await getDatabase();
   const maxSteps = Math.min(12, Math.max(1, options?.maxSteps ?? 6));
-  const seeded = await database.transaction(async (transaction) => {
-    const thread = await transaction.query<{ id: string; title: string }>(
-      "select id::text as id, title from agent_threads where public_id = $1 and workspace_id = $2 and status = 'active' for update",
+  const requestId = input.requestId ?? createPublicId("req");
+  return database.transaction(async (transaction) => {
+    const thread = await transaction.query<{ id: string }>(
+      "select id::text as id from agent_threads where public_id = $1 and workspace_id = $2 and status = 'active' for update",
       [threadPublicId, viewer.workspaceId],
     );
-    if (!thread.rows[0]) return null;
-    const message = await transaction.query<{ id: string; public_id: string }>(
+    if (!thread.rows[0]) return "not_found" as const;
+    await expireAgentRunLeases(transaction, thread.rows[0].id);
+    const existing = await transaction.query<{ public_id: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" }>(
+      "select public_id, status from agent_runs where thread_id = $1 and idempotency_key = $2 limit 1",
+      [thread.rows[0].id, requestId],
+    );
+    if (existing.rows[0]) {
+      return { runPublicId: existing.rows[0].public_id, status: existing.rows[0].status, reused: true };
+    }
+    const active = await transaction.query<{ public_id: string; status: "queued" | "running" }>(
+      "select public_id, status from agent_runs where thread_id = $1 and status in ('queued', 'running') limit 1",
+      [thread.rows[0].id],
+    );
+    if (active.rows[0]) {
+      return { error: "busy" as const, runPublicId: active.rows[0].public_id, status: active.rows[0].status };
+    }
+    const message = await transaction.query<{ id: string }>(
       `insert into agent_messages (public_id, thread_id, actor_user_id, role, content)
-       values ($1, $2, $3, 'user', $4) returning id::text as id, public_id`,
+       values ($1, $2, $3, 'user', $4) returning id::text as id`,
       [createPublicId("agm"), thread.rows[0].id, viewer.userId, input.content],
     );
     const run = await transaction.query<{ id: string; public_id: string }>(
       `insert into agent_runs (
          public_id, workspace_id, thread_id, initiated_by, user_message_id, objective,
-         max_steps, external_execution_allowed
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8) returning id::text as id, public_id`,
+         status, max_steps, external_execution_allowed, idempotency_key
+       ) values ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, $9)
+       returning id::text as id, public_id`,
       [
         createPublicId("agr"), viewer.workspaceId, thread.rows[0].id, viewer.userId,
-        message.rows[0].id, input.content, maxSteps, input.externalExecutionAllowed,
+        message.rows[0].id, input.content, maxSteps, input.externalExecutionAllowed, requestId,
       ],
     );
-    const bindings = await bindAgentSkills(transaction, viewer, run.rows[0].id, input.skillPublicIds);
+    await bindAgentSkills(transaction, viewer, run.rows[0].id, input.skillPublicIds);
     await transaction.query("update agent_threads set updated_at = now() where id = $1", [thread.rows[0].id]);
-    const route = await resolveProviderRoute({
-      queryable: transaction, workspaceId: viewer.workspaceId, runId: run.rows[0].id,
-      taskId: null, stage: "reasoning", subjectKey: `${viewer.workspacePublicId}:${run.rows[0].public_id}`,
-      runtimeKind: "agent",
-    });
-    return { threadId: thread.rows[0].id, runId: run.rows[0].id, runPublicId: run.rows[0].public_id, bindings, route };
+    return { runPublicId: run.rows[0].public_id, status: "queued" as const, reused: false };
   });
-  if (!seeded) return "not_found" as const;
-  const history = await database.query<{ role: "user" | "assistant" | "system" | "tool"; content: string }>(
-    `select role, content from agent_messages where thread_id = $1 order by created_at desc, id desc limit 40`,
-    [seeded.threadId],
+}
+
+async function claimAgentRun(queryable: Queryable, workerId: string) {
+  await expireAgentRunLeases(queryable);
+  const claimed = await queryable.query<{ id: string; public_id: string }>(
+    `update agent_runs set status = 'running', attempt_count = attempt_count + 1,
+       lease_owner = $1, heartbeat_at = now(),
+       lease_expires_at = now() + ($2::double precision * interval '1 millisecond')
+     where id = (
+       select id from agent_runs where status = 'queued' and available_at <= now()
+       order by available_at, started_at, id limit 1 for update skip locked
+     )
+     returning id::text as id, public_id`,
+    [workerId, AGENT_RUN_LEASE_MS],
   );
-  const files = await database.query<{ path: string; byte_size: number; version: number }>(
-    "select path, byte_size, version from agent_workspace_files where workspace_id = $1 order by path limit 200",
-    [viewer.workspaceId],
+  return claimed.rows[0] ?? null;
+}
+
+async function renewAgentRunLease(queryable: Queryable, runId: string, workerId: string) {
+  const renewed = await queryable.query<{ id: string }>(
+    `update agent_runs set heartbeat_at = now(),
+       lease_expires_at = now() + ($3::double precision * interval '1 millisecond')
+     where id = $1 and status = 'running' and lease_owner = $2 returning id::text as id`,
+    [runId, workerId, AGENT_RUN_LEASE_MS],
   );
-  const messages: Array<{ role: "user" | "assistant" | "system"; content: string }> = history.rows.reverse().map((message) => ({
-    role: message.role === "tool" ? "system" : message.role,
-    content: message.role === "tool" ? `工具结果：${message.content}` : message.content,
-  }));
-  const decide = options?.decide ?? generateProviderUniversalAgentTurn;
-  let routeUsage = { input_tokens: 0, output_tokens: 0 };
-  const routeStartedAt = performance.now();
+  if (!renewed.rows[0]) throw new Error("AGENT_RUN_LEASE_LOST");
+}
+
+async function withAgentRunLeaseHeartbeat<T>(input: {
+  queryable: Queryable;
+  runId: string;
+  workerId: string;
+  execute: () => Promise<T>;
+}) {
+  await renewAgentRunLease(input.queryable, input.runId, input.workerId);
+  let heartbeatError: unknown = null;
+  let heartbeat = Promise.resolve();
+  const timer = setInterval(() => {
+    if (heartbeatError) return;
+    heartbeat = heartbeat
+      .then(() => renewAgentRunLease(input.queryable, input.runId, input.workerId))
+      .catch((error) => {
+        heartbeatError ??= error;
+      });
+  }, AGENT_RUN_HEARTBEAT_MS);
+  timer.unref?.();
   try {
-    for (let sequence = 1; sequence <= maxSteps; sequence += 1) {
-      const decision = seeded.route
-        ? await withProviderRoute(seeded.route.override, () => decide({
-            objective: input.content, userPublicId: viewer.userPublicId, messages,
-            skills: seeded.bindings.map((binding) => ({
-              publicId: binding.public_id, slug: binding.slug, name: binding.name,
-              description: "受治理的工作区 Skill", version: binding.version, executorType: binding.executor_type,
-            })),
-            files: files.rows.map((file) => ({ path: file.path, byteSize: file.byte_size, version: file.version })),
-            externalExecutionAllowed: input.externalExecutionAllowed,
-          }))
-        : await decide({
-            objective: input.content, userPublicId: viewer.userPublicId, messages,
-            skills: seeded.bindings.map((binding) => ({
-              publicId: binding.public_id, slug: binding.slug, name: binding.name,
-              description: "受治理的工作区 Skill", version: binding.version, executorType: binding.executor_type,
-            })),
-            files: files.rows.map((file) => ({ path: file.path, byteSize: file.byte_size, version: file.version })),
-            externalExecutionAllowed: input.externalExecutionAllowed,
-          });
+    const result = await input.execute();
+    await heartbeat;
+    if (heartbeatError) throw heartbeatError;
+    await renewAgentRunLease(input.queryable, input.runId, input.workerId);
+    return result;
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+async function loadAgentRunSkillBindings(queryable: Queryable, runId: string): Promise<BoundAgentSkill[]> {
+  const result = await queryable.query<{
+    binding_id: string; binding_public_id: string; skill_id: string; version_id: string;
+    public_id: string; slug: string; name: string; version: number;
+    executor_type: BoundAgentSkill["executor_type"];
+    executor_config: Record<string, unknown> | string; input_schema: Record<string, unknown> | string;
+    output_schema: Record<string, unknown> | string; package_content: Record<string, unknown> | string;
+    capability_grants: CapabilityGrant[] | string; content_hash: string;
+  }>(
+    `select binding.id::text as binding_id, binding.public_id as binding_public_id,
+            binding.skill_id::text as skill_id, binding.skill_version_id::text as version_id,
+            binding.skill_public_id as public_id, binding.skill_slug as slug, binding.skill_name as name,
+            binding.skill_version as version, binding.executor_type, binding.executor_config,
+            binding.input_schema, binding.output_schema, binding.package_content,
+            binding.capability_grants, binding.content_hash
+     from agent_run_skill_bindings binding where binding.run_id = $1 order by binding.id`,
+    [runId],
+  );
+  return result.rows.map((binding) => ({
+    ...binding,
+    bindingId: binding.binding_id,
+    bindingPublicId: binding.binding_public_id,
+    requested_capabilities: [],
+    grants: jsonValue<CapabilityGrant[]>(binding.capability_grants),
+  }));
+}
+
+async function failClaimedAgentRun(input: {
+  queryable: Queryable;
+  runId: string;
+  workerId: string;
+  threadId: string;
+  runPublicId: string;
+  route: Awaited<ReturnType<typeof resolveProviderRoute>>;
+  routeUsage: { input_tokens: number; output_tokens: number };
+  routeStartedAt: number;
+  error: unknown;
+}) {
+  const providerError = describeOpenAIError(input.error);
+  const errorCode = providerError.code
+    ?? (input.error instanceof Error ? input.error.message.split(":", 1)[0] : "AGENT_RUN_FAILED");
+  const failed = await input.queryable.query<{ id: string }>(
+    `update agent_runs set status = 'failed', error_code = $3, error_message = $4,
+       steps_used = least(max_steps, greatest(steps_used, 1)), finished_at = now(),
+       lease_owner = null, lease_expires_at = null, heartbeat_at = null
+     where id = $1 and status = 'running' and lease_owner = $2 returning id::text as id`,
+    [input.runId, input.workerId, errorCode.slice(0, 160), providerError.message.slice(0, 1000)],
+  );
+  if (!failed.rows[0]) return false;
+  await input.queryable.query(
+    `update agent_steps set status = 'failed', error_code = $2, error_message = $3, finished_at = now()
+     where run_id = $1 and status = 'running'`,
+    [input.runId, errorCode.slice(0, 160), providerError.message.slice(0, 1000)],
+  );
+  if (input.route) {
+    await finishProviderRouteDecision({
+      queryable: input.queryable, decisionId: input.route.decisionId, usage: input.routeUsage,
+      latencyMs: performance.now() - input.routeStartedAt, errorCode,
+    });
+  }
+  await input.queryable.query(
+    `insert into agent_messages (public_id, thread_id, role, content, metadata)
+     values ($1, $2, 'assistant', $3, $4::jsonb)`,
+    [
+      createPublicId("agm"), input.threadId, `本轮执行未完成：${providerError.message}`,
+      JSON.stringify({ runPublicId: input.runPublicId, errorCode }),
+    ],
+  );
+  await input.queryable.query("update agent_threads set updated_at = now() where id = $1", [input.threadId]);
+  return true;
+}
+
+async function executeClaimedAgentRun(input: {
+  runId: string;
+  workerId: string;
+  decide: AgentDecisionProvider;
+}) {
+  const database = await getDatabase();
+  const claimed = await database.query<{ public_id: string; thread_id: string }>(
+    `select public_id, thread_id::text as thread_id from agent_runs
+     where id = $1 and status = 'running' and lease_owner = $2`,
+    [input.runId, input.workerId],
+  );
+  if (!claimed.rows[0]) throw new Error("AGENT_RUN_NOT_CLAIMED");
+  let route: Awaited<ReturnType<typeof resolveProviderRoute>> = null;
+  let routeUsage = { input_tokens: 0, output_tokens: 0 };
+  let routeStartedAt = performance.now();
+  try {
+    const runResult = await database.query<{
+      id: string; public_id: string; thread_id: string; workspace_id: string; objective: string;
+      max_steps: number; external_execution_allowed: boolean; user_public_id: string;
+      display_name: string; email: string; workspace_public_id: string; workspace_name: string;
+      role: Viewer["role"]; token_balance: string; user_id: string;
+    }>(
+      `select run.id::text as id, run.public_id, run.thread_id::text as thread_id,
+              run.workspace_id::text as workspace_id, run.objective, run.max_steps,
+              run.external_execution_allowed, actor.id::text as user_id, actor.public_id as user_public_id,
+              actor.display_name, actor.email, workspace.public_id as workspace_public_id,
+              workspace.name as workspace_name, member.role, workspace.token_balance::text as token_balance
+       from agent_runs run
+       join users actor on actor.id = run.initiated_by
+       join workspaces workspace on workspace.id = run.workspace_id
+       join workspace_members member on member.workspace_id = run.workspace_id and member.user_id = actor.id
+       where run.id = $1 and run.status = 'running' and run.lease_owner = $2`,
+      [input.runId, input.workerId],
+    );
+    const run = runResult.rows[0];
+    if (!run) throw new Error("AGENT_RUN_ACTOR_UNAVAILABLE");
+    const viewer: Viewer = {
+      userId: run.user_id, userPublicId: run.user_public_id, displayName: run.display_name,
+      email: run.email, workspaceId: run.workspace_id, workspacePublicId: run.workspace_public_id,
+      workspaceName: run.workspace_name, role: run.role, tokenBalance: Number(run.token_balance),
+    };
+    const [history, files, bindings] = await Promise.all([
+      database.query<{ role: "user" | "assistant" | "system" | "tool"; content: string }>(
+        "select role, content from agent_messages where thread_id = $1 order by created_at desc, id desc limit 40",
+        [run.thread_id],
+      ),
+      database.query<{ path: string; byte_size: number; version: number }>(
+        "select path, byte_size, version from agent_workspace_files where workspace_id = $1 order by path limit 200",
+        [viewer.workspaceId],
+      ),
+      loadAgentRunSkillBindings(database, run.id),
+    ]);
+    const messages: Array<{ role: "user" | "assistant" | "system"; content: string }> = history.rows.reverse().map((message) => ({
+      role: message.role === "tool" ? "system" : message.role,
+      content: message.role === "tool" ? `工具结果：${message.content}` : message.content,
+    }));
+    route = await database.transaction((transaction) => resolveProviderRoute({
+      queryable: transaction, workspaceId: viewer.workspaceId, runId: run.id,
+      taskId: null, stage: "reasoning", subjectKey: `${viewer.workspacePublicId}:${run.public_id}`,
+      runtimeKind: "agent",
+    }));
+    routeStartedAt = performance.now();
+    for (let sequence = 1; sequence <= run.max_steps; sequence += 1) {
+      const decisionInput = {
+        objective: run.objective, userPublicId: viewer.userPublicId, messages,
+        skills: bindings.map((binding) => ({
+          publicId: binding.public_id, slug: binding.slug, name: binding.name,
+          description: "受治理的工作区 Skill", version: binding.version, executorType: binding.executor_type,
+        })),
+        files: files.rows.map((file) => ({ path: file.path, byteSize: file.byte_size, version: file.version })),
+        externalExecutionAllowed: run.external_execution_allowed,
+      };
+      const decision = await withAgentRunLeaseHeartbeat({
+        queryable: database,
+        runId: run.id,
+        workerId: input.workerId,
+        execute: () => route
+          ? withProviderRoute(route.override, () => input.decide(decisionInput))
+          : input.decide(decisionInput),
+      });
       const currentUsage = tokenUsage(decision.usage);
       routeUsage = {
         input_tokens: routeUsage.input_tokens + currentUsage.input_tokens,
@@ -527,55 +809,65 @@ export async function sendAgentMessage(
         skillPublicId: decision.skillPublicId, responseId: decision.responseId ?? null,
         model: decision.model ?? null, promptVersion: decision.promptVersion ?? null,
       };
-      const decisionStep = await database.query<{ id: string }>(
+      await database.query(
         `insert into agent_steps (
            public_id, run_id, sequence, kind, status, decision_summary, input, output,
            request_hash, response_hash, finished_at
-         ) values ($1, $2, $3, 'decision', 'completed', $4, $5::jsonb, $6::jsonb, $7, $8, now())
-         returning id::text as id`,
+         ) values ($1, $2, $3, 'decision', 'completed', $4, $5::jsonb, $6::jsonb, $7, $8, now())`,
         [
-          createPublicId("ags"), seeded.runId, sequence * 2 - 1, decision.decisionSummary,
-          JSON.stringify({ objective: input.content, priorMessageCount: messages.length }),
-          JSON.stringify(decisionPayload), hashJson({ objective: input.content, priorMessageCount: messages.length }),
+          createPublicId("ags"), run.id, sequence * 2 - 1, decision.decisionSummary,
+          JSON.stringify({ objective: run.objective, priorMessageCount: messages.length }),
+          JSON.stringify(decisionPayload), hashJson({ objective: run.objective, priorMessageCount: messages.length }),
           hashJson(decisionPayload),
         ],
       );
       if (decision.action === "finish") {
         const content = decision.message.trim() || "任务已完成。";
-        const assistant = await database.query<{ public_id: string }>(
-          `insert into agent_messages (public_id, thread_id, role, content, metadata)
-           values ($1, $2, 'assistant', $3, $4::jsonb) returning public_id`,
-          [createPublicId("agm"), seeded.threadId, content, JSON.stringify({ runPublicId: seeded.runPublicId, model: decision.model ?? null })],
-        );
-        await database.query(
-          `update agent_runs set status = 'completed', steps_used = $2, finished_at = now() where id = $1`,
-          [seeded.runId, sequence],
-        );
-        await database.query("update agent_threads set updated_at = now() where id = $1", [seeded.threadId]);
-        if (seeded.route) {
-          await finishProviderRouteDecision({
-            queryable: database, decisionId: seeded.route.decisionId, usage: routeUsage,
-            latencyMs: performance.now() - routeStartedAt, qualityScore: 100,
-          });
-        }
-        return { runPublicId: seeded.runPublicId, messagePublicId: assistant.rows[0].public_id, status: "completed" as const };
+        return database.transaction(async (transaction) => {
+          const completed = await transaction.query<{ id: string }>(
+            `update agent_runs set status = 'completed', steps_used = $3, finished_at = now(),
+               lease_owner = null, lease_expires_at = null, heartbeat_at = null
+             where id = $1 and status = 'running' and lease_owner = $2 returning id::text as id`,
+            [run.id, input.workerId, sequence],
+          );
+          if (!completed.rows[0]) throw new Error("AGENT_RUN_LEASE_LOST");
+          if (route) {
+            await finishProviderRouteDecision({
+              queryable: transaction, decisionId: route.decisionId, usage: routeUsage,
+              latencyMs: performance.now() - routeStartedAt, qualityScore: 100,
+            });
+          }
+          const assistant = await transaction.query<{ public_id: string }>(
+            `insert into agent_messages (public_id, thread_id, role, content, metadata)
+             values ($1, $2, 'assistant', $3, $4::jsonb) returning public_id`,
+            [createPublicId("agm"), run.thread_id, content, JSON.stringify({ runPublicId: run.public_id, model: decision.model ?? null })],
+          );
+          await transaction.query("update agent_threads set updated_at = now() where id = $1", [run.thread_id]);
+          return { runPublicId: run.public_id, messagePublicId: assistant.rows[0].public_id, status: "completed" as const };
+        });
       }
       const toolStep = await database.query<{ id: string }>(
         `insert into agent_steps (
            public_id, run_id, sequence, kind, status, decision_summary, tool_name, input, request_hash
          ) values ($1, $2, $3, 'tool', 'running', $4, $5, $6::jsonb, $7) returning id::text as id`,
         [
-          createPublicId("ags"), seeded.runId, sequence * 2, decision.decisionSummary,
+          createPublicId("ags"), run.id, sequence * 2, decision.decisionSummary,
           decision.action, JSON.stringify(decisionPayload), hashJson(decisionPayload),
         ],
       );
       try {
-        const toolOutput = await executeAgentTool({
-          queryable: database, viewer, runId: seeded.runId, stepId: toolStep.rows[0].id,
-          decision, bindings: seeded.bindings, externalExecutionAllowed: input.externalExecutionAllowed,
+        const toolOutput = await withAgentRunLeaseHeartbeat({
+          queryable: database,
+          runId: run.id,
+          workerId: input.workerId,
+          execute: () => executeAgentTool({
+            queryable: database, viewer, runId: run.id, stepId: toolStep.rows[0].id,
+            decision, bindings, externalExecutionAllowed: run.external_execution_allowed,
+          }),
         });
         await database.query(
-          `update agent_steps set status = 'completed', output = $2::jsonb, response_hash = $3, finished_at = now() where id = $1`,
+          `update agent_steps set status = 'completed', output = $2::jsonb,
+             response_hash = $3, finished_at = now() where id = $1`,
           [toolStep.rows[0].id, JSON.stringify(toolOutput), hashJson(toolOutput)],
         );
         messages.push({ role: "assistant", content: `动作 ${decision.action}：${decision.message}` });
@@ -583,38 +875,58 @@ export async function sendAgentMessage(
       } catch (error) {
         const code = error instanceof SkillExecutionError ? error.code : error instanceof Error ? error.message : "AGENT_TOOL_FAILED";
         await database.query(
-          `update agent_steps set status = 'failed', error_code = $2, error_message = $3, finished_at = now() where id = $1`,
+          `update agent_steps set status = 'failed', error_code = $2,
+             error_message = $3, finished_at = now() where id = $1`,
           [toolStep.rows[0].id, code.slice(0, 160), (error instanceof Error ? error.message : "Agent tool failed").slice(0, 1000)],
         );
         messages.push({ role: "system", content: `工具 ${decision.action} 失败：${code}` });
       }
-      await database.query("update agent_runs set steps_used = $2 where id = $1", [seeded.runId, sequence]);
-      void decisionStep;
+      const advanced = await database.query<{ id: string }>(
+        `update agent_runs set steps_used = $3, heartbeat_at = now(),
+           lease_expires_at = now() + ($4::double precision * interval '1 millisecond')
+         where id = $1 and status = 'running' and lease_owner = $2 returning id::text as id`,
+        [run.id, input.workerId, sequence, AGENT_RUN_LEASE_MS],
+      );
+      if (!advanced.rows[0]) throw new Error("AGENT_RUN_LEASE_LOST");
     }
     throw new Error("AGENT_MAX_STEPS_EXCEEDED");
   } catch (error) {
-    const providerError = describeOpenAIError(error);
-    const errorCode = providerError.code ?? (error instanceof Error ? error.message.split(":", 1)[0] : "AGENT_RUN_FAILED");
-    await database.query(
-      `update agent_runs set status = 'failed', error_code = $2, error_message = $3,
-         steps_used = least(max_steps, greatest(steps_used, 1)), finished_at = now() where id = $1`,
-      [seeded.runId, errorCode.slice(0, 160), providerError.message.slice(0, 1000)],
-    );
-    await database.query(
-      `insert into agent_messages (public_id, thread_id, role, content, metadata)
-       values ($1, $2, 'assistant', $3, $4::jsonb)`,
-      [
-        createPublicId("agm"), seeded.threadId,
-        `本轮执行未完成：${providerError.message}`,
-        JSON.stringify({ runPublicId: seeded.runPublicId, errorCode }),
-      ],
-    );
-    if (seeded.route) {
-      await finishProviderRouteDecision({
-        queryable: database, decisionId: seeded.route.decisionId, usage: routeUsage,
-        latencyMs: performance.now() - routeStartedAt, errorCode,
-      });
-    }
-    throw error;
+    await database.transaction((transaction) => failClaimedAgentRun({
+      queryable: transaction, runId: input.runId, workerId: input.workerId,
+      threadId: claimed.rows[0].thread_id, runPublicId: claimed.rows[0].public_id,
+      route, routeUsage, routeStartedAt, error,
+    }));
+    return { runPublicId: claimed.rows[0].public_id, status: "failed" as const };
   }
+}
+
+export async function processAgentRunQueue(input: {
+  workerId: string;
+  maxRuns?: number;
+  decide?: AgentDecisionProvider;
+}) {
+  const database = await getDatabase();
+  const workerId = input.workerId.trim().slice(0, 160);
+  if (!workerId) throw new Error("AGENT_WORKER_ID_REQUIRED");
+  const maxRuns = Math.min(10, Math.max(1, input.maxRuns ?? 1));
+  let processed = 0;
+  while (processed < maxRuns) {
+    const claimed = await database.transaction((transaction) => claimAgentRun(transaction, workerId));
+    if (!claimed) break;
+    try {
+      await executeClaimedAgentRun({
+        runId: claimed.id,
+        workerId,
+        decide: input.decide ?? generateProviderUniversalAgentTurn,
+      });
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "agent_run_worker_error",
+        runPublicId: claimed.public_id,
+        message: error instanceof Error ? error.message : "unknown",
+      }));
+    }
+    processed += 1;
+  }
+  return processed;
 }

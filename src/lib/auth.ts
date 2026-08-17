@@ -75,9 +75,10 @@ export async function deleteCurrentSession() {
 
 export async function getViewer(): Promise<Viewer | null> {
   const supabase = await createSupabaseServerClient();
-  const { data, error } = await supabase.auth.getUser();
+  const { data, error } = await supabase.auth.getClaims();
+  const authUserId = data?.claims.sub;
 
-  if (error || !data.user) {
+  if (error || !authUserId) {
     return null;
   }
 
@@ -109,7 +110,7 @@ export async function getViewer(): Promise<Viewer | null> {
      where users.auth_user_id = $1
      order by workspace_members.created_at asc
      limit 1`,
-    [data.user.id],
+    [authUserId],
   );
   const row = result.rows[0];
 

@@ -1,6 +1,26 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
+const protectedRoutePrefixes = [
+  "/account",
+  "/agent",
+  "/context",
+  "/interview/experiments",
+  "/interview/projects",
+  "/newstudy",
+  "/panel",
+  "/platform",
+  "/skills",
+  "/studies",
+  "/study",
+] as const;
+
+function isProtectedRoute(pathname: string) {
+  return protectedRoutePrefixes.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
+}
+
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -25,10 +45,39 @@ export async function proxy(request: NextRequest) {
     },
   });
 
-  await supabase.auth.getUser();
+  const { data } = await supabase.auth.getClaims();
+
+  if (!data?.claims && isProtectedRoute(request.nextUrl.pathname)) {
+    const signInUrl = new URL("/auth/signin", request.url);
+    signInUrl.searchParams.set(
+      "callbackUrl",
+      `${request.nextUrl.pathname}${request.nextUrl.search}`,
+    );
+    const redirectResponse = NextResponse.redirect(signInUrl);
+
+    for (const cookie of response.cookies.getAll()) {
+      redirectResponse.cookies.set(cookie);
+    }
+
+    return redirectResponse;
+  }
+
   return response;
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)"],
+  matcher: [
+    "/account/:path*",
+    "/agent/:path*",
+    "/api/:path*",
+    "/context/:path*",
+    "/interview/:path*",
+    "/newstudy/:path*",
+    "/panel/:path*",
+    "/persona/:path*",
+    "/platform/:path*",
+    "/skills/:path*",
+    "/studies/:path*",
+    "/study/:path*",
+  ],
 };

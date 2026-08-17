@@ -39,18 +39,27 @@ Approved drafts pass through without another model call; rejected drafts receive
 Terra revision constrained to the existing evidence catalog. DeepSeek follow-up turns remain
 application-managed and are persisted and replayed from PostgreSQL.
 
-For production or long-running research, run the worker separately from the web process:
+For production, long-running research, or Universal Agent execution, run the worker separately
+from the web process:
 
 ```bash
 pnpm research:worker
 ```
 
-The web process also wakes one queued job after plan confirmation so local development remains single-command. The database queue is the source of truth, so a separate worker can resume queued or expired leased jobs after a process restart.
+The web process also wakes one research job after plan confirmation so that flow remains
+single-command in local development. Universal Agent requests only enqueue work and require
+`pnpm research:worker` to execute it. The database queue is the source of truth; Agent runs
+use idempotency keys, one active run per thread, and renewable worker leases.
 
 Production code Skills require the included Runner to be deployed as a separate service. Add
 its HTTPS origin to `SKILL_EXECUTOR_ALLOWED_ORIGINS`; the Next.js process only validates and
 dispatches the version-locked package, limits, grants, and input, and never evaluates uploaded
 code itself.
+
+Sandbox Skills currently run with `networkAccess: false`. A network grant with scoped origins
+is rejected before dispatch because a shared Docker/Podman network cannot enforce per-origin
+egress for untrusted code. Do not enable networked Sandbox execution until the Runner is placed
+behind an operator-controlled egress proxy or equivalent hard network policy.
 
 ## Sandbox Runner
 

@@ -21,9 +21,10 @@ workspace and executed in a new Docker or rootless Podman container.
 - `--network none` by default;
 - no application environment variables, tokens or database credentials enter the container.
 
-Network-enabled Skills are rejected unless `SANDBOX_RUNNER_EGRESS_NETWORK` names an
-operator-controlled container network. That network must enforce outbound policy outside
-this service. Do not point it at a general application or database network.
+The application currently rejects every network-enabled Sandbox Skill before dispatch because
+this Runner cannot enforce a Skill's per-origin grant by itself. `SANDBOX_RUNNER_EGRESS_NETWORK`
+is reserved for a future operator-controlled network whose proxy or firewall enforces those
+destinations outside this service. Do not point it at a general application or database network.
 
 ## Local run
 

@@ -3,8 +3,6 @@ import { getViewer } from "@/lib/auth";
 import { isSameOriginRequest } from "@/lib/request-security";
 import { sendAgentMessage, sendAgentMessageInputSchema } from "@/lib/universal-agent";
 
-export const maxDuration = 180;
-
 export async function POST(request: Request, context: { params: Promise<{ publicId: string }> }) {
   if (!isSameOriginRequest(request)) return NextResponse.json({ error: "请求来源无效" }, { status: 403 });
   const viewer = await getViewer();
@@ -16,10 +14,13 @@ export async function POST(request: Request, context: { params: Promise<{ public
     const result = await sendAgentMessage(viewer, publicId, parsed.data);
     if (result === "forbidden") return NextResponse.json({ error: "当前角色无权运行 Agent" }, { status: 403 });
     if (result === "not_found") return NextResponse.json({ error: "Agent 会话不存在" }, { status: 404 });
-    return NextResponse.json(result);
+    if ("error" in result && result.error === "busy") {
+      return NextResponse.json({ ...result, message: "当前会话已有任务排队或运行中" }, { status: 409 });
+    }
+    return NextResponse.json(result, { status: 202 });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Agent 执行失败";
-    const status = /API_KEY_MISSING|PROVIDER_ROUTING_NO_ELIGIBLE_ROUTE/.test(message) ? 503 : 502;
+    const message = error instanceof Error ? error.message : "Agent 入队失败";
+    const status = /agent_runs_one_active_thread_idx/.test(message) ? 409 : 500;
     return NextResponse.json({ error: message.slice(0, 800) }, { status });
   }
 }

@@ -225,8 +225,9 @@ export default async ({ left, right }) => {
           maxMemoryMb: 64, networkAccess: true,
         },
         inputSchema: { type: "object" }, outputSchema: { type: "object" }, arguments: {},
+        policy: { allowedSandboxNetworkOrigins: [new URL(executeUrl).origin] },
       }),
-      (error: unknown) => error instanceof SkillExecutionError && error.code === "SANDBOX_NETWORK_DISABLED",
+      (error: unknown) => error instanceof SkillExecutionError && error.code === "SANDBOX_NETWORK_SCOPE_UNENFORCEABLE",
     );
 
     const busyExecution = post(executeUrl, request({
@@ -246,9 +247,9 @@ export default async ({ left, right }) => {
     const metrics = await metricsResponse.text();
     assert.equal(metricsResponse.status, 200);
     assert.match(metricsResponse.headers.get("content-type") ?? "", /^text\/plain/);
-    assert.match(metrics, /atypica_sandbox_runner_executions_accepted_total 7/);
+    assert.match(metrics, /atypica_sandbox_runner_executions_accepted_total 6/);
     assert.match(metrics, /atypica_sandbox_runner_executions_completed_total 3/);
-    assert.match(metrics, /atypica_sandbox_runner_executions_failed_total 4/);
+    assert.match(metrics, /atypica_sandbox_runner_executions_failed_total 3/);
     assert.match(metrics, /code="SANDBOX_TIMEOUT"/);
     assert.match(metrics, /reason="busy"/);
     assert.equal(metrics.includes(authToken), false);
@@ -278,6 +279,7 @@ export default async ({ left, right }) => {
       javascriptAndPython: true,
       nonRootReadOnly: true,
       defaultNetworkDenied: true,
+      scopedNetworkRejectedBeforeDispatch: true,
       authentication: true,
       pathTraversalRejected: true,
       timeoutEnforced: true,

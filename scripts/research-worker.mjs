@@ -15,26 +15,30 @@ async function loadInterviews() {
   return import("../src/lib/interviews.ts");
 }
 
-async function poll() {
-  const [{ processStudyJobQueue }, { processInterviewJobQueue }] = await Promise.all([
-    loadHarness(),
-    loadInterviews(),
-  ]);
-  const maxJobs = once ? 1 : 5;
-  const [studies, interviews] = await Promise.all([
-    processStudyJobQueue({ workerId: `${workerId}:study`, maxJobs }),
-    processInterviewJobQueue({ workerId: `${workerId}:interview`, maxJobs }),
-  ]);
-  return studies + interviews;
+async function loadAgent() {
+  return import("../src/lib/universal-agent.ts");
 }
 
-do {
-  const processed = await poll();
-  if (once) break;
-  if (processed === 0) {
-    await new Promise((resolve) => setTimeout(resolve, pollInterval));
-  }
-} while (true);
+async function runQueue(processQueue) {
+  do {
+    const processed = await processQueue();
+    if (once) return;
+    if (processed === 0) await new Promise((resolve) => setTimeout(resolve, pollInterval));
+  } while (true);
+}
+
+const [{ processStudyJobQueue }, { processInterviewJobQueue }, { processAgentRunQueue }] = await Promise.all([
+  loadHarness(),
+  loadInterviews(),
+  loadAgent(),
+]);
+const maxJobs = once ? 1 : 5;
+
+await Promise.all([
+  runQueue(() => processStudyJobQueue({ workerId: `${workerId}:study`, maxJobs })),
+  runQueue(() => processInterviewJobQueue({ workerId: `${workerId}:interview`, maxJobs })),
+  runQueue(() => processAgentRunQueue({ workerId: `${workerId}:agent`, maxRuns: maxJobs })),
+]);
 
 if (once) {
   const { closeDatabase } = await import("../src/lib/db.ts");

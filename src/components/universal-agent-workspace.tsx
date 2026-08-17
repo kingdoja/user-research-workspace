@@ -19,13 +19,14 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type FormEvent, useState, useTransition } from "react";
+import { type FormEvent, useEffect, useState, useTransition } from "react";
 import type { UniversalAgentWorkspace as AgentWorkspaceData } from "@/lib/universal-agent";
 
 type RightTab = "skills" | "files" | "runs";
 type FilePreview = { path: string; content: string; version: number; byteSize: number; checksum: string } | null;
 
 function runStatusLabel(status: AgentWorkspaceData["recentRuns"][number]["status"] | null) {
+  if (status === "queued") return "排队中";
   if (status === "running") return "运行中";
   if (status === "completed") return "完成";
   if (status === "failed") return "失败";
@@ -51,6 +52,14 @@ export function UniversalAgentWorkspace({
   const [filePreview, setFilePreview] = useState<FilePreview>(null);
   const [fileLoading, setFileLoading] = useState<string | null>(null);
   const selectedThread = initialWorkspace.threads.find((thread) => thread.publicId === initialWorkspace.selectedThreadPublicId) ?? null;
+  const threadBusy = selectedThread?.lastRunStatus === "queued" || selectedThread?.lastRunStatus === "running";
+
+  useEffect(() => {
+    const hasActiveRun = initialWorkspace.recentRuns.some((run) => run.status === "queued" || run.status === "running");
+    if (!hasActiveRun) return;
+    const timer = window.setInterval(() => router.refresh(), 2_500);
+    return () => window.clearInterval(timer);
+  }, [initialWorkspace.recentRuns, router]);
 
   async function createThread(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -85,17 +94,18 @@ export function UniversalAgentWorkspace({
           content: String(data.get("message")),
           skillPublicIds: selectedSkills,
           externalExecutionAllowed: externalAllowed,
+          requestId: crypto.randomUUID(),
         }),
       });
-      const body = await response.json().catch(() => ({})) as { error?: string };
+      const body = await response.json().catch(() => ({})) as { error?: string; message?: string; runPublicId?: string };
       if (!response.ok) {
-        setNotice({ kind: "error", text: body.error ?? "Agent 执行失败" });
+        setNotice({ kind: "error", text: body.message ?? body.error ?? "Agent 执行失败" });
         startTransition(() => router.refresh());
         return;
       }
       form.reset();
       setExternalAllowed(false);
-      setNotice({ kind: "success", text: "本轮已完成并写入审计记录" });
+      setNotice({ kind: "success", text: "任务已入队，页面会自动更新运行状态" });
       startTransition(() => router.refresh());
     } catch {
       setNotice({ kind: "error", text: "Agent 请求中断，请在 Runs 中核对状态后再试" });
@@ -171,14 +181,14 @@ export function UniversalAgentWorkspace({
           )}
         </div>
         <form className="agent-composer" onSubmit={sendMessage}>
-          <textarea name="message" required minLength={1} maxLength={12000} disabled={!selectedThread || !canRun || pending || sending} placeholder="交给 Universal Agent…" />
+          <textarea name="message" required minLength={1} maxLength={12000} disabled={!selectedThread || !canRun || pending || sending || threadBusy} placeholder="交给 Universal Agent…" />
           <div>
             <label className={externalAllowed ? "agent-execution-toggle active" : "agent-execution-toggle"}>
-              <input type="checkbox" checked={externalAllowed} onChange={(event) => setExternalAllowed(event.target.checked)} disabled={!canRun || pending || sending} />
+              <input type="checkbox" checked={externalAllowed} onChange={(event) => setExternalAllowed(event.target.checked)} disabled={!canRun || pending || sending || threadBusy} />
               <ShieldCheck size={14} />允许本轮执行已选 Skill
             </label>
-            <button className="button button-green" type="submit" disabled={!selectedThread || !canRun || pending || sending || !initialWorkspace.provider.configured}>
-              {sending ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{sending ? "执行中" : "运行"}
+            <button className="button button-green" type="submit" disabled={!selectedThread || !canRun || pending || sending || threadBusy || !initialWorkspace.provider.configured}>
+              {sending || threadBusy ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{sending ? "提交中" : threadBusy ? "运行中" : "运行"}
             </button>
           </div>
         </form>
@@ -199,7 +209,13 @@ export function UniversalAgentWorkspace({
               <div><strong>{skill.name}</strong><small>{skill.slug}@{skill.version} · {skill.executorType}</small></div>
             </label>
           )) : null}
-          {rightTab === "skills" && !initialWorkspace.skills.length ? <div className="agent-resource-empty"><Code2 size={21} /><span>没有已启用的工作区 Skill</span></div> : null}
+          {rightTab === "skills" && !initialWorkspace.skills.length ? (
+            <div className="agent-resource-empty">
+              <Code2 size={21} />
+              <span>当前工作区还没有可用 Skill，请先导入、启用并完成权限授权。</span>
+              <Link className="agent-resource-empty-action" href="/skills">去配置 Skills<ChevronRight size={14} /></Link>
+            </div>
+          ) : null}
           {rightTab === "files" ? initialWorkspace.files.map((file) => (
             <button className="agent-file-row" type="button" key={file.publicId} onClick={() => openFile(file.publicId)}>
               <span>{file.path.includes("/") ? <FolderOpen size={15} /> : <File size={15} />}</span>

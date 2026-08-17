@@ -15,6 +15,7 @@ import {
   createAgentThread,
   getAgentWorkspaceFile,
   listUniversalAgentWorkspace,
+  processAgentRunQueue,
   sendAgentMessage,
 } from "../src/lib/universal-agent";
 
@@ -27,7 +28,7 @@ if (!["localhost", "127.0.0.1"].includes(databaseUrl.hostname)) {
 }
 
 const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
-const authUserIds = [randomUUID(), randomUUID()];
+const authUserIds = [randomUUID(), randomUUID(), randomUUID()];
 const workspaceIds: string[] = [];
 
 async function main() {
@@ -81,7 +82,19 @@ async function main() {
         workspaceName: actor.rows[0].workspace_name, role: "owner" as const, tokenBalance: 0,
       });
     }
-    const [viewer, outsider] = viewers;
+    const [viewer, outsider, collaboratorPersonal] = viewers;
+    await database.query(
+      `insert into workspace_members (workspace_id, user_id, role)
+       values ($1, $2, 'member')`,
+      [viewer.workspaceId, collaboratorPersonal.userId],
+    );
+    const collaborator = {
+      ...collaboratorPersonal,
+      workspaceId: viewer.workspaceId,
+      workspacePublicId: viewer.workspacePublicId,
+      workspaceName: viewer.workspaceName,
+      role: "member" as const,
+    };
     const imported = await importWorkspaceSkillPackage(viewer, {
       format: "atypica.skill/v2",
       manifest: {
@@ -142,12 +155,40 @@ async function main() {
     assert.equal(typeof thread, "object");
     if (typeof thread !== "object") throw new Error(`Thread failed: ${thread}`);
     let decision = 0;
+    const requestId = `smoke:${suffix}:delivery`;
     const result = await sendAgentMessage(viewer, thread.publicId, {
       content: "Run the governed transformer and save the result.",
       skillPublicIds: [imported.publicId],
       externalExecutionAllowed: true,
+      requestId,
     }, {
       maxSteps: 4,
+    });
+    assert.equal(typeof result, "object");
+    if (typeof result !== "object" || "error" in result) throw new Error(`Agent enqueue failed: ${JSON.stringify(result)}`);
+    assert.equal(result.status, "queued");
+    assert.equal(result.reused, false);
+    const replay = await sendAgentMessage(viewer, thread.publicId, {
+      content: "Run the governed transformer and save the result.",
+      skillPublicIds: [imported.publicId],
+      externalExecutionAllowed: true,
+      requestId,
+    }, { maxSteps: 4 });
+    assert.equal(typeof replay, "object");
+    if (typeof replay !== "object" || "error" in replay) throw new Error(`Agent replay failed: ${JSON.stringify(replay)}`);
+    assert.equal(replay.runPublicId, result.runPublicId);
+    assert.equal(replay.reused, true);
+    const busy = await sendAgentMessage(viewer, thread.publicId, {
+      content: "This second run must not overlap the first one.",
+      skillPublicIds: [],
+      externalExecutionAllowed: false,
+      requestId: `smoke:${suffix}:busy`,
+    });
+    assert.equal(typeof busy, "object");
+    assert.equal(typeof busy === "object" && "error" in busy ? busy.error : null, "busy");
+    const processed = await processAgentRunQueue({
+      workerId: `universal-agent-smoke:${suffix}`,
+      maxRuns: 1,
       decide: async () => {
         decision += 1;
         if (decision === 1) return {
@@ -170,9 +211,7 @@ async function main() {
         };
       },
     });
-    assert.equal(typeof result, "object");
-    if (typeof result !== "object") throw new Error(`Agent run failed: ${result}`);
-    assert.equal(result.status, "completed");
+    assert.equal(processed, 1);
     assert.equal(requests.length, 1);
     const workspace = await listUniversalAgentWorkspace(viewer, thread.publicId);
     assert.equal(workspace.messages.at(-1)?.role, "assistant");
@@ -183,6 +222,45 @@ async function main() {
     assert.equal(typeof file, "object");
     assert.equal(await getAgentWorkspaceFile(outsider, workspace.files[0].publicId), "not_found");
     assert.equal((await listUniversalAgentWorkspace(outsider)).threads.length, 0);
+    await database.query("update skill_manifests set visibility = 'private' where public_id = $1", [imported.publicId]);
+    const collaboratorWorkspace = await listUniversalAgentWorkspace(collaborator);
+    assert.equal(collaboratorWorkspace.skills.some((skill) => skill.publicId === imported.publicId), false);
+    const collaboratorThread = await createAgentThread(collaborator, { title: "Private Skill isolation" });
+    assert.equal(typeof collaboratorThread, "object");
+    if (typeof collaboratorThread !== "object") throw new Error(`Collaborator thread failed: ${collaboratorThread}`);
+    await assert.rejects(
+      sendAgentMessage(collaborator, collaboratorThread.publicId, {
+        content: "Attempt to bind another member's private Skill.",
+        skillPublicIds: [imported.publicId],
+        externalExecutionAllowed: true,
+        requestId: `smoke:${suffix}:private`,
+      }),
+      /AGENT_SKILL_NOT_AVAILABLE/,
+    );
+    const abandoned = await sendAgentMessage(collaborator, collaboratorThread.publicId, {
+      content: "Fail cleanly if the initiating member leaves before the worker starts.",
+      skillPublicIds: [],
+      externalExecutionAllowed: false,
+      requestId: `smoke:${suffix}:abandoned`,
+    });
+    assert.equal(typeof abandoned, "object");
+    if (typeof abandoned !== "object" || "error" in abandoned) throw new Error(`Abandoned run enqueue failed: ${JSON.stringify(abandoned)}`);
+    await database.query(
+      "delete from workspace_members where workspace_id = $1 and user_id = $2",
+      [viewer.workspaceId, collaborator.userId],
+    );
+    assert.equal(await processAgentRunQueue({
+      workerId: `universal-agent-smoke:${suffix}:recovery`,
+      maxRuns: 1,
+      decide: async () => {
+        throw new Error("Decision provider must not run for a removed member");
+      },
+    }), 1);
+    const abandonedAudit = await database.query<{ status: string; error_code: string }>(
+      "select status, error_code from agent_runs where public_id = $1",
+      [abandoned.runPublicId],
+    );
+    assert.deepEqual(abandonedAudit.rows[0], { status: "failed", error_code: "AGENT_RUN_ACTOR_UNAVAILABLE" });
     const audit = await database.query<{
       sandbox_status: string; route_status: string; agent_run_id: string; binding_id: string;
     }>(
@@ -204,7 +282,8 @@ async function main() {
     console.log(JSON.stringify({
       sandboxPackageV2: true, explicitCodeGrant: true, exactSkillBinding: true,
       sandboxRunnerProtocol: "atypica.sandbox/v1", persistentWorkspace: workspace.files[0].path,
-      providerRoutingLedger: true, crossWorkspaceIsolation: true,
+      providerRoutingLedger: true, crossWorkspaceIsolation: true, privateSkillIsolation: true,
+      idempotentQueue: true, oneActiveRunPerThread: true, claimedSetupFailureRecovered: true,
     }, null, 2));
   } finally {
     for (const workspaceId of workspaceIds) await database.query("delete from workspaces where id = $1", [workspaceId]);

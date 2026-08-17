@@ -280,6 +280,14 @@ function executionPolicy(config: SkillExecutorConfig, grants: CapabilityGrant[])
   const networkGrant = grants.find((grant) => grant.capability === "network");
   if (!networkGrant) return {};
   const scopedOrigins = networkGrant.scope.origins;
+  if (config.kind === "sandbox") {
+    return {
+      allowedSandboxNetworkOrigins: Array.isArray(scopedOrigins)
+        && scopedOrigins.every((origin) => typeof origin === "string")
+        ? scopedOrigins.map((origin) => new URL(origin).origin)
+        : [],
+    };
+  }
   if (Array.isArray(scopedOrigins) && scopedOrigins.every((origin) => typeof origin === "string")) {
     return { allowedNetworkOrigins: scopedOrigins.map((origin) => new URL(origin).origin) };
   }

@@ -57,6 +57,7 @@ export type SkillExecutorConfig = z.infer<typeof skillExecutorConfigSchema>;
 export type ExecutorCapability = "network" | "provider_invoke" | "code_execute";
 export type SkillExecutionPolicy = {
   allowedNetworkOrigins?: string[];
+  allowedSandboxNetworkOrigins?: string[];
 };
 
 export class SkillExecutionError extends Error {
@@ -208,6 +209,18 @@ async function executeSandbox(
   signal: AbortSignal,
   policy?: SkillExecutionPolicy,
 ) {
+  if (config.networkAccess) {
+    if (!policy?.allowedSandboxNetworkOrigins?.length) {
+      throw new SkillExecutionError(
+        "SKILL_EXECUTOR_NETWORK_SCOPE_DENIED",
+        "Sandbox 网络执行未获得明确的 origin 授权",
+      );
+    }
+    throw new SkillExecutionError(
+      "SANDBOX_NETWORK_SCOPE_UNENFORCEABLE",
+      "当前 Sandbox Runner 无法对不受信任代码强制执行逐 origin 出站策略",
+    );
+  }
   const endpoint = assertAllowedEndpoint(config.endpoint, policy);
   const headers = resolveHeaders(config.headersFromEnv);
   headers.set("content-type", "application/json");

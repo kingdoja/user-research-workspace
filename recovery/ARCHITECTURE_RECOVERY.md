@@ -438,11 +438,12 @@ Runtime 默认值：每 run 2 个并发 task、每 workspace 2 个活跃研究 r
 
 - 新增 `/agent` Universal Agent 工作台和 `agent_threads`、`agent_messages`、`agent_runs`、`agent_steps`、`agent_workspace_files`、`agent_run_skill_bindings`、`sandbox_executions` 持久化契约；workspace 文件跨会话保留，`skills/` 路径保持只读。
 - 每个 Run 锁定精确 Skill version、executor config、输入输出 schema 和 capability grants；每轮执行外部或代码 Skill 都要求用户显式确认。结构化动作仅允许 `list_files`、`read_file`、`write_file`、`execute_skill` 和 `finish`，每一步均保存 request/response hash 与审计状态。
-- `atypica.skill/v2` 支持 JavaScript/Python 源文件并强制配置 `sandbox` executor；代码执行必须有不可变 `code_execute` grant。Web 进程只向 allowlist endpoint 发送 `atypica.sandbox/v1` 请求，Runner 负责真正的隔离、超时、内存、输出大小和网络权限限制。
+- `atypica.skill/v2` 支持 JavaScript/Python 源文件并强制配置 `sandbox` executor；代码执行必须有不可变 `code_execute` grant。Web 进程只向 allowlist endpoint 发送 `atypica.sandbox/v1` 请求，Runner 负责真正的隔离、超时、内存和输出大小限制；逐 origin 出站尚无硬隔离实现，因此联网 Sandbox 在调度前显式拒绝。
 - Universal Agent reasoning 复用既有 Provider routing control plane，按 `reasoning` stage 记录版本绑定和实际决策；跨 workspace 的 Thread、Skill、文件和 Sandbox 执行均通过服务端成员校验隔离。
 - 隔离迁移链 `universal-agent` smoke 已验证：Sandbox v2、显式代码授权、精确版本锁定、持久化 deliverable、Provider routing ledger、跨 workspace 隔离和不可变绑定；`platform-control`、`skill-executor`、`skill-package-governance` 回归继续通过。
 - Browser 实测 `/agent` 桌面 1280×720 和移动 390×844：页面身份、会话加载、Skills/Files/Runs Tab 切换、无横向溢出、无框架错误覆盖层、console error/warn 均通过；一次性 QA 账号与 workspace 已删除。
 - 生产部署仍需配置 `SKILL_EXECUTOR_ALLOWED_ORIGINS` 指向独立 HTTPS Runner；本仓库现已包含可部署的 `atypica.sandbox/v1` Runner，但必须把它部署到专用 worker，而不是与 Next.js 共进程。
+- Agent 消息 API 只写入 durable queue 并返回 `202`；`research:worker` 负责带心跳租约的长任务执行。同一 Thread 由数据库唯一约束限制为一个 `queued/running` Run，请求幂等键用于安全重试，过期租约只收敛为失败而不自动重放未知外部副作用。
 - 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated universal-agent`，仅允许 localhost / `127.0.0.1` 数据库。
 
 ## 2026-08-17 独立 Sandbox Runner 实现记录

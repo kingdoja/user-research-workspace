@@ -1,0 +1,25 @@
+.shell {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  background: #151617;
+}
+
+.spinner {
+  width: 30px;
+  height: 30px;
+  color: #65ff45;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 1.4s;
+  }
+}
