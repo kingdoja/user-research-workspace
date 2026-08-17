@@ -15,6 +15,15 @@ const executorLimitsSchema = z.object({
   headersFromEnv: headerEnvSchema,
 });
 
+const sandboxFilePathSchema = z.string().trim().min(1).max(180)
+  .regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/);
+const sandboxFilesSchema = z.record(sandboxFilePathSchema, z.string().max(120_000))
+  .refine((files) => Object.keys(files).length >= 1 && Object.keys(files).length <= 32, "Sandbox source files must contain 1-32 files")
+  .refine(
+    (files) => Object.values(files).reduce((total, content) => total + Buffer.byteLength(content, "utf8"), 0) <= 256_000,
+    "Sandbox source files exceed 256 KB",
+  );
+
 export const skillExecutorConfigSchema = z.discriminatedUnion("kind", [
   executorLimitsSchema.extend({
     kind: z.literal("declarative_http"),
@@ -26,10 +35,22 @@ export const skillExecutorConfigSchema = z.discriminatedUnion("kind", [
     endpoint: z.string().url().max(2_000),
     toolName: z.string().trim().min(1).max(160),
   }),
+  executorLimitsSchema.extend({
+    kind: z.literal("sandbox"),
+    endpoint: z.string().url().max(2_000),
+    language: z.enum(["javascript", "python"]),
+    entrypoint: sandboxFilePathSchema,
+    files: sandboxFilesSchema,
+    maxMemoryMb: z.number().int().min(32).max(512).default(128),
+    networkAccess: z.boolean().default(false),
+  }).refine((config) => Object.hasOwn(config.files, config.entrypoint), {
+    message: "Sandbox entrypoint must exist in source files",
+    path: ["entrypoint"],
+  }),
 ]);
 
 export type SkillExecutorConfig = z.infer<typeof skillExecutorConfigSchema>;
-export type ExecutorCapability = "network" | "provider_invoke";
+export type ExecutorCapability = "network" | "provider_invoke" | "code_execute";
 export type SkillExecutionPolicy = {
   allowedNetworkOrigins?: string[];
 };
@@ -49,7 +70,9 @@ export function hashJson(value: unknown) {
 }
 
 export function requiredExecutorCapabilities(config: SkillExecutorConfig): ExecutorCapability[] {
-  return config.kind === "mcp" ? ["network", "provider_invoke"] : ["network"];
+  if (config.kind === "mcp") return ["network", "provider_invoke"];
+  if (config.kind === "sandbox") return config.networkAccess ? ["code_execute", "network"] : ["code_execute"];
+  return ["network"];
 }
 
 function allowedOrigins() {
@@ -175,6 +198,53 @@ async function executeDeclarativeHttp(
   return asJsonContainer(await readJsonResponse(response, config.maxResponseBytes));
 }
 
+async function executeSandbox(
+  config: Extract<SkillExecutorConfig, { kind: "sandbox" }>,
+  input: Record<string, unknown>,
+  signal: AbortSignal,
+  policy?: SkillExecutionPolicy,
+) {
+  const endpoint = assertAllowedEndpoint(config.endpoint, policy);
+  const headers = resolveHeaders(config.headersFromEnv);
+  headers.set("content-type", "application/json");
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      protocol: "atypica.sandbox/v1",
+      runtime: { language: config.language, entrypoint: config.entrypoint },
+      files: config.files,
+      input,
+      limits: {
+        timeoutMs: config.timeoutMs,
+        maxMemoryMb: config.maxMemoryMb,
+        maxOutputBytes: config.maxResponseBytes,
+        networkAccess: config.networkAccess,
+      },
+    }),
+    redirect: "error",
+    credentials: "omit",
+    signal,
+  });
+  if (!response.ok) {
+    throw new SkillExecutionError("SANDBOX_RUNNER_HTTP_ERROR", `Sandbox runner returned HTTP ${response.status}`);
+  }
+  const payload = await readJsonResponse(response, config.maxResponseBytes);
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new SkillExecutionError("SANDBOX_RUNNER_INVALID_RESPONSE", "Sandbox runner response must be an object");
+  }
+  const result = payload as Record<string, unknown>;
+  if (result.protocol !== "atypica.sandbox/v1") {
+    throw new SkillExecutionError("SANDBOX_RUNNER_PROTOCOL_MISMATCH", "Sandbox runner protocol mismatch");
+  }
+  if (result.status !== "completed") {
+    const errorCode = typeof result.errorCode === "string" ? result.errorCode : "SANDBOX_EXECUTION_FAILED";
+    const message = typeof result.errorMessage === "string" ? result.errorMessage.slice(0, 800) : "Sandbox execution failed";
+    throw new SkillExecutionError(errorCode, message);
+  }
+  return asJsonContainer(result.output ?? {});
+}
+
 async function executeMcp(
   config: Extract<SkillExecutorConfig, { kind: "mcp" }>,
   input: Record<string, unknown>,
@@ -239,7 +309,9 @@ export async function executeConfiguredSkill(input: {
   try {
     output = input.config.kind === "mcp"
       ? await executeMcp(input.config, input.arguments, signal, input.policy)
-      : await executeDeclarativeHttp(input.config, input.arguments, signal, input.policy);
+      : input.config.kind === "sandbox"
+        ? await executeSandbox(input.config, input.arguments, signal, input.policy)
+        : await executeDeclarativeHttp(input.config, input.arguments, signal, input.policy);
   } catch (error) {
     if (signal.aborted && !(error instanceof SkillExecutionError)) {
       throw new SkillExecutionError("SKILL_EXECUTOR_TIMEOUT", "Skill Executor 超时或被取消");
@@ -252,7 +324,7 @@ export async function executeConfiguredSkill(input: {
 
 export async function probeConfiguredSkill(config: SkillExecutorConfig, policy?: SkillExecutionPolicy) {
   const startedAt = performance.now();
-  if (config.kind === "declarative_http") {
+  if (config.kind === "declarative_http" || config.kind === "sandbox") {
     const endpoint = assertAllowedEndpoint(config.endpoint, policy);
     const headers = resolveHeaders(config.headersFromEnv);
     const signal = AbortSignal.timeout(config.timeoutMs);
@@ -267,7 +339,10 @@ export async function probeConfiguredSkill(config: SkillExecutorConfig, policy?:
     if (!response.ok && response.status !== 405) {
       throw new SkillExecutionError("SKILL_HEALTH_HTTP_ERROR", `Executor health probe returned HTTP ${response.status}`);
     }
-    return { latencyMs: Math.round(performance.now() - startedAt), detail: `HTTP ${response.status}` };
+    return {
+      latencyMs: Math.round(performance.now() - startedAt),
+      detail: config.kind === "sandbox" ? `Sandbox runner HTTP ${response.status}` : `HTTP ${response.status}`,
+    };
   }
 
   const endpoint = assertAllowedEndpoint(config.endpoint, policy);

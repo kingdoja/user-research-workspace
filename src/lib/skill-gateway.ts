@@ -13,7 +13,7 @@ import {
   type SkillExecutionPolicy,
 } from "@/lib/skill-executor";
 
-const skillCapabilityValues = ["network", "context_read", "files_read", "provider_invoke"] as const;
+const skillCapabilityValues = ["network", "context_read", "files_read", "files_write", "provider_invoke", "code_execute"] as const;
 export type SkillCapability = typeof skillCapabilityValues[number];
 export type SkillLifecycle = "draft" | "submitted" | "active" | "revoked" | "archived";
 export type CapabilityGrant = { capability: SkillCapability; scope: Record<string, unknown> };
@@ -39,9 +39,9 @@ export type SkillSummary = {
   status: SkillLifecycle;
   executable: boolean;
   enabled: boolean;
-  executorType: "builtin" | "unconfigured" | "declarative_http" | "mcp";
+  executorType: "builtin" | "unconfigured" | "declarative_http" | "mcp" | "sandbox";
   contentHash: string | null;
-  packageFormat?: "inline" | "atypica.skill/v1";
+  packageFormat?: "inline" | "atypica.skill/v1" | "atypica.skill/v2";
   requestedCapabilities?: SkillCapability[];
   grantedCapabilities?: SkillCapability[];
   capabilityState?: "not_required" | "pending" | "granted";
@@ -54,7 +54,7 @@ export type RunSkillBinding = {
   publicId: string;
   slug: string;
   version: number;
-  executorType: "builtin" | "declarative_http" | "mcp";
+  executorType: "builtin" | "declarative_http" | "mcp" | "sandbox";
   enabledAtLock: boolean;
   contentHash: string;
   capabilityGrants: CapabilityGrant[];
@@ -92,9 +92,7 @@ export const skillVersionInputSchema = z.object({
   executor: optionalExecutorSchema,
 });
 
-export const skillPackageInputSchema = z.object({
-  format: z.literal("atypica.skill/v1"),
-  manifest: z.object({
+const skillPackageManifestSchema = z.object({
     slug: z.string().trim().min(2).max(80).regex(/^[a-z][a-z0-9-]*$/),
     name: z.string().trim().min(2).max(120),
     description: z.string().trim().max(1000).default(""),
@@ -105,12 +103,35 @@ export const skillPackageInputSchema = z.object({
     outputSchema: z.record(z.string(), z.unknown()).default({}),
     executor: optionalExecutorSchema,
     changeNote: z.string().trim().max(500).default("Imported .skill package"),
-  }).strict(),
+  }).strict();
+
+const skillMarkdownSchema = z.string().min(1).max(120_000)
+  .refine((value) => !value.includes("\0"), "SKILL.md 不能包含空字节")
+  .refine((value) => /^#\s+\S/m.test(value), "SKILL.md 必须包含一级标题");
+
+const skillPackageV1Schema = z.object({
+  format: z.literal("atypica.skill/v1"),
+  manifest: skillPackageManifestSchema,
+  skillMarkdown: skillMarkdownSchema,
+  signature: packageSignatureSchema.optional(),
+}).strict().refine((value) => value.manifest.executor?.kind !== "sandbox", {
+  message: "代码 Skill 必须使用 atypica.skill/v2",
+  path: ["manifest", "executor"],
+});
+
+const skillPackageV2Schema = z.object({
+  format: z.literal("atypica.skill/v2"),
+  manifest: skillPackageManifestSchema,
   skillMarkdown: z.string().min(1).max(120_000)
     .refine((value) => !value.includes("\0"), "SKILL.md 不能包含空字节")
     .refine((value) => /^#\s+\S/m.test(value), "SKILL.md 必须包含一级标题"),
   signature: packageSignatureSchema.optional(),
-}).strict();
+}).strict().refine((value) => value.manifest.executor?.kind === "sandbox", {
+  message: "atypica.skill/v2 必须配置 sandbox executor",
+  path: ["manifest", "executor"],
+});
+
+export const skillPackageInputSchema = z.discriminatedUnion("format", [skillPackageV1Schema, skillPackageV2Schema]);
 
 export const skillPackageApprovalInputSchema = z.object({
   grants: z.array(z.object({
@@ -181,7 +202,7 @@ function versionHash(input: {
   promptVersion: string | null;
   executor: SkillExecutorConfig | null;
   changeNote?: string;
-  packageFormat?: "inline" | "atypica.skill/v1";
+  packageFormat?: "inline" | "atypica.skill/v1" | "atypica.skill/v2";
   packageContent?: Record<string, unknown>;
   signatureMetadata?: Record<string, unknown>;
 }) {
@@ -325,10 +346,10 @@ export async function listWorkspaceSkills(viewer: Viewer): Promise<SkillSummary[
     version_id: string;
     selected_version: number;
     manifest: { capabilities?: string[] } | string;
-    executor_type: "unconfigured" | "declarative_http" | "mcp";
+    executor_type: "unconfigured" | "declarative_http" | "mcp" | "sandbox";
     executor_config: Record<string, unknown> | string;
     content_hash: string;
-    package_format: "inline" | "atypica.skill/v1";
+    package_format: "inline" | "atypica.skill/v1" | "atypica.skill/v2";
     requested_capabilities: SkillCapability[] | string;
     signature_metadata: { verificationState?: SkillSummary["signatureState"] } | string;
     enabled: boolean | null;
@@ -485,18 +506,18 @@ export async function importWorkspaceSkillPackage(viewer: Viewer, input: z.infer
     const contentHash = versionHash({
       version: 1, capabilities: manifest.capabilities, requestedCapabilities, inputSchema: manifest.inputSchema,
       outputSchema: manifest.outputSchema, promptVersion: null, executor: manifest.executor, changeNote: manifest.changeNote,
-      packageFormat: "atypica.skill/v1", packageContent: content, signatureMetadata: signature,
+      packageFormat: input.format, packageContent: content, signatureMetadata: signature,
     });
     await transaction.query(
       `insert into skill_versions (
          public_id, skill_id, version, manifest, input_schema, output_schema, executor_type, executor_config,
          content_hash, package_format, package_content, signature_metadata, requested_capabilities
-       ) values ($1, $2, 1, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7::jsonb, $8, 'atypica.skill/v1', $9::jsonb, $10::jsonb, $11::jsonb)`,
+       ) values ($1, $2, 1, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb)`,
       [
         createPublicId("skv"), skill.id,
         JSON.stringify({ capabilities: manifest.capabilities, changeNote: manifest.changeNote, packageHash: hashSkillPackage(content) }),
         JSON.stringify(manifest.inputSchema), JSON.stringify(manifest.outputSchema), executor.type,
-        JSON.stringify(executor.config), contentHash, JSON.stringify(content), JSON.stringify(signature), JSON.stringify(requestedCapabilities),
+        JSON.stringify(executor.config), contentHash, input.format, JSON.stringify(content), JSON.stringify(signature), JSON.stringify(requestedCapabilities),
       ],
     );
     await transaction.query(
@@ -592,7 +613,7 @@ export async function exportWorkspaceSkillPackage(viewer: Viewer, publicId: stri
      join skill_versions version on version.skill_id = skill.id and version.version = skill.latest_version
      where skill.workspace_id = $1 and skill.public_id = $2 and skill.status = 'active'
        and (skill.visibility = 'workspace' or skill.owner_user_id = $3)
-       and version.package_format = 'atypica.skill/v1' limit 1`,
+       and version.package_format in ('atypica.skill/v1', 'atypica.skill/v2') limit 1`,
     [viewer.workspaceId, publicId, viewer.userId],
   );
   const row = result.rows[0];
@@ -670,7 +691,7 @@ export async function setWorkspaceSkillEnabled(viewer: Viewer, input: z.infer<ty
     } else {
       const result = await transaction.query<{
         id: string; owner_user_id: string; latest_version: number; status: SkillLifecycle; version_id: string;
-        executor_type: "unconfigured" | "declarative_http" | "mcp"; executor_config: Record<string, unknown> | string;
+        executor_type: "unconfigured" | "declarative_http" | "mcp" | "sandbox"; executor_config: Record<string, unknown> | string;
         requested_capabilities: SkillCapability[] | string;
       }>(
         `select skill.id::text as id, skill.owner_user_id::text as owner_user_id, skill.latest_version, skill.status,
@@ -752,7 +773,7 @@ export async function lockRunWorkspaceSkill(input: {
 }) {
   const result = await input.queryable.query<{
     skill_id: string; public_id: string; slug: string; version_id: string; version: number; status: SkillLifecycle; enabled: boolean | null;
-    executor_type: "unconfigured" | "declarative_http" | "mcp"; executor_config: Record<string, unknown> | string;
+    executor_type: "unconfigured" | "declarative_http" | "mcp" | "sandbox"; executor_config: Record<string, unknown> | string;
     input_schema: Record<string, unknown> | string; output_schema: Record<string, unknown> | string; content_hash: string;
     requested_capabilities: SkillCapability[] | string;
   }>(
@@ -812,7 +833,7 @@ export async function executeWorkspaceSkill(viewer: Viewer, publicId: string, ar
   const database = await getDatabase();
   const result = await database.query<{
     skill_id: string; skill_version_id: string; enabled: boolean | null; version: number;
-    executor_type: "unconfigured" | "declarative_http" | "mcp"; executor_config: Record<string, unknown> | string;
+    executor_type: "unconfigured" | "declarative_http" | "mcp" | "sandbox"; executor_config: Record<string, unknown> | string;
     input_schema: Record<string, unknown> | string; output_schema: Record<string, unknown> | string;
     requested_capabilities: SkillCapability[] | string;
   }>(
@@ -876,7 +897,7 @@ export async function probeWorkspaceSkill(viewer: Viewer, publicId: string) {
   const database = await getDatabase();
   const result = await database.query<{
     skill_id: string; version_id: string; slug: string; status: SkillLifecycle;
-    executor_type: "unconfigured" | "declarative_http" | "mcp"; executor_config: Record<string, unknown> | string;
+    executor_type: "unconfigured" | "declarative_http" | "mcp" | "sandbox"; executor_config: Record<string, unknown> | string;
     requested_capabilities: SkillCapability[] | string;
   }>(
     `select skill.id::text as skill_id, version.id::text as version_id, skill.slug, skill.status,

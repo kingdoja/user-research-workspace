@@ -1,0 +1,25 @@
+import { NextResponse } from "next/server";
+import { getViewer } from "@/lib/auth";
+import { isSameOriginRequest } from "@/lib/request-security";
+import { sendAgentMessage, sendAgentMessageInputSchema } from "@/lib/universal-agent";
+
+export const maxDuration = 180;
+
+export async function POST(request: Request, context: { params: Promise<{ publicId: string }> }) {
+  if (!isSameOriginRequest(request)) return NextResponse.json({ error: "请求来源无效" }, { status: 403 });
+  const viewer = await getViewer();
+  if (!viewer) return NextResponse.json({ error: "请先登录" }, { status: 401 });
+  const parsed = sendAgentMessageInputSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "消息无效" }, { status: 400 });
+  const { publicId } = await context.params;
+  try {
+    const result = await sendAgentMessage(viewer, publicId, parsed.data);
+    if (result === "forbidden") return NextResponse.json({ error: "当前角色无权运行 Agent" }, { status: 403 });
+    if (result === "not_found") return NextResponse.json({ error: "Agent 会话不存在" }, { status: 404 });
+    return NextResponse.json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Agent 执行失败";
+    const status = /API_KEY_MISSING|PROVIDER_ROUTING_NO_ELIGIBLE_ROUTE/.test(message) ? 503 : 502;
+    return NextResponse.json({ error: message.slice(0, 800) }, { status });
+  }
+}

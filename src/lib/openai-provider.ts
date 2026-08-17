@@ -36,6 +36,32 @@ export const REALTIME_INTERVIEW_PROMPT_VERSION = "realtime-interview-v1";
 const HARNESS_INTERVIEW_PROMPT_VERSION = "research-harness-interview-v2";
 const AUDIENCE_CALL_PROMPT_VERSION = "research-harness-audience-call-v2";
 const DISCUSSION_PROMPT_VERSION = "research-harness-discussion-v2";
+export const UNIVERSAL_AGENT_PROMPT_VERSION = "universal-agent-v1";
+
+const universalAgentTurnSchema = z.object({
+  decisionSummary: z.string().min(2).max(600),
+  action: z.enum(["list_files", "read_file", "write_file", "execute_skill", "finish"]),
+  message: z.string().max(12_000),
+  path: z.string().max(240).nullable(),
+  content: z.string().max(120_000).nullable(),
+  skillPublicId: z.string().max(160).nullable(),
+  argumentsJson: z.string().max(32_000).nullable(),
+});
+
+const universalAgentTurnJsonSchema = {
+  type: "object",
+  properties: {
+    decisionSummary: { type: "string", minLength: 2, maxLength: 600 },
+    action: { type: "string", enum: ["list_files", "read_file", "write_file", "execute_skill", "finish"] },
+    message: { type: "string", maxLength: 12_000 },
+    path: { type: ["string", "null"], maxLength: 240 },
+    content: { type: ["string", "null"], maxLength: 120_000 },
+    skillPublicId: { type: ["string", "null"], maxLength: 160 },
+    argumentsJson: { type: ["string", "null"], maxLength: 32_000 },
+  },
+  required: ["decisionSummary", "action", "message", "path", "content", "skillPublicId", "argumentsJson"],
+  additionalProperties: false,
+} as const;
 
 const searchSourcePlanSchema = z.object({
   queries: z.array(z.string().min(3)).min(3),
@@ -778,6 +804,13 @@ export type ProviderRealtimeInterviewTurn = z.infer<typeof realtimeInterviewTurn
   usage: unknown;
 };
 
+export type ProviderUniversalAgentTurn = z.infer<typeof universalAgentTurnSchema> & {
+  responseId: string;
+  model: string;
+  promptVersion: string;
+  usage: unknown;
+};
+
 let client: OpenAI | null = null;
 let deepSeekClient: OpenAI | null = null;
 
@@ -1315,6 +1348,63 @@ export function describeOpenAIError(error: unknown) {
     status: null,
     code: null,
     requestId: null,
+  };
+}
+
+export async function generateProviderUniversalAgentTurn(input: {
+  objective: string;
+  userPublicId: string;
+  messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+  skills: Array<{ publicId: string; slug: string; name: string; description: string; version: number; executorType: string }>;
+  files: Array<{ path: string; byteSize: number; version: number }>;
+  externalExecutionAllowed: boolean;
+}): Promise<ProviderUniversalAgentTurn> {
+  const model = getStageModel("reasoning");
+  const skillCatalog = input.skills.length
+    ? input.skills.map((skill) => `${skill.publicId} | ${skill.slug}@${skill.version} | ${skill.name} | ${skill.executorType} | ${skill.description}`).join("\n")
+    : "无已绑定工作区 Skill";
+  const fileCatalog = input.files.length
+    ? input.files.map((file) => `${file.path} (${file.byteSize} bytes, v${file.version})`).join("\n")
+    : "Workspace 为空";
+  const allowedActions = input.externalExecutionAllowed
+    ? "list_files, read_file, write_file, execute_skill, finish"
+    : "list_files, read_file, write_file, finish（本轮未获外部执行确认，禁止 execute_skill）";
+  const response = await createStructuredResponse("reasoning", {
+    model,
+    reasoning: { effort: "medium" },
+    safety_identifier: safetyIdentifier(input.userPublicId),
+    store: true,
+    metadata: { surface: "universal_agent", prompt_version: UNIVERSAL_AGENT_PROMPT_VERSION },
+    instructions: [
+      "你是 atypica Universal Agent，负责在持久化工作区中协调受治理的 Skills 完成用户目标。",
+      "每一步只能选择一个结构化动作。不要输出隐藏推理，只在 decisionSummary 中给出简短、可审计的选择依据。",
+      "skills/ 是只读的版本化能力目录；工作文件只能写入普通相对路径，不得使用绝对路径、.. 或 skills/ 前缀。",
+      "需要读取现有文件时先 read_file；需要了解目录时用 list_files；完成目标后使用 finish 并在 message 中给出结果。",
+      "execute_skill 时必须使用目录中精确的 skillPublicId，并把参数编码为 JSON object 字符串放入 argumentsJson。",
+      "不得声称工具已经执行，除非对话中已经出现对应 tool 结果。所有面向用户的文本使用简体中文。",
+      `本轮允许动作：${allowedActions}`,
+      `\n已绑定 Skills：\n${skillCatalog}`,
+      `\n持久化 Workspace：\n${fileCatalog}`,
+    ].join("\n"),
+    input: [
+      { role: "system", content: `当前目标：${input.objective}` },
+      ...input.messages,
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "universal_agent_turn",
+        strict: true,
+        schema: universalAgentTurnJsonSchema,
+      },
+    },
+  }, { timeout: 90_000, maxRetries: 1 });
+  return {
+    ...parseOutput(response.output_text, universalAgentTurnSchema),
+    responseId: response.id,
+    model: response.model,
+    promptVersion: UNIVERSAL_AGENT_PROMPT_VERSION,
+    usage: response.usage,
   };
 }
 

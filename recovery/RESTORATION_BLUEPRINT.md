@@ -269,7 +269,7 @@ type SkillManifest = {
 - `generateReport`
 - `publishArtifact`
 
-Workspace Skill 当前可以绑定受控 `declarative_http` 或 MCP Streamable HTTP executor；地址必须命中服务端 allowlist，secret 只允许引用 `SKILL_SECRET_*` 环境变量。`atypica.skill/v1` 包只包含严格 manifest、`SKILL.md` 文本和可选的未验证签名声明，导入后必须由管理员授予版本精确的 capability。上传包和任意脚本均不执行，通用代码沙箱属于后续能力。
+Workspace Skill 当前可以绑定受控 `declarative_http`、MCP Streamable HTTP 或 `sandbox` executor；地址必须命中服务端 allowlist，secret 只允许引用 `SKILL_SECRET_*` 环境变量。`atypica.skill/v1` 继续只包含严格 manifest、`SKILL.md` 文本和可选的未验证签名声明；`atypica.skill/v2` 才允许 JavaScript/Python 源文件，并强制使用外部 `atypica.sandbox/v1` Runner。两类包导入后都必须由管理员授予版本精确的 capability，代码包还必须具备不可变 `code_execute` grant。Next.js 和 PostgreSQL 均不执行上传代码。
 
 ### 5.5 Context System
 
@@ -582,7 +582,7 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 
 - [x] 受控 HTTP JSON / MCP Streamable HTTP client executor、工作区启停与 Run 级版本锁定。
 - [x] Market Insight 第二产品线复用同一 Intent/Plan/Workflow/Run/Skill/Context 契约，并以独立模板、任务图和输出契约锁定到 Run。
-- [ ] Universal Agent 与通用代码 Skill sandbox；当前仅有声明式、受治理的远程 Skill 包。
+- [x] Universal Agent 与通用代码 Skill sandbox；会话、消息、Run、步骤和 workspace 文件持久化，代码只交给 allowlist 内的外部隔离 Runner。
 - [x] Workspace scoped API keys、哈希鉴权、精确 scope、撤销/过期和外部调用审计。
 - [x] 对外无状态 MCP server；复用 API key 契约，每个 tool 单独做 scope 判断。
 - [x] 跨工作区不可变发布包、接收审核、撤回归档、委托状态机和事件审计；公开 share token 不承担协作授权，接收资产只生成待治理引用。
@@ -618,6 +618,7 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 - Brief → governed `intent_planning` Retrieval Snapshot → immutable Intent Version → confirmed Plan Version → compiled WorkflowDefinition → Run 的版本锁定闭环；Runtime 从锁定任务图执行，Replay 分开展示 Planning/Execution Context。
 - Product Line → Intent/Plan snapshot → Research 或 Market Insight WorkflowDefinition → 同一 Runtime/SkillInvocation/Replay 的跨业务线复用闭环；Market Insight 默认排除 Persona 与合成访谈。
 - Completed Study → locked Workflow / final Report → pending Template / Gap → review / dedupe / expiry / resolution → governed Context reuse 的研究资产闭环；7 个历史模板和 84 个 Gap 已回填但仍待人工审核。
+- Universal Agent Thread → immutable Run Skill Binding → structured action step → persistent workspace file / sandbox execution → Provider routing decision 的可审计通用执行闭环。
 
 下一批最值得做的工作，按收益排序：
 
@@ -625,7 +626,7 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 2. [x] 实现版本化 `IntentContract -> WorkflowDefinition`：在 Plan 前明确目标、预算、数据范围、合规策略与允许的 Memory purpose，并保存解析依据和用户确认版本。
 3. [x] 让 Intent Planning 真正读取已批准 Team/Core Memory、相似 Study 和可复用 Persona，同时在 Run Replay 中展示哪些 Context 改变了 Plan。
 4. [x] 增加 Market Insight 第二条 workflow，用真实复用验证 `WorkflowDefinition + RuntimeContext + SkillInvocation` 是通用契约，而不是提前重写 Runtime。
-5. [x] 在现有 Skill Gateway 上增加 `.skill` / `SKILL.md` 导入导出、capability grants、签名声明/撤销、executor health probe 和 scoped credential reference；任意代码沙箱继续后置。
+5. [x] 在现有 Skill Gateway 上增加 `.skill` / `SKILL.md` 导入导出、capability grants、签名声明/撤销、executor health probe 和 scoped credential reference；随后完成 `atypica.skill/v2` 代码包、`code_execute` grant 与外部隔离 sandbox Runner 契约。
 6. [x] 建立授权 source 的“虚构引用”和“Persona 回答趋同”Agent Eval 契约，并让 Reasoning 在不足、冲突或时效到期时产生可回放的动态 Context retrieval；真实黄金样本仍须经独立审批后导入。
 7. [x] 从 20 份 CC BY 4.0、匿名化且明确同意发布的英文访谈转录建立 20 条 relevance case。用户已确认将 P4 替换为直接说明回答质量判断标准的 `cxc_WNmfyFvjo3GckbgA`；新评估集 `ces_gDD0245-3Ua1zruu` 与 Baseline Run `cer_Vkm2YEc8flA4n86Q` 已创建，Precision@K 为 `0.025`、Recall@K 为 `0.20`、MRR 为 `0.0783`。旧集 `ces_QOFfpNrsvXkfX5aw` 已归档供历史复现。
 8. [x] 已完成两种生产 embedding 候选的同集对照。火山方舟 `Doubao-embedding-vision 251215` Run `cer_jEggoOiHVMtdO4df` 的 P@K `0.03125`、R@K `0.25`、MRR `0.04762`；百炼 `text-embedding-v4` Run `cer_BWVjZC6Z4gMhEWyr` 的 P@K `0.0125`、R@K `0.10`、MRR `0.0625`。两者均未通过 MRR `+0.03` 且 P@K/R@K 不下降的门槛，因此不开启 pgvector/HNSW。
@@ -633,6 +634,7 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 10. [x] `.skill` 治理和第二产品线稳定后，已开放 workspace scoped API keys 和无状态 MCP server；团队发布流仍待完成。
 11. [x] Scout 已增加 Bluesky 官方公共 AppView Connector，并严格区分搜索发现与可引用快照；当前网络环境无法完成官方站点实时连通验证，因此部署验收仍需执行一次真实 API smoke。
 12. [x] Source Snapshot 大正文已迁入 S3 兼容对象存储；隔离 PostgreSQL smoke 和本地 MinIO 的不可变复用、hash 元数据及回读完整性均已验证。
+13. [x] Universal Agent 工作台已完成：支持持久化会话/文件、结构化动作循环、每轮外部执行确认、精确 Skill 版本锁定、Sandbox 审计和 Provider 路由账本。
 
 不建议现在做：
 

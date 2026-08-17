@@ -127,7 +127,7 @@ export async function startTaskAttempt(queryable: Queryable, input: {
   toolName: string;
   skillVersion: number;
   skillBindingId?: string | null;
-  executorType?: "builtin" | "declarative_http" | "mcp";
+  executorType?: "builtin" | "declarative_http" | "mcp" | "sandbox";
   contextRetrievalId: string | null;
   arguments: Record<string, unknown>;
 }) : Promise<StartedTaskAttempt> {

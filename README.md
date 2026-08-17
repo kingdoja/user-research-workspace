@@ -12,6 +12,8 @@ This repository is a clean-room reconstruction created from the surviving public
 - Added a durable Plan-and-Execute research harness with typed tools, checkpoints, artifacts, idempotent invocations, a leased job queue, and SSE progress events.
 - Added a product-kernel health endpoint at `/api/health`.
 - Added `/platform` for governed cross-workspace publishing/delegation and versioned provider cost/quality routing.
+- Added `/agent` for Universal Agent conversations, persistent workspace files, immutable Skill bindings, and auditable runs.
+- Added governed `atypica.skill/v2` JavaScript/Python packages that execute through the external `atypica.sandbox/v1` runner contract.
 
 The original private server code and data are not present in the public deployment artifacts. AI execution, report generation, payments, file storage, background jobs, email, and production deployment still require provider integrations.
 
@@ -44,6 +46,10 @@ pnpm research:worker
 
 The web process also wakes one queued job after plan confirmation so local development remains single-command. The database queue is the source of truth, so a separate worker can resume queued or expired leased jobs after a process restart.
 
+Production code Skills require a separately deployed isolation runner. Add its HTTPS origin to
+`SKILL_EXECUTOR_ALLOWED_ORIGINS`; the Next.js process only validates and dispatches the
+version-locked package, limits, grants, and input, and never evaluates uploaded code itself.
+
 ## Verification
 
 ```bash
@@ -52,6 +58,7 @@ pnpm build
 pnpm smoke:report-routing
 LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated api-access
 LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated platform-control
+LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated universal-agent
 DEEPSEEK_PROVIDER_SMOKE_CONFIRM=1 pnpm smoke:deepseek-provider
 REPORT_PROVIDER_SMOKE_CONFIRM=1 pnpm smoke:report-provider
 ```

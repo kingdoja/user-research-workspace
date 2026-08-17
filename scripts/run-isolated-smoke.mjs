@@ -24,6 +24,7 @@ const allowedSmokes = new Map([
   ["market-insight-workflow", { command: "pnpm", args: ["smoke:market-insight-workflow"], confirmation: "MARKET_INSIGHT_WORKFLOW_SMOKE_CONFIRM" }],
   ["api-access", { command: "pnpm", args: ["smoke:api-access"], confirmation: "API_ACCESS_SMOKE_CONFIRM" }],
   ["platform-control", { command: "pnpm", args: ["smoke:platform-control"], confirmation: "PLATFORM_CONTROL_SMOKE_CONFIRM" }],
+  ["universal-agent", { command: "pnpm", args: ["smoke:universal-agent"], confirmation: "UNIVERSAL_AGENT_SMOKE_CONFIRM" }],
 ]);
 const smoke = allowedSmokes.get(smokeName);
 if (!smoke) throw new Error(`Unsupported isolated smoke: ${smokeName}`);

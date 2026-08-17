@@ -5,6 +5,7 @@ import {
   Bot,
   Blocks,
   Coins,
+  Command,
   Database,
   Files,
   FlaskConical,
@@ -28,6 +29,7 @@ const primaryNavigation = [
 ];
 
 const productNavigation = [
+  { href: "/agent", label: "Universal Agent", icon: Command },
   { href: "/context", label: "Context 资产", icon: Database },
   { href: "/skills", label: "Skills", icon: Blocks },
   { href: "/persona", label: "AI Persona", icon: Bot },

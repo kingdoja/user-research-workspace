@@ -13,6 +13,7 @@
     "smoke:report-provider": "tsx scripts/report-provider-smoke.ts",
     "smoke:api-access": "tsx scripts/api-access-smoke.ts",
     "smoke:platform-control": "tsx scripts/platform-control-smoke.ts",
+    "smoke:universal-agent": "tsx scripts/universal-agent-smoke.ts",
     "smoke:realtime-interview": "tsx scripts/realtime-interview-smoke.ts",
     "smoke:experiment-comparison": "tsx scripts/experiment-comparison-smoke.ts",
     "smoke:evidence-graph": "tsx scripts/evidence-graph-smoke.ts",

@@ -26,12 +26,15 @@ const capabilityOptions: Array<{ value: SkillCapability; label: string }> = [
   { value: "network", label: "Network" },
   { value: "context_read", label: "Context" },
   { value: "files_read", label: "Files" },
+  { value: "files_write", label: "Files write" },
   { value: "provider_invoke", label: "Provider" },
+  { value: "code_execute", label: "Code" },
 ];
 
 function executorLabel(type: SkillSummary["executorType"]) {
   if (type === "declarative_http") return "HTTP JSON";
   if (type === "mcp") return "MCP";
+  if (type === "sandbox") return "Sandbox";
   if (type === "builtin") return "Builtin";
   return "未配置";
 }
@@ -274,7 +277,7 @@ export function SkillControlPanel({
             {actionBusy("approve") ? <LoaderCircle className="spin" size={13} /> : <ShieldCheck size={13} />}审批
           </button>
         ) : null}
-        {skill.status === "active" && skill.packageFormat === "atypica.skill/v1" ? (
+        {skill.status === "active" && skill.packageFormat?.startsWith("atypica.skill/") ? (
           <button type="button" className="skill-icon-button" title="导出 .skill 包" aria-label={`导出 ${skill.name}`} disabled={actionBusy("export")} onClick={() => downloadPackage(skill)}>
             {actionBusy("export") ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}
           </button>
@@ -313,9 +316,9 @@ export function SkillControlPanel({
             {skill.source === "workspace" ? (
               <div className="skill-governance-meta">
                 <span className={`skill-lifecycle ${skill.status}`}>{statusLabel(skill.status)}</span>
-                <span>{skill.packageFormat === "atypica.skill/v1" ? ".skill / SKILL.md" : "inline manifest"}</span>
+                <span>{skill.packageFormat === "atypica.skill/v2" ? ".skill v2 / sandbox" : skill.packageFormat === "atypica.skill/v1" ? ".skill / SKILL.md" : "inline manifest"}</span>
                 <span>{hasPendingCapabilities ? "权限待批准" : skill.capabilityState === "granted" ? "权限已锁定" : "无需外部权限"}</span>
-                {skill.packageFormat === "atypica.skill/v1" ? <span>签名：{skill.signatureState === "declared_unverified" ? "已声明，未验证" : "未提供"}</span> : null}
+                {skill.packageFormat?.startsWith("atypica.skill/") ? <span>签名：{skill.signatureState === "declared_unverified" ? "已声明，未验证" : "未提供"}</span> : null}
                 {skill.health ? <span className={`skill-health ${skill.health.status}`}>{skill.health.status === "healthy" ? "Executor healthy" : "Executor unhealthy"}</span> : null}
               </div>
             ) : null}
@@ -371,7 +374,7 @@ export function SkillControlPanel({
         </header>
         {importOpen ? (
           <div className="skill-package-import">
-            <div><strong>导入声明式 `.skill` 包</strong><p>仅接受 manifest 与 `SKILL.md` 文本；不接受脚本、二进制或任意文件。导入后需要管理员审批所请求的权限。</p></div>
+            <div><strong>导入受治理的 `.skill` 包</strong><p>v1 接受 manifest 与 `SKILL.md`；v2 可携带受限源码并绑定隔离 Runner。两者导入后都需要管理员审批精确权限。</p></div>
             <label className="button button-green" aria-disabled={busyKey === "package-import"}>
               {busyKey === "package-import" ? <LoaderCircle className="spin" size={15} /> : <FileUp size={15} />}选择 .skill
               <input type="file" accept=".skill,application/json" onChange={importPackage} disabled={busyKey === "package-import"} />

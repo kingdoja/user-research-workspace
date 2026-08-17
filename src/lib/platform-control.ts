@@ -80,7 +80,8 @@ export type RoutingPolicySummary = {
 export type RouteDecisionSummary = {
   publicId: string;
   runPublicId: string;
-  studyPublicId: string;
+  studyPublicId: string | null;
+  runtimeKind: "study" | "agent";
   stage: ProviderStage;
   providerName: string;
   model: string;
@@ -669,15 +670,18 @@ export async function resolveProviderRoute(input: {
   taskId: string | null;
   stage: ProviderStage;
   subjectKey: string;
+  runtimeKind?: "study" | "agent";
 }): Promise<null | {
   decisionId: string;
   decisionPublicId: string;
   override: ProviderRouteOverride;
   selectionReason: string;
 }> {
-  await input.queryable.query("select pg_advisory_xact_lock(hashtext($1))", [`run-routing:${input.runId}:${input.stage}`]);
+  const runtimeKind = input.runtimeKind ?? "study";
+  const runColumn = runtimeKind === "agent" ? "agent_run_id" : "run_id";
+  await input.queryable.query("select pg_advisory_xact_lock(hashtext($1))", [`${runtimeKind}-run-routing:${input.runId}:${input.stage}`]);
   let binding = await input.queryable.query<{ id: string; policy_version_id: string }>(
-    "select id::text as id, policy_version_id::text as policy_version_id from study_run_routing_bindings where run_id = $1 and stage = $2",
+    `select id::text as id, policy_version_id::text as policy_version_id from study_run_routing_bindings where ${runColumn} = $1 and stage = $2`,
     [input.runId, input.stage],
   );
   if (!binding.rows[0]) {
@@ -690,7 +694,7 @@ export async function resolveProviderRoute(input: {
     );
     if (!active.rows[0]) return null;
     binding = await input.queryable.query<{ id: string; policy_version_id: string }>(
-      `insert into study_run_routing_bindings (public_id, run_id, workspace_id, stage, policy_version_id)
+      `insert into study_run_routing_bindings (public_id, ${runColumn}, workspace_id, stage, policy_version_id)
        values ($1, $2, $3, $4, $5)
        returning id::text as id, policy_version_id::text as policy_version_id`,
       [createPublicId("rrb"), input.runId, input.workspaceId, input.stage, active.rows[0].id],
@@ -746,12 +750,15 @@ export async function resolveProviderRoute(input: {
   }
   const decision = await input.queryable.query<{ id: string; public_id: string }>(
     `insert into provider_route_decisions (
-       public_id, binding_id, run_id, workspace_id, task_id, stage, chosen_route_id,
+       public_id, binding_id, run_id, agent_run_id, workspace_id, task_id, stage, chosen_route_id,
        provider_name, model, protocol, selection_reason, candidate_snapshot, estimated_cost_micros
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13)
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14)
      returning id::text as id, public_id`,
     [
-      createPublicId("prd"), binding.rows[0].id, input.runId, input.workspaceId, input.taskId,
+      createPublicId("prd"), binding.rows[0].id,
+      runtimeKind === "study" ? input.runId : null,
+      runtimeKind === "agent" ? input.runId : null,
+      input.workspaceId, runtimeKind === "study" ? input.taskId : null,
       input.stage, selected.id, selected.provider_name, selected.model, selected.protocol,
       selectionReason,
       JSON.stringify(candidates.map((candidate) => ({
@@ -842,19 +849,22 @@ export async function listRoutingControl(viewer: Viewer) {
       [viewer.workspaceId],
     ),
     database.query<{
-      public_id: string; run_public_id: string; study_public_id: string; stage: ProviderStage;
+      public_id: string; run_public_id: string; study_public_id: string | null; runtime_kind: "study" | "agent"; stage: ProviderStage;
       provider_name: string; model: string; selection_reason: string; estimated_cost_micros: string;
       actual_cost_micros: string | null; latency_ms: number | null; quality_score: number | null;
       status: RouteDecisionSummary["status"]; created_at: string;
     }>(
-      `select decision.public_id, run.public_id as run_public_id, study.public_id as study_public_id,
+      `select decision.public_id, coalesce(run.public_id, agent_run.public_id) as run_public_id,
+              study.public_id as study_public_id,
+              case when decision.agent_run_id is null then 'study' else 'agent' end as runtime_kind,
               decision.stage, decision.provider_name, decision.model, decision.selection_reason,
               decision.estimated_cost_micros::text as estimated_cost_micros,
               decision.actual_cost_micros::text as actual_cost_micros, decision.latency_ms,
               decision.quality_score, decision.status, decision.created_at::text as created_at
        from provider_route_decisions decision
-       join study_runs run on run.id = decision.run_id
-       join studies study on study.id = run.study_id
+       left join study_runs run on run.id = decision.run_id
+       left join studies study on study.id = run.study_id
+       left join agent_runs agent_run on agent_run.id = decision.agent_run_id
        where decision.workspace_id = $1 order by decision.created_at desc, decision.id desc limit 50`,
       [viewer.workspaceId],
     ),
@@ -866,7 +876,7 @@ export async function listRoutingControl(viewer: Viewer) {
       versions: parsedJson<RoutingPolicySummary["versions"]>(row.versions as RoutingPolicySummary["versions"] | string),
     })),
     decisions: decisionsResult.rows.map((row): RouteDecisionSummary => ({
-      publicId: row.public_id, runPublicId: row.run_public_id, studyPublicId: row.study_public_id,
+      publicId: row.public_id, runPublicId: row.run_public_id, studyPublicId: row.study_public_id, runtimeKind: row.runtime_kind,
       stage: row.stage, providerName: row.provider_name, model: row.model,
       selectionReason: row.selection_reason, estimatedCostMicros: Number(row.estimated_cost_micros),
       actualCostMicros: row.actual_cost_micros === null ? null : Number(row.actual_cost_micros),

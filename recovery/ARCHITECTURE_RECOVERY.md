@@ -137,7 +137,7 @@ API / Web / MCP clients
 
 边界和数据契约已经落地，仍不需要伪造完整能力。
 
-- Skills：manifest/version/schema/启停/Run Binding/远程执行审计、受限 `.skill` / `SKILL.md` 导入导出、capability grant 审批、撤销、健康审计已完成。签名目前只是如实保存为“已声明、未验证”的元数据；加密信任链、任意代码沙箱和发布市场仍后置。
+- Skills：manifest/version/schema/启停/Run Binding/远程执行审计、受限 `.skill` / `SKILL.md` 导入导出、capability grant 审批、撤销、健康审计已完成。`atypica.skill/v2` 允许 JavaScript/Python 源文件，但只通过具有 `code_execute` grant 的外部隔离 Runner 执行；Next.js 与 PostgreSQL 不执行上传代码。签名目前只是如实保存为“已声明、未验证”的元数据，加密信任链和发布市场仍后置。
 - Context：资产版本、chunk、受控关系、来源/hash、同意/PII/保留期、审核队列、混合检索和评估已完成；Core/Working/Team Memory 复用同一 Context Asset 底座，通过用途、主体、有效期和不可变 policy version 在排序前执行门禁。Reasoning 的动态刷新只允许在 Context 不足、证据冲突或策略时效到期时触发，并绑定决策、Run、下一任务和完整检索快照。研究报告、Persona 和 Memory 晋升结果只能进入待审核候选，不会未经批准进入 Runtime。生产 embedding 必须先通过现有评估门槛。
 - Persona：Claim/Evidence 精确关联、证据强度、有效期和保留/退役审计已完成。Context asset 批准与 Persona 可复用保留是两道独立门禁；新生成 Persona 默认 pending，只有 retained 且未过期者能进入 Runtime。
 - 多 Agent：DAG wave、限流、租约、实验分组已完成；Research 与 Market Insight 已复用同一持久化 Runtime 契约，但仍不宣称全部业务线已经通用化。
@@ -431,6 +431,17 @@ Runtime 默认值：每 run 2 个并发 task、每 workspace 2 个活跃研究 r
 - `/platform` 提供协作流和 Provider 路由两组后台视图。Browser 已验证桌面和 390×844 移动端布局、表单字段、导航、无横向溢出与 console error/warn；一次性账号与工作区已删除。
 - 隔离 PostgreSQL 15 完整迁移链 `platform-control` smoke 已验证草稿隐藏、第三方隔离、快照不可变、待审核导入、撤回归档、委托状态机、版本化路由绑定、运行时覆盖、成本结算和决策结果不可变。`pnpm exec tsc --noEmit`、ESLint 与 `pnpm build` 均通过，未调用真实付费 Provider。
 - 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated platform-control`，仅允许 localhost / `127.0.0.1` 数据库。
+
+## 2026-08-17 Universal Agent 与 Sandbox Skill 部署记录
+
+- 新增 `/agent` Universal Agent 工作台和 `agent_threads`、`agent_messages`、`agent_runs`、`agent_steps`、`agent_workspace_files`、`agent_run_skill_bindings`、`sandbox_executions` 持久化契约；workspace 文件跨会话保留，`skills/` 路径保持只读。
+- 每个 Run 锁定精确 Skill version、executor config、输入输出 schema 和 capability grants；每轮执行外部或代码 Skill 都要求用户显式确认。结构化动作仅允许 `list_files`、`read_file`、`write_file`、`execute_skill` 和 `finish`，每一步均保存 request/response hash 与审计状态。
+- `atypica.skill/v2` 支持 JavaScript/Python 源文件并强制配置 `sandbox` executor；代码执行必须有不可变 `code_execute` grant。Web 进程只向 allowlist endpoint 发送 `atypica.sandbox/v1` 请求，Runner 负责真正的隔离、超时、内存、输出大小和网络权限限制。
+- Universal Agent reasoning 复用既有 Provider routing control plane，按 `reasoning` stage 记录版本绑定和实际决策；跨 workspace 的 Thread、Skill、文件和 Sandbox 执行均通过服务端成员校验隔离。
+- 隔离迁移链 `universal-agent` smoke 已验证：Sandbox v2、显式代码授权、精确版本锁定、持久化 deliverable、Provider routing ledger、跨 workspace 隔离和不可变绑定；`platform-control`、`skill-executor`、`skill-package-governance` 回归继续通过。
+- Browser 实测 `/agent` 桌面 1280×720 和移动 390×844：页面身份、会话加载、Skills/Files/Runs Tab 切换、无横向溢出、无框架错误覆盖层、console error/warn 均通过；一次性 QA 账号与 workspace 已删除。
+- 生产部署仍需配置 `SKILL_EXECUTOR_ALLOWED_ORIGINS` 指向独立 HTTPS Runner，并为 Runner 实现 `atypica.sandbox/v1` 协议；本仓库提供的是平台契约和 allowlist dispatch，不把本地 smoke HTTP stub 当作生产沙箱。
+- 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated universal-agent`，仅允许 localhost / `127.0.0.1` 数据库。
 
 ## 验收标准
 
