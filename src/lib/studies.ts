@@ -1089,7 +1089,7 @@ export async function submitStudyClarification(
   let providerFailure: ReturnType<typeof describeOpenAIError> | null = null;
   let providerPlan: Awaited<ReturnType<typeof generateProviderStudyPlan>> | null = null;
 
-  if (providerStatus.configured) {
+  if (providerStatus.planConfigured) {
     try {
       providerPlan = await generateProviderStudyPlan(study.brief, viewer.userPublicId, governedPlanningInput);
     } catch (error) {
@@ -1623,7 +1623,10 @@ export async function executeStudyRun(publicId: string, workspaceId: string) {
          select 1 from study_events
          where study_id = $1 and event_type = 'provider.configuration_missing'
        )`,
-      [study.study_id, JSON.stringify({ provider: providerStatus.providerName, requiredVariable: "OPENAI_API_KEY" })],
+      [study.study_id, JSON.stringify({
+        provider: providerStatus.providerName,
+        requiredVariable: providerStatus.researchRequiredVariable,
+      })],
     );
     return "provider_missing" as const;
   }

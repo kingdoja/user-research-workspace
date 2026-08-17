@@ -30,7 +30,7 @@ export async function POST(request: Request, context: RouteContext<"/api/studies
 
   if (result === "provider_missing") {
     return NextResponse.json(
-      { error: "服务器尚未配置 OPENAI_API_KEY" },
+      { error: "服务器尚未配置研究模型服务" },
       { status: 503 },
     );
   }

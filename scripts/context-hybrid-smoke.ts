@@ -141,14 +141,14 @@ async function main() {
       name: "通勤检索评估",
       description: "smoke",
       labelingProtocol: "human_relevance_v1",
-      cases: [{
-        query: "下雨时怎样选择公交通勤",
+      cases: Array.from({ length: 20 }, (_, index) => ({
+        query: `下雨时怎样选择公交通勤（${index + 1}）`,
         assetTypes: [],
-        scopes: ["workspace"],
+        scopes: ["workspace"] as ["workspace"],
         topK: 2,
-        expectedChunkPublicIds: [chunk.rows[0].public_id],
+        expectedChunkPublicIds: [chunk.rows[0].public_id] as [string],
         labelNote: "人工复核：该访谈片段直接回答雨天通勤的选择依据。",
-      }],
+      })),
     });
     assert.equal(typeof evaluationSet, "object");
     if (typeof evaluationSet !== "object") throw new Error("EVALUATION_SET_FAILED");

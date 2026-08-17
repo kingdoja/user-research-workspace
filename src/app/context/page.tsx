@@ -4,7 +4,9 @@ import { ContextAssetWorkspace } from "@/components/context-asset-workspace";
 import { WorkspaceShell } from "@/components/workspace-shell";
 import { getViewer } from "@/lib/auth";
 import { listAgentEvalSuites } from "@/lib/agent-evals";
+import { modelProposedRelevanceLabels } from "@/lib/model-proposed-relevance";
 import {
+  getContextEmbeddingProviderStatus,
   listContextAssets,
   listContextEvaluationSets,
   listContextEvaluationSourceChunks,
@@ -37,6 +39,8 @@ export default async function ContextPage() {
           initialAgentEvalSuites={agentEvalSuites}
           initialEvaluationSets={evaluationSets}
           initialEvaluationSources={evaluationSources}
+          initialReviewProposals={modelProposedRelevanceLabels}
+          embeddingProviderConfigured={getContextEmbeddingProviderStatus().openai.configured}
           canCreate={viewer.role !== "viewer"}
           canReview={viewer.role === "owner" || viewer.role === "admin"}
         />

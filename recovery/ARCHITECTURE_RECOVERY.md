@@ -94,7 +94,8 @@ API / Web / MCP clients
 - [x] 增加 workspace 级 Skill 启停、不可变 Run Skill Binding、声明式 HTTP JSON 与 MCP Streamable HTTP 受控执行器；仍不执行任意上传代码。
 - [x] 增加受限 `atypica.skill/v1` / `SKILL.md` 包导入导出、版本化 capability grants、签名声明元数据、管理员审批/撤销与按需 executor health probe；包只保存声明和文档，不接受脚本、二进制或任意代码执行。
 - [x] 增加 `hybrid_v1`、可替换 embedding 契约、PostgreSQL FTS/GIN 和离线检索评估；默认 `hash-ngram-128@v1` 是确定性基线，不冒充生产语义模型。
-- [x] 接入生产 embedding provider 的离线候选评估与升级门槛；默认检索仍为 `hash-ngram-128@v1`，仅候选胜出后才进入 pgvector/HNSW 索引试验。
+- [x] 接入生产 embedding provider 的离线候选评估契约与升级门槛；默认检索仍为 `hash-ngram-128@v1`，仅候选胜出后才进入 pgvector/HNSW 索引试验。火山方舟与百炼 Candidate 均已完成但未过门槛，因此未切换默认检索。
+- [x] 研究完成后从锁定 Workflow 与最终 Report 自动提出 Research Template / Knowledge Gap；候选具备管理员审核、内容指纹去重、来源关系、过期退出检索和 Gap 解决归档。
 - [ ] 在通过门槛的候选模型上引入 pgvector/HNSW，并以 shadow retrieval 验证后才切换默认策略。
 - 将团队 core memory、用户 profile、研究项目 working memory 统一映射为 context assets。
 
@@ -182,6 +183,16 @@ API / Web / MCP clients
 - `POST /api/experiments/:publicId/status`：启用、暂停或结束实验；同 workspace/workflow 只保留一个 active 实验。
 - `GET /api/experiments/:publicId/comparison`：列出 realtime variants、聚合指标和候选会话；可用 `leftSession` / `rightSession` 并行加载两场授权回放。
 
+## P4 对外访问接口
+
+- `GET|POST /api/account/api-keys`：管理员创建和列出 workspace scoped API key；明文只在创建时返回。
+- `DELETE /api/account/api-keys/:publicId`：撤销密钥；已开始的 Run 和历史审计事件不被改写。
+- `POST /api/v1/context/search`：用 `context:read` scope 进行受 Context policy 门禁的混合检索。
+- `GET /api/v1/personas`：用 `personas:read` scope 返回可复用的 retained Persona。
+- `GET|POST /api/v1/studies`、`GET /api/v1/studies/:publicId`、`POST /api/v1/studies/:publicId/confirm`：分别对应研究读取、创建和确认。
+- `GET /api/v1/studies/:publicId/runs`、`POST /api/v1/studies/:publicId/cancel`：用 `runs:read` / `runs:write` 查询回放、产物或取消运行。
+- 对外请求统一使用 `Authorization: Bearer atypica_sk_...`，不接受浏览器 Cookie；每个已识别请求保留 request id、scope、结果和响应状态。
+
 Runtime 默认值：每 run 2 个并发 task、每 workspace 2 个活跃研究 run、每 provider 4 个活跃研究 run、每 workspace/provider 每分钟 30 个 Provider 任务。均可通过 `RESEARCH_*` 环境变量调整并在代码中限制上下界。
 
 ## P3 前置已实现接口
@@ -261,7 +272,20 @@ Runtime 默认值：每 run 2 个并发 task、每 workspace 2 个活跃研究 r
 - `GET /api/context/evaluations` 返回当前工作区评估集及每个评估集最近 10 次 run，包含候选 model/version、状态、指标、gate 与失败原因。
 - 候选与基线复用同一批 PostgreSQL FTS 候选、workspace/user 权限过滤、metadata filters 和 0.7/0.3 hybrid 权重。OpenAI 向量只驻留本次离线评测内存，不写入 `context_chunks`，不改变线上 `hybrid_v1`。
 - 每次 run 保存候选 P@K / R@K / MRR、基线指标、差值、provider/model/version、请求数、输入数、维度、token usage、延迟及门槛结论。进入 pgvector/HNSW 索引试验的最低条件是至少 20 个 case、MRR 至少提升 `0.03` 且 P@K、R@K 不低于基线；通过评估不自动切换生产检索。
-- 配置项：`OPENAI_EMBEDDING_PROVIDER_NAME`、`OPENAI_EMBEDDING_MODEL`（默认 `text-embedding-3-small`）、`OPENAI_EMBEDDING_VERSION`、`OPENAI_EMBEDDING_API_KEY`、`OPENAI_EMBEDDING_BASE_URL`、`CONTEXT_EMBEDDING_EVALUATION_BATCH_SIZE`（1-128，默认 64）和 `CONTEXT_EMBEDDING_EVALUATION_TIMEOUT_MS`（5-120 秒，默认 60 秒）。专用 key/base URL 未配置时才回退服务端 `OPENAI_API_KEY` / `OPENAI_BASE_URL`。
+- 配置项：`OPENAI_EMBEDDING_PROVIDER_NAME`、`OPENAI_EMBEDDING_MODEL`（默认 `text-embedding-3-small`）、`OPENAI_EMBEDDING_VERSION`、`OPENAI_EMBEDDING_API_KEY`、`OPENAI_EMBEDDING_BASE_URL`、`CONTEXT_EMBEDDING_API_STYLE`（`openai` 或 `volcengine_multimodal`）、`CONTEXT_EMBEDDING_EVALUATION_BATCH_SIZE`（1-128，默认 64）和 `CONTEXT_EMBEDDING_EVALUATION_TIMEOUT_MS`（5-120 秒，默认 60 秒）。Key 可回退服务端 `OPENAI_API_KEY`；如果设置了通用 `OPENAI_BASE_URL`，则必须另外显式设置专用 `OPENAI_EMBEDDING_BASE_URL`，不能静默复用 chat-only 兼容接口。
+
+## 2026-08-16 Human Relevance 数据与 Candidate 评估记录
+
+- 工作区评估集 `ces_gDD0245-3Ua1zruu` 已有 20 条用户确认的 `human_relevance_v1` case，均保存标注人、标注时间、判断说明和不可变 source snapshot。P4 已替换为直接说明回答质量判断标准的 `cxc_WNmfyFvjo3GckbgA`；旧集 `ces_QOFfpNrsvXkfX5aw` 已归档供历史复现。
+- 新集确定性 Baseline Run `cer_Vkm2YEc8flA4n86Q` 已完成：Precision@K `0.025`、Recall@K `0.20`、MRR `0.0783`；该结果只提供可重复对照，不代表生产 embedding 质量。
+- 首次 Candidate 尝试失败并保留审计记录；根因是通用 `OPENAI_BASE_URL` 指向 chat-only 兼容接口，其 `/embeddings` 返回 `path no route`。
+- Runtime 与 UI 现会在缺少独立 embedding endpoint 时阻止 Candidate；失败运行不再覆盖页面上最近一次成功指标。
+- 已创建火山方舟 `Doubao-embedding-vision 251215` 专用接入点，Runtime 通过 `volcengine_multimodal` adapter 调用 `/api/v3/embeddings/multimodal`；两条中文文本实测均返回 HTTP 200 和 2048 维向量。
+- Candidate Run `cer_jEggoOiHVMtdO4df` 已对同一 20-case 评估集完成：Precision@K `0.03125`（`+0.00625`）、Recall@K `0.25`（`+0.05`）、MRR `0.04762`（`-0.03071`）；293 次请求、89,117 input tokens、2048 维，provider latency `6.27s`。
+- 该 Candidate 因 MRR 未提升至少 `0.03` 而未通过 shadow index 门槛。在新候选通过 MRR 增益且 P@K/R@K 不下降之前，不进入 pgvector/HNSW 或默认检索切换。
+- 已创建权限仅限 `通用文本向量-v4` 的百炼专用 API Key，并以 OpenAI-compatible endpoint 验证 `text-embedding-v4`：两条中文文本返回 HTTP 200、1024 维向量。该模型单次最多接收 10 条文本，因此评估批量大小固定为 10。
+- Qwen Candidate B Run `cer_BWVjZC6Z4gMhEWyr` 已对同一冻结评估集完成：Precision@K `0.0125`（`-0.0125`）、Recall@K `0.10`（`-0.10`）、MRR `0.0625`（`-0.01583`）；30 次请求、293 个输入、81,765 tokens、1024 维，provider latency `10.56s`。
+- Qwen Candidate B 的 P@K、R@K 与 MRR 均低于 Baseline，因此同样不进入 shadow index。火山 Candidate A 的召回更高但排序更差，Qwen Candidate B 的排序降幅较小但召回明显下降；两者都不能替代当前 baseline。
 
 ## 2026-08-14 Plan Version 与跨 Run Replay 部署记录
 
@@ -292,6 +316,15 @@ Runtime 默认值：每 run 2 个并发 task、每 workspace 2 个活跃研究 r
 - 浏览器端实际走通“导入 pending → 管理员批准 → active/可检索”；顶部资产统计与同一客户端资产状态同步更新。1280 桌面和 390×844 移动端均无横向溢出、框架错误覆盖层或 console error/warn，QA 资产已在验证后清理。
 - 隔离 PostgreSQL 15 完整迁移链 smoke 已通过：pending 排除、approve 后召回、新版本重新待审、reject 排除、provenance/hash、1 条人工关系、5 条资产事件、3 个自动候选和 2 条 Persona→Report 关系均已验证；同一批产物再次提议新增数为 0。
 - 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated context-asset-flywheel`，仅允许 localhost / `127.0.0.1` 数据库。
+
+## 2026-08-17 Research Template 与 Knowledge Gap 部署记录
+
+- 远端已在单事务应用 `20260817010000_research_template_knowledge_gaps.sql`；新增候选 SHA-256 去重键、`exclude_on_expiry` 策略、工作区/类型唯一索引和 `resolved_by` 关系，没有改写既有 Report、Run、Plan 或 Persona。
+- 每个完成研究从锁定的 Study/Plan/Workflow 生成一份 `research-template-v1`，从最终报告最多提取 6 个 `nextQuestions` 与 6 个 `limitations` 作为 `knowledge-gap-v1`。模板保留 365 天，Gap 保留 180 天，全部默认 `draft + pending`。
+- 去重签名排除 Study/Report ID；相同候选不重复创建，只增加到新 Report 的 `derived_from` 关系和 `candidate.duplicate_detected` 审计。过期候选先归档，后续研究才可提出替代版本。
+- 管理员不能批准已过期候选；批准后的模板可参与 `intent_planning` Context。Knowledge Gap 以 `resolved_by` 绑定一份 active 证据资产后自动归档，并保留解决事件。
+- 幂等回填读取 7 份真实历史 Report 及其锁定 Plan/Workflow，生成 7 个模板和 84 个 Gap，全部仍待人工审核；首次试跑超出每类 6 条上限的 6 个未审核生成候选已删除，可从原 Report 重建。再次回填 `proposed=0`、`duplicates=91`；生产库重复审计事件在回填前后均为 91 条，重复扫描不会继续写入同一候选、Study、Report 组合的审计事件。
+- 隔离完整迁移链 smoke 验证首次 7 个候选、重复新增 0、4 次去重审计、模板批准后可检索、Gap 解决归档、过期审批拒绝以及 4 条来源边；命令仍为 `pnpm smoke:isolated context-asset-flywheel`。
 
 ## 2026-08-15 Evidence-grounded Persona 部署与验收记录
 
@@ -369,6 +402,24 @@ Runtime 默认值：每 run 2 个并发 task、每 workspace 2 个活跃研究 r
 - 已通过 `scripts/import-zenodo-llm-interviews.ts` 导入 Zenodo `10.5281/zenodo.17484327` 的 20 份英文访谈转录。记录为开放访问、CC BY 4.0，发布说明明确该数据已匿名化且参与者明确同意公开匿名数据。
 - 导入器在写入前核验元数据的开放访问/许可/匿名化/明确同意声明、完整 `P1` 至 `P20` 文件清单、每个发布方 MD5、字节大小以及邮箱/电话/URL 基础 PII 模式；每份资产保留精确 Zenodo 文件 URL、文件名和内容 hash。重复执行按 `source_uri` 跳过既有资产。
 - 工作区目前有 20 个 `approved + active` 的真人研究样本资产、273 个可检索 chunk、0 条人工 relevance case。样本已经具备人工标注的来源基础，但任何检索相关性判断仍必须由授权研究人员在 `/context` 工作台中逐条确认。
+
+## 2026-08-16 Workspace API access 部署记录
+
+- 已应用 `20260816090000_scoped_api_access.sql`；新增 `workspace_api_keys` 和 `external_api_audit_events`。这次变更不创建、修改或伪造业务数据。
+- API 密钥仅保存 SHA-256 哈希，明文仅在创建成功响应中返回一次；密钥身份、workspace、scope 和创建时间不可变，可单向撤销。
+- 已实现 `/account` 管理界面：创建、scope 选择、过期日期、一次性复制和撤销。管理员以外的角色不能查看密钥。
+- 已实现最小外部 REST：`/api/v1/context/search`、`/api/v1/personas`、`/api/v1/studies`、Study 确认/详情、Run 状态/产物和取消。每个请求都按所需 scope 鉴权并记录审计，不使用浏览器 Cookie。
+- `pnpm lint` 与 `pnpm build` 已通过；未携带 API key 请求统一返回 `401 invalid_api_key`。`POST /api/mcp` 使用无状态 Streamable HTTP，连接鉴权与每个 tool 的 scope 判断分开。
+
+## 2026-08-17 P4 平台化收口验收记录
+
+- 本地 PostgreSQL 隔离环境已重新运行完整迁移链和全部 17 个 smoke 场景；Experiment Comparison、Evidence Graph、Reasoning、Source Connector、Task Recovery、Interview Metrics、Context、Persona、Skill、Intent/Workflow、Market Insight 与 API Access 均通过。旧 Experiment Comparison fixture 已补齐当前 Context source/version hash 约束，避免用旧 schema 产生伪通过。
+- 新增 `api-access` 端到端 smoke，通过真实本地 Next Route Handler 和 MCP Streamable HTTP 验证：API key 只保存 SHA-256、REST scope 允许/拒绝、跨 workspace 隔离、MCP tool 独立 scope、撤销、过期、成员移除与 `authorized/scope_denied/revoked/expired/membership_revoked` 审计结果。
+- MCP 连接允许多个候选 scope 时，外部审计现在记录实际命中的 scope；未命中时仍记录第一个要求 scope 和 `scope_denied`，不再把 `studies:read` 连接错误记为 `context:read`。
+- `/account` 的 API key 创建与撤销增加客户端即时状态同步；一次性 secret 仍只显示一次，服务端汇总通过 `router.refresh()` 收敛。网络失败和剪贴板拒绝会显示明确错误，不再留下未处理异常。
+- Browser 实测 1280×900 桌面和 390×844 移动端：页面身份、非空内容、创建表单、创建后即时出现、撤销后即时失效、无横向溢出、无框架错误覆盖层、console error/warn 均通过；测试账号、工作区与密钥已在验收后删除。
+- `pnpm lint`、`pnpm exec tsc --noEmit`、`pnpm build` 和无费用的 `pnpm smoke:report-routing` 已通过。`smoke:deepseek-provider` 与 `smoke:report-provider` 会调用真实付费 Provider，本次未设置确认变量，因此不把真实 Plan/Research/Report/Judge 调用列为已验收。
+- 可重复 API/MCP 命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated api-access`，仅允许 localhost / `127.0.0.1` 数据库。
 
 ## 验收标准
 

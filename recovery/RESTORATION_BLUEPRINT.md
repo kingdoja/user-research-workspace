@@ -570,7 +570,8 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 - [ ] 大体积原始内容迁入对象存储；当前 MVP 在 PostgreSQL 保存受大小上限约束的原始正文、hash、locator 和权限元数据。
 - [x] Context 增加 `hybrid_v1`、版本化 retrieval evaluation dataset、tombstone/reindex 和历史 snapshot 保留。
 - [x] 研究报告与新生成 Persona 自动形成带 origin/provenance 的待审核 Context 候选；批准前不进入检索，重试不重复创建。
-- [x] 从报告证据图生成 evidence-grounded Persona，并增加显式保留/淘汰策略；仅允许 Evidence locator 精确匹配，历史 Persona 保留 `ungrounded`，研究模板和 knowledge gap 仍不自动沉淀。
+- [x] 从报告证据图生成 evidence-grounded Persona，并增加显式保留/淘汰策略；仅允许 Evidence locator 精确匹配，历史 Persona 保留 `ungrounded`。
+- [x] 从锁定 Workflow 与最终 Report 自动提出 Research Template / Knowledge Gap；使用待审核、内容指纹去重、来源边、365/180 天有效期和 `resolved_by` 解决归档治理，不自动批准；重复候选审计按候选、Study、Report 组合保持幂等。
 - [x] 将 Core/Working/Team Memory 统一到 Context Asset；实现用途、主体、有效期、审核和不可变 policy version，Working Memory 只能基于已审核观察晋升为 pending Core/Team 候选。
 - [x] 建立授权 source 的版本化 Agent Eval 和可回放动态 Context retrieval：自动 judge 与人工标签分离，Reasoning 只在不足、冲突或时效到期时受预算上限控制地刷新 Context。
 - [x] 建立人工 relevance 标注工作台和合法来源门禁；标签保存标注人、时间、理由及不可变来源快照，历史未验证 case 不回填为人工标签。
@@ -582,7 +583,8 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 - [x] 受控 HTTP JSON / MCP Streamable HTTP client executor、工作区启停与 Run 级版本锁定。
 - [x] Market Insight 第二产品线复用同一 Intent/Plan/Workflow/Run/Skill/Context 契约，并以独立模板、任务图和输出契约锁定到 Run。
 - [ ] Universal Agent 与通用代码 Skill sandbox；当前仅有声明式、受治理的远程 Skill 包。
-- 对外 MCP servers 和 scoped API keys。
+- [x] Workspace scoped API keys、哈希鉴权、精确 scope、撤销/过期和外部调用审计。
+- [x] 对外无状态 MCP server；复用 API key 契约，每个 tool 单独做 scope 判断。
 - 跨工作区的团队协作、委托管理和发布流；单工作区 Team Memory 与审核已完成。
 - 多 Provider 成本/质量路由和策略实验后台。
 - Fast Insight、Podcast、Sage 等第二产品线。
@@ -603,7 +605,7 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 - ReasoningDecision → 候选动作 → 动态任务/停止条件 → checkpoint replay 的确定性调度闭环。
 - Connector Run → Source Candidate → immutable Snapshot/hash → Observation → Evidence 的公开来源审计闭环。
 - Context Asset/Version → FTS + embedding baseline → Retrieval Snapshot → Evaluation Run 的可复现检索闭环，以及 tombstone/reindex 审计。
-- Approved Human Research Sample → Human Relevance Label → immutable source snapshot → Baseline/Candidate Gate 的人工检索评估闭环；当前真实数据仍为 0。
+- Approved Human Research Sample → Human Relevance Label → immutable source snapshot → Baseline/Candidate Gate 的人工检索评估闭环；20 条用户确认标签、Baseline、火山方舟与百炼 Candidate 均已完成，两个 Candidate 都未进入 shadow index。
 - Context Candidate → governance/review → active retrieval 的资产飞轮；研究报告与 synthetic Persona 具备 origin 幂等、来源 hash、受控关系和事件审计。
 - Persona → exact Evidence locator → Claim → grounding summary → retention/expiry governance 的可审计复用闭环；Context 批准与 Persona 保留互不替代。
 - Context Asset → Memory Binding → Purpose Policy → Retrieval Decision 的排序前门禁，以及 Working Memory → approved Observation → pending Core/Team candidate 的双重审核闭环。
@@ -611,6 +613,7 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 - `.skill` / `SKILL.md` → submitted → immutable capability grants → approved/active → health/revoke 的声明式包治理闭环；secret 仅引用环境变量，Run 绑定快照保留授权范围。
 - Brief → governed `intent_planning` Retrieval Snapshot → immutable Intent Version → confirmed Plan Version → compiled WorkflowDefinition → Run 的版本锁定闭环；Runtime 从锁定任务图执行，Replay 分开展示 Planning/Execution Context。
 - Product Line → Intent/Plan snapshot → Research 或 Market Insight WorkflowDefinition → 同一 Runtime/SkillInvocation/Replay 的跨业务线复用闭环；Market Insight 默认排除 Persona 与合成访谈。
+- Completed Study → locked Workflow / final Report → pending Template / Gap → review / dedupe / expiry / resolution → governed Context reuse 的研究资产闭环；7 个历史模板和 84 个 Gap 已回填但仍待人工审核。
 
 下一批最值得做的工作，按收益排序：
 
@@ -620,9 +623,10 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 4. [x] 增加 Market Insight 第二条 workflow，用真实复用验证 `WorkflowDefinition + RuntimeContext + SkillInvocation` 是通用契约，而不是提前重写 Runtime。
 5. [x] 在现有 Skill Gateway 上增加 `.skill` / `SKILL.md` 导入导出、capability grants、签名声明/撤销、executor health probe 和 scoped credential reference；任意代码沙箱继续后置。
 6. [x] 建立授权 source 的“虚构引用”和“Persona 回答趋同”Agent Eval 契约，并让 Reasoning 在不足、冲突或时效到期时产生可回放的动态 Context retrieval；真实黄金样本仍须经独立审批后导入。
-7. [ ] 从合法真实研究样本建立至少 20 个分层人工 relevance case；已导入 20 份 CC BY 4.0、匿名化且明确同意发布的英文访谈转录（273 个可标注 chunk），但人工 case 仍为 0，不引入 pgvector/HNSW。
-8. [ ] 自动沉淀研究模板和 knowledge gap，但先定义审核、重复检测和过期策略。
-9. [ ] `.skill` 治理和第二产品线稳定后，再开放对外 MCP server、scoped API keys 与团队发布流。
+7. [x] 从 20 份 CC BY 4.0、匿名化且明确同意发布的英文访谈转录建立 20 条 relevance case。用户已确认将 P4 替换为直接说明回答质量判断标准的 `cxc_WNmfyFvjo3GckbgA`；新评估集 `ces_gDD0245-3Ua1zruu` 与 Baseline Run `cer_Vkm2YEc8flA4n86Q` 已创建，Precision@K 为 `0.025`、Recall@K 为 `0.20`、MRR 为 `0.0783`。旧集 `ces_QOFfpNrsvXkfX5aw` 已归档供历史复现。
+8. [x] 已完成两种生产 embedding 候选的同集对照。火山方舟 `Doubao-embedding-vision 251215` Run `cer_jEggoOiHVMtdO4df` 的 P@K `0.03125`、R@K `0.25`、MRR `0.04762`；百炼 `text-embedding-v4` Run `cer_BWVjZC6Z4gMhEWyr` 的 P@K `0.0125`、R@K `0.10`、MRR `0.0625`。两者均未通过 MRR `+0.03` 且 P@K/R@K 不下降的门槛，因此不开启 pgvector/HNSW。
+9. [x] 自动沉淀研究模板和 Knowledge Gap：管理员审核、SHA-256 内容指纹去重、模板 365 天/Gap 180 天过期退出检索、`resolved_by` 解决归档均已实现；7 份历史报告已幂等回填 7 个模板和 84 个 Gap，全部待审核。
+10. [x] `.skill` 治理和第二产品线稳定后，已开放 workspace scoped API keys 和无状态 MCP server；团队发布流仍待完成。
 
 不建议现在做：
 

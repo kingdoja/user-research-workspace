@@ -21,6 +21,7 @@ export async function PATCH(
   if (result === "not_found") return NextResponse.json({ error: "Context asset 不存在" }, { status: 404 });
   if (result === "forbidden") return NextResponse.json({ error: "只有工作区管理员可以审核资产" }, { status: 403 });
   if (result === "tombstoned") return NextResponse.json({ error: "已下架资产不能审核" }, { status: 409 });
+  if (result === "expired") return NextResponse.json({ error: "候选已过期，不能批准；请等待新研究提出替代版本" }, { status: 409 });
   return NextResponse.json(result);
 }
 

@@ -167,18 +167,86 @@ async function main() {
         publicId: `rpt_${suffix}`,
         title: "通勤研究报告",
         executiveSummary: "研究发现雨天时直达性比总时长更重要。",
-        content: { finding: "直达性优先", evidenceRefs: [pending.publicId] },
+        content: {
+          finding: "直达性优先",
+          evidenceRefs: [pending.publicId],
+          nextQuestions: ["不同城区的换乘距离是否改变雨天直达偏好？", "极端天气下等待时间与直达性如何权衡？"],
+          limitations: ["当前样本未覆盖夜间轮班通勤者，需要补充验证。"],
+        },
       },
       personas: [
         { publicId: `per_commuter_${suffix}`, name: "稳定通勤者", profile: { preference: "直达公交" } },
         { publicId: `per_flexible_${suffix}`, name: "弹性通勤者", profile: { preference: "动态改道" } },
       ],
+      study: {
+        brief: "研究雨天通勤决策",
+        studyType: "user_research",
+        framework: "Jobs to be Done",
+        methods: ["Interview Chat"],
+        audience: "城市公共交通通勤者",
+        personaCount: 2,
+        workflowType: "batch_research",
+        workflowVersion: "research-dag-v3-dynamic",
+        taskGraph: [
+          { key: "interviews", title: "访谈", toolName: "run_interviews", dependsOn: [] },
+          { key: "report", title: "报告", toolName: "generate_report", dependsOn: ["interviews"] },
+        ],
+      },
     };
     const firstProposal = await database.transaction((transaction) => proposeStudyContextCandidates(transaction, proposalInput));
     const repeatedProposal = await database.transaction((transaction) => proposeStudyContextCandidates(transaction, proposalInput));
-    assert.equal(firstProposal.proposed, 3);
+    const thirdProposal = await database.transaction((transaction) => proposeStudyContextCandidates(transaction, proposalInput));
+    assert.equal(firstProposal.proposed, 7);
     assert.equal(repeatedProposal.proposed, 0);
+    assert.equal(repeatedProposal.duplicates, 4);
+    assert.equal(thirdProposal.proposed, 0);
+    assert.equal(thirdProposal.duplicates, 4);
+    assert.equal(firstProposal.knowledgeGapAssetPublicIds.length, 3);
     assert.equal(repeatedProposal.reportAssetPublicId, firstProposal.reportAssetPublicId);
+
+    const approvedTemplate = await reviewContextAsset(viewer, firstProposal.templateAssetPublicId, {
+      action: "approve",
+      note: "方法、任务图和适用范围已复核",
+    });
+    assert.equal(typeof approvedTemplate, "object");
+    const retrievedTemplate = await retrieveContext({
+      workspaceId: viewer.workspaceId,
+      userId: viewer.userId,
+      query: "Jobs to be Done Interview Chat research template",
+      purpose: "intent_planning",
+      limit: 10,
+      audit: false,
+    });
+    assert(retrievedTemplate.citations.some((item) => item.assetPublicId === firstProposal.templateAssetPublicId));
+
+    const resolvedGapPublicId = firstProposal.knowledgeGapAssetPublicIds[0];
+    const approvedGap = await reviewContextAsset(viewer, resolvedGapPublicId, {
+      action: "approve",
+      note: "问题范围清晰，进入研究积压",
+    });
+    assert.equal(typeof approvedGap, "object");
+    const resolution = await createContextEdge(viewer, resolvedGapPublicId, {
+      targetPublicId: related.publicId,
+      relation: "resolved_by",
+      note: "方法说明补齐该问题的验证设计",
+    });
+    assert.equal(typeof resolution, "object");
+    const resolvedGap = await database.query<{ status: string }>(
+      "select status from context_assets where public_id = $1",
+      [resolvedGapPublicId],
+    );
+    assert.equal(resolvedGap.rows[0].status, "archived");
+
+    const expiredGapPublicId = firstProposal.knowledgeGapAssetPublicIds[1];
+    await database.query(
+      "update context_assets set retention_expires_at = now() - interval '1 day' where public_id = $1",
+      [expiredGapPublicId],
+    );
+    const expiredApproval = await reviewContextAsset(viewer, expiredGapPublicId, {
+      action: "approve",
+      note: "不应通过",
+    });
+    assert.equal(expiredApproval, "expired");
 
     const persisted = await database.query<{
       status: string; review_status: string; ingestion_method: string; source_name: string;
@@ -225,7 +293,39 @@ async function main() {
        where workspace_id = $1 and origin_public_id in ($2, $3, $4)`,
       [viewer.workspaceId, proposalInput.report.publicId, ...proposalInput.personas.map((item) => item.publicId)],
     );
-    assert.deepEqual(proposalCounts.rows[0], { assets: 3, pending: 3, persona_edges: 2 });
+    assert.deepEqual(proposalCounts.rows[0], { assets: 4, pending: 3, persona_edges: 2 });
+
+    const governedCandidates = await database.query<{
+      templates: number; gaps: number; dedupe_keys: number; duplicate_events: number;
+      resolved_events: number; derived_edges: number;
+    }>(
+      `select
+         count(*) filter (where asset_type = 'research_template')::int as templates,
+         count(*) filter (where asset_type = 'knowledge_gap')::int as gaps,
+         count(candidate_dedupe_key)::int as dedupe_keys,
+         (select count(*)::int from context_asset_events event
+          join context_assets candidate on candidate.id = event.asset_id
+          where candidate.workspace_id = $1 and event.event_type = 'candidate.duplicate_detected') as duplicate_events,
+         (select count(*)::int from context_asset_events event
+          join context_assets candidate on candidate.id = event.asset_id
+          where candidate.workspace_id = $1 and event.event_type = 'knowledge_gap.resolved') as resolved_events,
+         (select count(*)::int from context_edges edge
+          join context_assets candidate on candidate.id = edge.from_asset_id
+          where candidate.workspace_id = $1
+            and candidate.asset_type in ('research_template', 'knowledge_gap')
+            and edge.relation = 'derived_from') as derived_edges
+       from context_assets where workspace_id = $1
+         and asset_type in ('research_template', 'knowledge_gap')`,
+      [viewer.workspaceId],
+    );
+    assert.deepEqual(governedCandidates.rows[0], {
+      templates: 1,
+      gaps: 3,
+      dedupe_keys: 4,
+      duplicate_events: 4,
+      resolved_events: 1,
+      derived_edges: 4,
+    });
 
     console.log(JSON.stringify({
       pendingExcluded: true,
@@ -237,6 +337,12 @@ async function main() {
       eventCount: persisted.rows[0].events,
       automaticProposals: firstProposal.proposed,
       repeatedProposals: repeatedProposal.proposed,
+      thirdProposals: thirdProposal.proposed,
+      duplicateCandidates: repeatedProposal.duplicates,
+      approvedTemplateRetrieved: true,
+      resolvedKnowledgeGapArchived: true,
+      expiredKnowledgeGapRejected: true,
+      governedCandidates: governedCandidates.rows[0],
       personaEdges: proposalCounts.rows[0].persona_edges,
     }, null, 2));
   } finally {

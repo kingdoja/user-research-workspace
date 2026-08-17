@@ -95,7 +95,11 @@ export function classifyTaskError(error: unknown): TaskFailure {
   if (
     described.status === 408 || described.status === 409 || described.status === 425
     || (typeof described.status === "number" && described.status >= 500)
-    || messageIncludes(error, "APIConnection", "ECONN", "ETIMEDOUT", "OPENAI_INVALID_JSON", "UPSTREAM_INCOMPATIBLE_RESPONSE")
+    || messageIncludes(
+      error,
+      "APIConnection", "ECONN", "ETIMEDOUT", "OPENAI_INVALID_JSON",
+      "OPENAI_INVALID_SCHEMA", "UPSTREAM_INCOMPATIBLE_RESPONSE",
+    )
   ) {
     return { className: described.status && described.status >= 500 ? "upstream" : "response", code: described.code, message: described.message, retryable: true, disposition: "retry" };
   }

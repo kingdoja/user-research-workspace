@@ -16,6 +16,8 @@ export async function POST(
     const result = await runContextEvaluation(viewer, (await params).publicId, parsed.data);
     if (result === "forbidden") return NextResponse.json({ error: "只有管理员可以运行检索评估" }, { status: 403 });
     if (result === "not_found") return NextResponse.json({ error: "检索评估集不存在" }, { status: 404 });
+    if (result === "insufficient_human_labels") return NextResponse.json({ error: "检索评估至少需要 20 条人工确认标签" }, { status: 422 });
+    if (result === "embedding_endpoint_not_configured") return NextResponse.json({ error: "候选 embedding Provider 未配置。请设置独立的 OPENAI_EMBEDDING_BASE_URL 和匹配的 CONTEXT_EMBEDDING_API_STYLE" }, { status: 503 });
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof Error && error.message === "OPENAI_EMBEDDING_API_KEY_MISSING") {

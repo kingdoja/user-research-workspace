@@ -190,7 +190,10 @@ export async function evaluateReasoningCheckpoint(queryable: Queryable, input: {
   const tokenUsage = tasks.reduce((sum, task) => sum + outputTokens(task.output), 0);
   const dynamicTaskCount = tasks.filter((task) => task.origin === "dynamic").length;
   const unfinished = tasks.filter((task) => task.status !== "completed" && task.status !== "skipped");
-  const reportCompleted = tasks.some((task) => task.key === "report" && task.status === "completed");
+  const finalReportTask = tasks.find((task) => task.toolName === "finalizeReport");
+  const reportCompleted = finalReportTask
+    ? finalReportTask.status === "completed"
+    : tasks.some((task) => task.key === "report" && task.status === "completed");
   const researchComplete = researchTasks.length > 0 && researchTasks.every((task) => task.status === "completed" || task.status === "skipped");
   const latestCompleted = tasks.filter((task) => task.status === "completed").at(-1);
   const expansionCheckpoint = latestCompleted?.toolName === "deepResearch" || latestCompleted?.toolName === "scoutSocialTrends";

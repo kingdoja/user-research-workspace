@@ -61,15 +61,20 @@ async function main() {
       );
       const variantIds = new Map(variants.rows.map((variant) => [variant.variant_key, variant.id]));
 
+      const contextContentHash = "a".repeat(64);
       const asset = await transaction.query<{ id: string }>(
-        `insert into context_assets (public_id, workspace_id, created_by, asset_type, scope, title)
-         values ($1, $2, $3, 'research_sample', 'workspace', '访谈策略规范') returning id::text as id`,
-        [`ctx_${suffix}`, row.workspace_id, row.user_id],
+        `insert into context_assets (
+           public_id, workspace_id, created_by, asset_type, scope, title, source_hash
+         ) values ($1, $2, $3, 'research_sample', 'workspace', '访谈策略规范', $4)
+         returning id::text as id`,
+        [`ctx_${suffix}`, row.workspace_id, row.user_id, contextContentHash],
       );
       const version = await transaction.query<{ id: string }>(
-        `insert into context_asset_versions (public_id, asset_id, version, content, created_by)
-         values ($1, $2, 1, '{"text":"先确认事实，再进行开放追问。"}'::jsonb, $3) returning id::text as id`,
-        [`ctv_${suffix}`, asset.rows[0].id, row.user_id],
+        `insert into context_asset_versions (
+           public_id, asset_id, version, content, created_by, content_hash
+         ) values ($1, $2, 1, '{"text":"先确认事实，再进行开放追问。"}'::jsonb, $3, $4)
+         returning id::text as id`,
+        [`ctv_${suffix}`, asset.rows[0].id, row.user_id, contextContentHash],
       );
       const chunk = await transaction.query<{ id: string }>(
         `insert into context_chunks (public_id, asset_version_id, ordinal, content)

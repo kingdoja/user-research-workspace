@@ -16,8 +16,12 @@ import {
 import { buildReportEvidenceCatalog, formatReportEvidenceCatalog } from "@/lib/report-evidence";
 
 const DEFAULT_MODEL = "gpt-5.6-terra";
+const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
+const DEFAULT_DEEPSEEK_REASONING_MODEL = "deepseek-v4-pro";
 const PLAN_PROMPT_VERSION = "study-plan-v1";
 export const REPORT_PROMPT_VERSION = "synthetic-panel-research-v2-evidence-graph";
+export const REPORT_JUDGE_PROMPT_VERSION = "research-report-judge-v1";
+export const REPORT_REVISION_PROMPT_VERSION = "research-report-revision-v1";
 const FOLLOWUP_PROMPT_VERSION = "report-followup-v3";
 const INTERVIEW_PROMPT_VERSION = "synthetic-interview-v1";
 export const REALTIME_INTERVIEW_PROMPT_VERSION = "realtime-interview-v1";
@@ -84,6 +88,25 @@ const reportSchema = z.object({
   })).min(3),
   limitations: z.array(z.string().min(10)).min(1),
   nextQuestions: z.array(z.string().min(10)).min(2),
+});
+
+const reportQualityReviewSchema = z.object({
+  verdict: z.enum(["approved", "revise"]),
+  score: z.number().int().min(0).max(100),
+  summary: z.string().min(20).max(1200),
+  issues: z.array(z.object({
+    severity: z.enum(["high", "medium", "low"]),
+    category: z.enum([
+      "unsupported_claim",
+      "evidence_mismatch",
+      "missing_counterevidence",
+      "synthetic_overstatement",
+      "actionability",
+      "structure",
+    ]),
+    description: z.string().min(20).max(800),
+    recommendation: z.string().min(20).max(800),
+  })).max(12),
 });
 
 const followupAnswerSchema = z.object({
@@ -509,6 +532,42 @@ const reportJsonSchema = {
   additionalProperties: false,
 } as const;
 
+const reportQualityReviewJsonSchema = {
+  type: "object",
+  properties: {
+    verdict: { type: "string", enum: ["approved", "revise"] },
+    score: { type: "integer", minimum: 0, maximum: 100 },
+    summary: { type: "string", minLength: 20, maxLength: 1200 },
+    issues: {
+      type: "array",
+      maxItems: 12,
+      items: {
+        type: "object",
+        properties: {
+          severity: { type: "string", enum: ["high", "medium", "low"] },
+          category: {
+            type: "string",
+            enum: [
+              "unsupported_claim",
+              "evidence_mismatch",
+              "missing_counterevidence",
+              "synthetic_overstatement",
+              "actionability",
+              "structure",
+            ],
+          },
+          description: { type: "string", minLength: 20, maxLength: 800 },
+          recommendation: { type: "string", minLength: 20, maxLength: 800 },
+        },
+        required: ["severity", "category", "description", "recommendation"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["verdict", "score", "summary", "issues"],
+  additionalProperties: false,
+} as const;
+
 const panelResearchJsonSchema = {
   type: "object",
   properties: {
@@ -610,7 +669,16 @@ export type ProviderStudyPlan = z.infer<typeof planSchema> & {
 };
 
 export type ResearchReport = z.infer<typeof reportSchema>;
+export type ReportQualityReview = z.infer<typeof reportQualityReviewSchema>;
 export type SyntheticPanelResearch = z.infer<typeof panelResearchSchema>;
+
+export type ProviderReportQualityReview = ReportQualityReview & {
+  responseId: string;
+  model: string;
+  provider: string;
+  promptVersion: string;
+  usage: unknown;
+};
 
 export type ResearchProgressEvent = {
   type: string;
@@ -704,6 +772,9 @@ export type ProviderRealtimeInterviewTurn = z.infer<typeof realtimeInterviewTurn
 let client: OpenAI | null = null;
 let deepSeekClient: OpenAI | null = null;
 
+export type ProviderStage = "plan" | "research" | "reasoning" | "report" | "judge" | "followup";
+type ProviderProtocol = "responses" | "chat_completions";
+
 type ConversationMessage = {
   role: "user" | "assistant" | "system" | "developer";
   content: string;
@@ -762,30 +833,110 @@ function getDeepSeekClient() {
   return deepSeekClient;
 }
 
+function configuredProvider(stage: ProviderStage) {
+  if (stage === "followup") return "deepseek";
+  const variable = stage === "plan"
+    ? process.env.PLAN_PROVIDER
+    : stage === "research"
+      ? process.env.RESEARCH_PROVIDER
+      : stage === "reasoning"
+        ? process.env.REASONING_PROVIDER ?? process.env.RESEARCH_PROVIDER
+        : stage === "report"
+          ? process.env.REPORT_PROVIDER
+          : process.env.REPORT_JUDGE_PROVIDER ?? process.env.REASONING_PROVIDER ?? process.env.RESEARCH_PROVIDER;
+  return variable?.trim().toLowerCase() || process.env.OPENAI_PROVIDER_NAME?.trim().toLowerCase() || "openai";
+}
+
+function usesDeepSeek(stage: ProviderStage) {
+  return configuredProvider(stage) === "deepseek";
+}
+
+function getProviderName(stage: ProviderStage) {
+  return configuredProvider(stage);
+}
+
+function isProviderConfigured(stage: ProviderStage) {
+  return usesDeepSeek(stage)
+    ? Boolean(process.env.DEEPSEEK_API_KEY?.trim())
+    : Boolean(process.env.OPENAI_API_KEY?.trim());
+}
+
+function getRequiredApiKey(stage: ProviderStage) {
+  return usesDeepSeek(stage) ? "DEEPSEEK_API_KEY" : "OPENAI_API_KEY";
+}
+
+function getStageModel(stage: ProviderStage) {
+  if (usesDeepSeek(stage)) {
+    if (stage === "plan") {
+      return process.env.DEEPSEEK_PLAN_MODEL?.trim()
+        || process.env.DEEPSEEK_FAST_MODEL?.trim()
+        || process.env.DEEPSEEK_MODEL?.trim()
+        || DEFAULT_DEEPSEEK_MODEL;
+    }
+    if (stage === "research") {
+      return process.env.DEEPSEEK_RESEARCH_MODEL?.trim()
+        || process.env.DEEPSEEK_FAST_MODEL?.trim()
+        || process.env.DEEPSEEK_MODEL?.trim()
+        || DEFAULT_DEEPSEEK_MODEL;
+    }
+    if (stage === "followup") {
+      return process.env.DEEPSEEK_FOLLOWUP_MODEL?.trim()
+        || process.env.DEEPSEEK_FAST_MODEL?.trim()
+        || process.env.DEEPSEEK_MODEL?.trim()
+        || DEFAULT_DEEPSEEK_MODEL;
+    }
+    if (stage === "report") {
+      return process.env.DEEPSEEK_REPORT_MODEL?.trim()
+        || process.env.DEEPSEEK_REASONING_MODEL?.trim()
+        || process.env.DEEPSEEK_MODEL?.trim()
+        || DEFAULT_DEEPSEEK_REASONING_MODEL;
+    }
+    return process.env.REPORT_JUDGE_MODEL?.trim()
+      || process.env.DEEPSEEK_REASONING_MODEL?.trim()
+      || process.env.DEEPSEEK_MODEL?.trim()
+      || DEFAULT_DEEPSEEK_REASONING_MODEL;
+  }
+  if (stage === "plan") return process.env.OPENAI_PLAN_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+  if (stage === "research") return process.env.OPENAI_RESEARCH_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+  if (stage === "reasoning") return process.env.REASONING_MODEL?.trim() || process.env.OPENAI_RESEARCH_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+  if (stage === "report") return process.env.REPORT_MODEL?.trim() || process.env.OPENAI_RESEARCH_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+  if (stage === "judge") return process.env.REPORT_JUDGE_MODEL?.trim() || process.env.REASONING_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+  return process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+}
+
 function getPlanModel() {
-  return process.env.OPENAI_PLAN_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+  return getStageModel("plan");
 }
 
 function getResearchModel() {
-  return process.env.OPENAI_RESEARCH_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+  return getStageModel("research");
 }
 
 function getFollowupModel() {
-  return process.env.DEEPSEEK_FOLLOWUP_MODEL?.trim() || "deepseek-v4-flash";
+  return getStageModel("followup");
 }
 
-function getApiProtocol() {
-  return process.env.OPENAI_API_PROTOCOL?.trim() === "chat_completions"
+function getApiProtocol(stage: ProviderStage): ProviderProtocol {
+  const configured = usesDeepSeek(stage)
+    ? process.env.DEEPSEEK_API_PROTOCOL
+    : process.env.OPENAI_API_PROTOCOL;
+  return configured?.trim() === "chat_completions"
     ? "chat_completions" as const
     : "responses" as const;
 }
 
+function getProviderClient(stage: ProviderStage) {
+  return usesDeepSeek(stage) ? getDeepSeekClient() : getClient();
+}
+
 async function createStructuredResponse(
+  stage: ProviderStage,
   request: StructuredResponseRequest,
   options?: { timeout?: number; maxRetries?: number; signal?: AbortSignal },
 ): Promise<StructuredResponse> {
-  if (getApiProtocol() === "chat_completions") {
-    const completion = await getClient().chat.completions.create({
+  const providerClient = getProviderClient(stage);
+  if (getApiProtocol(stage) === "chat_completions") {
+    const completion = await providerClient.chat.completions.create({
       model: request.model,
       messages: [
         { role: "system", content: request.instructions },
@@ -793,7 +944,9 @@ async function createStructuredResponse(
           ? [{ role: "user" as const, content: request.input }]
           : request.input),
       ],
-      reasoning_effort: request.reasoning?.effort,
+      ...(!usesDeepSeek(stage) && request.reasoning?.effort
+        ? { reasoning_effort: request.reasoning.effort }
+        : {}),
       response_format: {
         type: "json_schema",
         json_schema: {
@@ -866,7 +1019,15 @@ async function createStructuredResponse(
     };
   }
 
-  const response = await getClient().responses.create(request, options);
+  const response = usesDeepSeek(stage)
+    ? await providerClient.responses.create({
+        model: request.model,
+        reasoning: request.reasoning,
+        instructions: request.instructions,
+        input: request.input,
+        text: request.text,
+      }, options)
+    : await providerClient.responses.create(request, options);
   return {
     id: response.id,
     model: response.model,
@@ -877,21 +1038,9 @@ async function createStructuredResponse(
 
 async function createDeepSeekStructuredResponse(
   request: StructuredResponseRequest,
-  options?: { timeout?: number; maxRetries?: number },
+  options?: { timeout?: number; maxRetries?: number; signal?: AbortSignal },
 ): Promise<StructuredResponse> {
-  const response = await getDeepSeekClient().responses.create({
-    model: request.model,
-    reasoning: request.reasoning,
-    instructions: request.instructions,
-    input: request.input,
-    text: request.text,
-  }, options);
-  return {
-    id: response.id,
-    model: response.model,
-    output_text: response.output_text,
-    usage: response.usage,
-  };
+  return createStructuredResponse("followup", request, options);
 }
 
 function safetyIdentifier(userPublicId: string) {
@@ -954,13 +1103,53 @@ async function retryProviderRequest<T>(request: () => Promise<T>) {
   }
 }
 
-export function getOpenAIProviderStatus() {
+export function getProviderStageStatus(stage: ProviderStage) {
   return {
-    providerName: process.env.OPENAI_PROVIDER_NAME?.trim() || "openai",
-    configured: Boolean(process.env.OPENAI_API_KEY?.trim()),
-    planModel: getPlanModel(),
-    researchModel: getResearchModel(),
-    protocol: getApiProtocol(),
+    stage,
+    providerName: getProviderName(stage),
+    configured: isProviderConfigured(stage),
+    requiredVariable: getRequiredApiKey(stage),
+    model: getStageModel(stage),
+    protocol: getApiProtocol(stage),
+  };
+}
+
+export function getOpenAIProviderStatus() {
+  const plan = getProviderStageStatus("plan");
+  const research = getProviderStageStatus("research");
+  const reasoning = getProviderStageStatus("reasoning");
+  const report = getProviderStageStatus("report");
+  const judge = getProviderStageStatus("judge");
+  return {
+    providerName: research.providerName,
+    configured: research.configured,
+    requiredVariable: research.requiredVariable,
+    planProviderName: plan.providerName,
+    planConfigured: plan.configured,
+    planRequiredVariable: plan.requiredVariable,
+    planModel: plan.model,
+    planProtocol: plan.protocol,
+    researchProviderName: research.providerName,
+    researchConfigured: research.configured,
+    researchRequiredVariable: research.requiredVariable,
+    researchModel: research.model,
+    researchProtocol: research.protocol,
+    reasoningProviderName: reasoning.providerName,
+    reasoningConfigured: reasoning.configured,
+    reasoningRequiredVariable: reasoning.requiredVariable,
+    reasoningModel: reasoning.model,
+    reasoningProtocol: reasoning.protocol,
+    reportProviderName: report.providerName,
+    reportConfigured: report.configured,
+    reportRequiredVariable: report.requiredVariable,
+    reportModel: report.model,
+    reportProtocol: report.protocol,
+    judgeProviderName: judge.providerName,
+    judgeConfigured: judge.configured,
+    judgeRequiredVariable: judge.requiredVariable,
+    judgeModel: judge.model,
+    judgeProtocol: judge.protocol,
+    protocol: research.protocol,
   };
 }
 
@@ -969,7 +1158,7 @@ export function getFollowupProviderStatus() {
     providerName: "deepseek",
     configured: Boolean(process.env.DEEPSEEK_API_KEY?.trim()),
     model: getFollowupModel(),
-    protocol: "responses" as const,
+    protocol: getApiProtocol("followup"),
     stateMode: "application_managed" as const,
   };
 }
@@ -995,7 +1184,7 @@ export function describeOpenAIError(error: unknown) {
   }
   if (error instanceof Error && error.message === "DEEPSEEK_API_KEY_MISSING") {
     return {
-      message: "服务器尚未配置 DEEPSEEK_API_KEY，报告追问暂不可用。",
+      message: "服务器尚未配置 DEEPSEEK_API_KEY，DeepSeek 模型服务暂不可用。",
       status: null,
       code: error.message,
       requestId: null,
@@ -1102,7 +1291,7 @@ export async function generateProviderStudyPlan(
   clarificationContext?: string,
 ): Promise<ProviderStudyPlan> {
   const model = getPlanModel();
-  const response = await createStructuredResponse({
+  const response = await createStructuredResponse("plan", {
     model,
     reasoning: { effort: "low" },
     safety_identifier: safetyIdentifier(userPublicId),
@@ -1166,7 +1355,7 @@ export async function generateProviderSyntheticInterviews(input: {
   // Some OpenAI-compatible gateways intermittently return a non-standard 666
   // response. Independent Persona requests keep retries small and isolated.
   for (const persona of input.personas) {
-    responses.push(await retryProviderRequest(() => createStructuredResponse({
+    responses.push(await retryProviderRequest(() => createStructuredResponse("research", {
       model,
       reasoning: { effort: "medium" },
       safety_identifier: safetyIdentifier(input.userPublicId),
@@ -1234,7 +1423,7 @@ export async function generateProviderRealtimeInterviewTurn(input: {
   const model = getResearchModel();
   const currentQuestion = input.fixedQuestions[input.currentQuestionPosition - 1] ?? "";
   const isLastQuestion = input.currentQuestionPosition >= input.fixedQuestions.length;
-  const response = await retryProviderRequest(() => createStructuredResponse({
+  const response = await retryProviderRequest(() => createStructuredResponse("research", {
     model,
     reasoning: { effort: "low" },
     safety_identifier: safetyIdentifier(input.participantSafetyId),
@@ -1534,7 +1723,7 @@ export async function researchPublicWeb(input: {
   additionalSeedUrls?: string[];
 }): Promise<ProviderResearchSources> {
   const model = getResearchModel();
-  const queryResponse = await createStructuredResponse({
+  const queryResponse = await createStructuredResponse("research", {
     model,
     reasoning: { effort: "low" },
     safety_identifier: safetyIdentifier(input.userPublicId),
@@ -1615,7 +1804,7 @@ export async function buildProviderPersonaPanel(input: {
   const panelEvidencePacket = sources.map((source, index) => (
     `[S${index + 1}] ${source.title}\n${source.excerpt.slice(0, 1200)}`
   )).join("\n\n");
-  const panelResponse = await createStructuredResponse({
+  const panelResponse = await createStructuredResponse("research", {
     model,
     reasoning: { effort: "medium" },
     safety_identifier: safetyIdentifier(input.userPublicId),
@@ -1699,7 +1888,7 @@ export async function generateProviderResearchInterviews(input: {
   const objective = input.batch === 1
     ? "换购触发、信息搜索、比较筛选和最终决策路径"
     : "真实使用体验、关键焦虑、场景变化和功能机会";
-  const response = await createStructuredResponse({
+  const response = await createStructuredResponse("research", {
     model: getResearchModel(),
     reasoning: { effort: "medium" },
     safety_identifier: safetyIdentifier(input.userPublicId),
@@ -1756,8 +1945,8 @@ export async function runProviderAudienceCall(input: {
   signal?: AbortSignal;
 }): Promise<ProviderDeepResearchValidation> {
   const selected = input.personas.slice(0, Math.min(3, input.personas.length));
-  const response = await createStructuredResponse({
-    model: getResearchModel(),
+  const response = await createStructuredResponse("reasoning", {
+    model: getStageModel("reasoning"),
     reasoning: { effort: "medium" },
     safety_identifier: safetyIdentifier(input.userPublicId),
     store: true,
@@ -1797,8 +1986,8 @@ export async function runProviderDiscussionChat(input: {
   signal?: AbortSignal;
 }): Promise<ProviderResearchDiscussion> {
   const participants = input.personas.slice(0, 10);
-  const response = await createStructuredResponse({
-    model: getResearchModel(),
+  const response = await createStructuredResponse("reasoning", {
+    model: getStageModel("reasoning"),
     reasoning: { effort: "high" },
     safety_identifier: safetyIdentifier(input.userPublicId),
     store: true,
@@ -1876,13 +2065,15 @@ export async function synthesizeProviderResearchReport(input: {
   report: ResearchReport;
   responseId: string;
   model: string;
+  provider: string;
+  promptVersion: string;
   usage: unknown;
 }> {
-  const model = getResearchModel();
+  const model = getStageModel("report");
   const evidenceCatalog = buildReportEvidenceCatalog(input);
   const evidencePacket = formatReportEvidenceCatalog(evidenceCatalog);
   const allowedEvidenceRefs = new Set(evidenceCatalog.map((item) => item.ref));
-  const response = await createStructuredResponse({
+  const response = await createStructuredResponse("report", {
     model,
     reasoning: { effort: "medium" },
     safety_identifier: safetyIdentifier(input.userPublicId),
@@ -1938,6 +2129,124 @@ export async function synthesizeProviderResearchReport(input: {
     report,
     responseId: response.id,
     model: response.model,
+    provider: getProviderName("report"),
+    promptVersion: REPORT_PROMPT_VERSION,
+    usage: response.usage,
+  };
+}
+
+export async function judgeProviderResearchReport(input: {
+  report: ResearchReport;
+  evidenceCatalog: ReturnType<typeof buildReportEvidenceCatalog>;
+  userPublicId: string;
+  studyPublicId: string;
+  signal?: AbortSignal;
+}): Promise<ProviderReportQualityReview> {
+  const response = await createStructuredResponse("judge", {
+    model: getStageModel("judge"),
+    reasoning: { effort: "high" },
+    safety_identifier: safetyIdentifier(input.userPublicId),
+    store: true,
+    metadata: {
+      surface: "research_report_quality_review",
+      prompt_version: REPORT_JUDGE_PROMPT_VERSION,
+      study_id: input.studyPublicId,
+    },
+    instructions: [
+      "你是独立的研究报告质量评审员。只审查报告，不重写报告。输出简体中文。",
+      "逐条核对 finding 的 evidenceRefs、claimType、confidence 与证据目录是否一致，重点识别无依据的事实、把 AI 合成模拟误写成真人研究、忽略反向证据以及无法执行的建议。",
+      "score 为 0 到 100 的整数。存在任何 high severity 问题，或存在两项及以上 medium severity 问题时，verdict 必须为 revise。",
+      "issues 只记录具体、可修订的问题。verdict 为 revise 时至少提供一项 issue；verdict 为 approved 时允许 issues 为空。",
+      "不得补充证据目录之外的新事实，也不得因为文风偏好要求无意义改写。",
+    ].join("\n"),
+    input: [
+      `待评审报告：\n${JSON.stringify(input.report)}`,
+      `允许使用的证据目录：\n${formatReportEvidenceCatalog(input.evidenceCatalog)}`,
+    ].join("\n\n"),
+    text: {
+      format: {
+        type: "json_schema",
+        name: "research_report_quality_review",
+        strict: true,
+        schema: reportQualityReviewJsonSchema,
+      },
+    },
+  }, { timeout: 180_000, signal: input.signal });
+  const review = parseOutput(response.output_text, reportQualityReviewSchema);
+  if (review.verdict === "revise" && review.issues.length === 0) {
+    throw new Error("OPENAI_INVALID_SCHEMA:issues:too_small");
+  }
+  return {
+    ...review,
+    responseId: response.id,
+    model: response.model,
+    provider: getProviderName("judge"),
+    promptVersion: REPORT_JUDGE_PROMPT_VERSION,
+    usage: response.usage,
+  };
+}
+
+export async function reviseProviderResearchReport(input: {
+  report: ResearchReport;
+  review: ReportQualityReview;
+  evidenceCatalog: ReturnType<typeof buildReportEvidenceCatalog>;
+  userPublicId: string;
+  studyPublicId: string;
+  signal?: AbortSignal;
+}): Promise<{
+  report: ResearchReport;
+  responseId: string;
+  model: string;
+  provider: string;
+  promptVersion: string;
+  usage: unknown;
+}> {
+  const allowedEvidenceRefs = new Set(input.evidenceCatalog.map((item) => item.ref));
+  const response = await createStructuredResponse("report", {
+    model: getStageModel("report"),
+    reasoning: { effort: "medium" },
+    safety_identifier: safetyIdentifier(input.userPublicId),
+    store: true,
+    metadata: {
+      surface: "research_report_targeted_revision",
+      prompt_version: REPORT_REVISION_PROMPT_VERSION,
+      study_id: input.studyPublicId,
+    },
+    instructions: [
+      "你是严谨的商业研究报告编辑。根据独立评审的问题清单定向修订原报告，输出完整修订版简体中文报告。",
+      "只处理评审指出的问题，保留原报告中没有问题的内容、结构和粒度。不得引入证据目录之外的新事实或新的 evidenceRefs。",
+      "严格区分公开来源事实、AI 合成模拟、分析推断与建议。没有直接证据的判断必须使用 model_inference、low confidence 和空 evidenceRefs。",
+      "不得把 AI 合成 Persona、模拟访谈或模拟讨论表述为真人研究或统计证据。",
+      "修订后每条 finding 的 evidenceRefs 必须来自允许证据目录，并与 claimType 和 confidence 一致。",
+    ].join("\n"),
+    input: [
+      `原报告：\n${JSON.stringify(input.report)}`,
+      `评审结论：\n${JSON.stringify(input.review)}`,
+      `允许使用的证据目录：\n${formatReportEvidenceCatalog(input.evidenceCatalog)}`,
+    ].join("\n\n"),
+    text: {
+      format: {
+        type: "json_schema",
+        name: "revised_public_web_research_report",
+        strict: true,
+        schema: reportJsonSchema,
+      },
+    },
+  }, { timeout: 180_000, signal: input.signal });
+  const report = parseOutput(response.output_text, reportSchema);
+  for (const finding of report.findings) {
+    finding.evidenceRefs = finding.evidenceRefs.filter((ref) => allowedEvidenceRefs.has(ref));
+    if (!finding.evidenceRefs.length) {
+      finding.claimType = "model_inference";
+      finding.confidence = "low";
+    }
+  }
+  return {
+    report,
+    responseId: response.id,
+    model: response.model,
+    provider: getProviderName("report"),
+    promptVersion: REPORT_REVISION_PROMPT_VERSION,
     usage: response.usage,
   };
 }

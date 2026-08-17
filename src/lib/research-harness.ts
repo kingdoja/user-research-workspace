@@ -14,8 +14,10 @@ import {
   buildProviderPersonaPanel,
   describeOpenAIError,
   generateProviderResearchInterviews,
-  getOpenAIProviderStatus,
+  getProviderStageStatus,
+  judgeProviderResearchReport,
   researchPublicWeb,
+  reviseProviderResearchReport,
   runProviderAudienceCall,
   runProviderDiscussionChat,
   synthesizeProviderResearchReport,
@@ -23,8 +25,8 @@ import {
   type ProviderResearchDiscussion,
   type ProviderResearchInterviews,
   type ProviderResearchSources,
+  type ProviderStage,
   type ResearchReport,
-  REPORT_PROMPT_VERSION,
 } from "@/lib/openai-provider";
 import { materializeReportEvidenceGraph } from "@/lib/evidence-graph";
 import { groundStudyPersonasFromEvidence } from "@/lib/persona-evidence";
@@ -138,6 +140,7 @@ type ResearchTool<Input, Output> = {
   displayName: string;
   description: string;
   capabilities: string[];
+  providerStage?: ProviderStage | ((state: HarnessState) => ProviderStage | null);
   inputSchema: z.ZodType<Input>;
   outputSchema: z.ZodType<Output>;
   execute(context: ToolContext, input: Input): Promise<ToolResult<Output>>;
@@ -286,7 +289,38 @@ const reportSchema = z.object({
   citations: z.array(z.object({ title: z.string(), url: z.string().url() })),
   responseId: z.string(),
   model: z.string(),
+  provider: z.string(),
+  promptVersion: z.string(),
   usage: z.unknown(),
+});
+
+const reportQualityReviewSchema = z.object({
+  verdict: z.enum(["approved", "revise"]),
+  score: z.number().int().min(0).max(100),
+  summary: z.string(),
+  issues: z.array(z.object({
+    severity: z.enum(["high", "medium", "low"]),
+    category: z.enum([
+      "unsupported_claim",
+      "evidence_mismatch",
+      "missing_counterevidence",
+      "synthetic_overstatement",
+      "actionability",
+      "structure",
+    ]),
+    description: z.string(),
+    recommendation: z.string(),
+  })),
+  responseId: z.string(),
+  model: z.string(),
+  provider: z.string(),
+  promptVersion: z.string(),
+  usage: z.unknown(),
+});
+
+const finalReportSchema = reportSchema.extend({
+  qualityReview: reportQualityReviewSchema,
+  revisionApplied: z.boolean(),
 });
 
 function readState<Output>(state: HarnessState, key: string, schema: z.ZodType<Output>): Output {
@@ -315,6 +349,36 @@ function mergedResearchState(state: HarnessState): ProviderResearchSources {
       finalSourceCount: sources.length,
       fallbackUsed: packets.some((packet) => packet.metadata.fallbackUsed),
     },
+  };
+}
+
+function collectReportEvidence(state: HarnessState) {
+  const research = mergedResearchState(state);
+  const personaResult = personaPanelSchema.safeParse(state.personas);
+  const batchOne = z.array(interviewSchema).safeParse(state.interviews_one);
+  const batchTwo = z.array(interviewSchema).safeParse(state.interviews_two);
+  const validation = validationSchema.safeParse(state.validation);
+  const discussion = discussionSchema.safeParse(state.discussion);
+  const panelResearch = personaResult.success && validation.success
+    ? {
+        panel: personaResult.data.panel,
+        personas: personaResult.data.personas,
+        interviews: [
+          ...(batchOne.success ? batchOne.data : []),
+          ...(batchTwo.success ? batchTwo.data : []),
+        ],
+        validation: validation.data,
+      }
+    : undefined;
+  return {
+    research,
+    panelResearch,
+    discussion: discussion.success ? discussion.data : undefined,
+    evidenceCatalog: buildReportEvidenceCatalog({
+      sources: research.sources,
+      panelResearch,
+      discussion: discussion.success ? discussion.data : undefined,
+    }),
   };
 }
 
@@ -357,6 +421,7 @@ const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, Provide
   displayName: "公开资料研究",
   description: "检索并整理公开网页证据。",
   capabilities: ["web.search", "research.sources"],
+  providerStage: "research",
   inputSchema: researchInputSchema,
   outputSchema: webResearchSchema,
   async execute({ study, task, context, signal, strategy }, input) {
@@ -479,6 +544,7 @@ const buildPersonaTool: ResearchTool<Record<string, never>, HarnessPersonaPanel>
   displayName: "Persona 构建",
   description: "结合研究证据和已有 Persona 构建合成样本。",
   capabilities: ["persona.generate", "context.consume"],
+  providerStage: "research",
   inputSchema: z.object({}),
   outputSchema: personaPanelSchema,
   async execute({ study, state, context, signal, strategy }) {
@@ -564,6 +630,7 @@ function interviewTool(batch: 1 | 2): ResearchTool<{ batch: 1 | 2; objective?: s
     displayName: batch === 1 ? "合成访谈：决策路径" : "合成访谈：体验与阻力",
     description: "对合成 Persona 执行结构化批量访谈。",
     capabilities: ["interview.synthetic", "context.consume"],
+    providerStage: "research",
     inputSchema: z.object({ batch: z.union([z.literal(1), z.literal(2)]), objective: z.string().optional() }),
     outputSchema: z.array(interviewSchema),
     async execute({ study, state, context, signal, strategy }) {
@@ -596,6 +663,7 @@ const validateDirectionsTool: ResearchTool<Record<string, never>, ProviderDeepRe
   displayName: "方向验证",
   description: "用合成受众对候选方向进行压力测试。",
   capabilities: ["audience.validate", "context.consume"],
+  providerStage: "reasoning",
   inputSchema: z.object({}),
   outputSchema: validationSchema,
   async execute({ study, state, context, signal, strategy }) {
@@ -632,6 +700,7 @@ const discussionChatTool: ResearchTool<z.infer<typeof discussionInputSchema>, Pr
   displayName: "合成焦点讨论",
   description: "主持多 Persona 焦点讨论并提取共识与分歧。",
   capabilities: ["discussion.synthetic", "context.consume"],
+  providerStage: "reasoning",
   inputSchema: discussionInputSchema,
   outputSchema: discussionSchema,
   async execute({ study, state, context, signal, strategy }, input) {
@@ -671,26 +740,11 @@ const generateReportTool: ResearchTool<Record<string, never>, z.infer<typeof rep
   displayName: "研究报告生成",
   description: "综合证据、访谈和讨论生成带来源的研究报告。",
   capabilities: ["report.generate", "context.consume"],
+  providerStage: "report",
   inputSchema: z.object({}),
   outputSchema: reportSchema,
   async execute({ study, state, context, signal, strategy }) {
-    const research = mergedResearchState(state);
-    const personaResult = personaPanelSchema.safeParse(state.personas);
-    const batchOne = z.array(interviewSchema).safeParse(state.interviews_one);
-    const batchTwo = z.array(interviewSchema).safeParse(state.interviews_two);
-    const validation = validationSchema.safeParse(state.validation);
-    const discussion = discussionSchema.safeParse(state.discussion);
-    const panelResearch = personaResult.success && validation.success
-      ? {
-          panel: personaResult.data.panel,
-          personas: personaResult.data.personas,
-          interviews: [
-            ...(batchOne.success ? batchOne.data : []),
-            ...(batchTwo.success ? batchTwo.data : []),
-          ],
-          validation: validation.data,
-        }
-      : undefined;
+    const { research, panelResearch, discussion } = collectReportEvidence(state);
     const generated = await synthesizeProviderResearchReport({
       brief: contextualBrief(study, context, strategy),
       framework: study.framework,
@@ -701,7 +755,7 @@ const generateReportTool: ResearchTool<Record<string, never>, z.infer<typeof rep
       queries: research.queries,
       sources: research.sources,
       panelResearch,
-      discussion: discussion.success ? discussion.data : undefined,
+      discussion,
       signal,
     });
     const output = {
@@ -710,12 +764,132 @@ const generateReportTool: ResearchTool<Record<string, never>, z.infer<typeof rep
     };
     return {
       output,
-      artifactType: "research_report",
+      artifactType: "research_report_draft",
       artifactTitle: generated.report.title,
       eventPayload: {
         citationCount: output.citations.length,
         findingCount: output.report.findings.length,
         title: output.report.title,
+        provider: output.provider,
+        model: output.model,
+      },
+    };
+  },
+};
+
+const judgeReportTool: ResearchTool<Record<string, never>, z.infer<typeof reportQualityReviewSchema>> = {
+  name: "judgeReport",
+  version: 1,
+  displayName: "报告质量评审",
+  description: "独立核查报告的证据一致性、模拟证据表述与可执行性。",
+  capabilities: ["report.judge", "context.consume"],
+  providerStage: "judge",
+  inputSchema: z.object({}),
+  outputSchema: reportQualityReviewSchema,
+  async execute({ study, state, signal }) {
+    const draft = readState(state, "report", reportSchema);
+    const { evidenceCatalog } = collectReportEvidence(state);
+    const output = await judgeProviderResearchReport({
+      report: draft.report,
+      evidenceCatalog,
+      userPublicId: study.userPublicId,
+      studyPublicId: study.publicId,
+      signal,
+    });
+    return {
+      output,
+      artifactType: "report_quality_review",
+      artifactTitle: `报告质量评审：${output.score} 分`,
+      eventPayload: {
+        verdict: output.verdict,
+        score: output.score,
+        issueCount: output.issues.length,
+        provider: output.provider,
+        model: output.model,
+      },
+    };
+  },
+};
+
+export function finalizeApprovedReportPacket(
+  draft: z.infer<typeof reportSchema>,
+  review: z.infer<typeof reportQualityReviewSchema>,
+): z.infer<typeof finalReportSchema> {
+  if (review.verdict !== "approved") throw new Error("REPORT_REQUIRES_REVISION");
+  return finalReportSchema.parse({
+    ...draft,
+    usage: null,
+    qualityReview: review,
+    revisionApplied: false,
+  });
+}
+
+export function finalizeRevisedReportPacket(
+  draft: z.infer<typeof reportSchema>,
+  review: z.infer<typeof reportQualityReviewSchema>,
+  revised: Omit<z.infer<typeof reportSchema>, "citations">,
+): z.infer<typeof finalReportSchema> {
+  if (review.verdict !== "revise") throw new Error("REPORT_REVISION_NOT_REQUIRED");
+  return finalReportSchema.parse({
+    ...revised,
+    citations: draft.citations,
+    qualityReview: review,
+    revisionApplied: true,
+  });
+}
+
+const finalizeReportTool: ResearchTool<Record<string, never>, z.infer<typeof finalReportSchema>> = {
+  name: "finalizeReport",
+  version: 1,
+  displayName: "报告定稿",
+  description: "评审通过时直接定稿，未通过时按评审问题定向修订。",
+  capabilities: ["report.finalize", "context.consume"],
+  providerStage: (state) => {
+    const review = reportQualityReviewSchema.safeParse(state.report_review);
+    return review.success && review.data.verdict === "approved" ? null : "report";
+  },
+  inputSchema: z.object({}),
+  outputSchema: finalReportSchema,
+  async execute({ study, state, signal }) {
+    const draft = readState(state, "report", reportSchema);
+    const review = readState(state, "report_review", reportQualityReviewSchema);
+    if (review.verdict === "approved") {
+      const output = finalizeApprovedReportPacket(draft, review);
+      return {
+        output,
+        artifactType: "research_report",
+        artifactTitle: draft.report.title,
+        eventPayload: {
+          title: draft.report.title,
+          verdict: review.verdict,
+          score: review.score,
+          revisionApplied: false,
+          provider: draft.provider,
+          model: draft.model,
+        },
+      };
+    }
+    const { evidenceCatalog } = collectReportEvidence(state);
+    const revised = await reviseProviderResearchReport({
+      report: draft.report,
+      review,
+      evidenceCatalog,
+      userPublicId: study.userPublicId,
+      studyPublicId: study.publicId,
+      signal,
+    });
+    const output = finalizeRevisedReportPacket(draft, review, revised);
+    return {
+      output,
+      artifactType: "research_report",
+      artifactTitle: revised.report.title,
+      eventPayload: {
+        title: revised.report.title,
+        verdict: review.verdict,
+        score: review.score,
+        revisionApplied: true,
+        provider: revised.provider,
+        model: revised.model,
       },
     };
   },
@@ -733,6 +907,8 @@ const researchTools = {
   audienceCall: validateDirectionsTool,
   discussionChat: discussionChatTool,
   generateReport: generateReportTool,
+  judgeReport: judgeReportTool,
+  finalizeReport: finalizeReportTool,
 };
 
 export type ResearchToolName = keyof typeof researchTools;
@@ -853,9 +1029,21 @@ export function createResearchTaskPlan(input: {
   if (input.studyType !== "panel_only") {
     tasks.push({
       key: "report",
-      title: "生成最终研究报告",
+      title: "生成研究报告初稿",
       toolName: "generateReport",
       dependsOn: [tasks.at(-1)?.key ?? researchDependencies.at(-1) ?? "design"],
+    });
+    tasks.push({
+      key: "report_review",
+      title: "独立评审报告质量",
+      toolName: "judgeReport",
+      dependsOn: ["report"],
+    });
+    tasks.push({
+      key: "final_report",
+      title: "定稿研究报告",
+      toolName: "finalizeReport",
+      dependsOn: ["report_review"],
     });
   }
 
@@ -902,10 +1090,22 @@ export function createMarketInsightTaskPlan(input: {
     },
     {
       key: "report",
-      title: "生成市场洞察与机会地图",
+      title: "生成市场洞察与机会地图初稿",
       toolName: "generateReport",
       dependsOn: ["market_landscape", "competitive_signals", "opportunity_signals"],
       input: { outputType: "market_insight", evidenceRequired: true },
+    },
+    {
+      key: "report_review",
+      title: "独立评审市场洞察报告",
+      toolName: "judgeReport",
+      dependsOn: ["report"],
+    },
+    {
+      key: "final_report",
+      title: "定稿市场洞察与机会地图",
+      toolName: "finalizeReport",
+      dependsOn: ["report_review"],
     },
   ];
 }
@@ -1144,6 +1344,15 @@ function waitForRetry(signal: AbortSignal, delayMs: number) {
   });
 }
 
+function sanitizePostgresJsonValue<T>(value: T): T {
+  if (typeof value === "string") return value.replaceAll("\u0000", "") as T;
+  if (Array.isArray(value)) return value.map(sanitizePostgresJsonValue) as T;
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, sanitizePostgresJsonValue(item)]),
+  ) as T;
+}
+
 async function executeTask(input: {
   study: HarnessStudy;
   task: StoredTask;
@@ -1159,10 +1368,10 @@ async function executeTask(input: {
   const binding = await getRunSkillBinding(input.study.runId, input.task.toolName);
   if (!binding) throw new Error(`SKILL_BINDING_MISSING:${input.task.toolName}`);
   const database = await getDatabase();
-  const providerBacked = tool.capabilities.some((capability) => [
-    "web.search", "persona.generate", "interview.synthetic", "audience.validate",
-    "discussion.synthetic", "report.generate",
-  ].includes(capability));
+  const providerStage = typeof tool.providerStage === "function"
+    ? tool.providerStage(input.state)
+    : tool.providerStage;
+  const providerStatus = providerStage ? getProviderStageStatus(providerStage) : null;
   const timeoutSeconds = Number(input.strategy.config.taskTimeoutSeconds ?? input.task.timeoutSeconds);
   const timeout = Math.max(15, Math.min(3600, timeoutSeconds)) * 1000;
   const controller = new AbortController();
@@ -1180,6 +1389,7 @@ async function executeTask(input: {
     contextRetrievalId: input.context.retrievalPublicId,
     invocationId: invocation.invocationPublicId,
     strategyVersion: input.strategy.strategyVersion,
+    ...(providerStatus ? { providerStage, provider: providerStatus.providerName, model: providerStatus.model } : {}),
   });
   await appendEvent(database, input.study.studyId, input.study.runId, "tool.call.started", {
     taskKey: input.task.key,
@@ -1191,14 +1401,19 @@ async function executeTask(input: {
     contextRetrievalId: input.context.retrievalPublicId,
     invocationId: invocation.invocationPublicId,
     arguments: input.task.input,
+    ...(providerStatus ? { providerStage, provider: providerStatus.providerName, model: providerStatus.model } : {}),
   });
   try {
     if (!binding.enabledAtLock) throw new Error(`SKILL_DISABLED:${binding.slug}`);
     if (binding.version !== tool.version) {
       throw new Error(`SKILL_VERSION_UNAVAILABLE:${binding.slug}@${binding.version}`);
     }
-    if (providerBacked) {
-      const rateAccepted = await consumeProviderRateToken(database, getOpenAIProviderStatus().providerName, input.study.workspaceId);
+    if (providerStage) {
+      const rateAccepted = await consumeProviderRateToken(
+        database,
+        providerStatus?.providerName ?? getProviderStageStatus(providerStage).providerName,
+        input.study.workspaceId,
+      );
       if (!rateAccepted) throw new Error("RUNTIME_RATE_LIMITED");
     }
     const parsedInput = tool.inputSchema.parse(input.task.input);
@@ -1217,7 +1432,11 @@ async function executeTask(input: {
     if (controller.signal.aborted || await isRunCancellationRequested(input.study.runId)) {
       throw controller.signal.reason ?? abortError("RUNTIME_CANCELLED");
     }
-    const output = tool.outputSchema.parse(result.output);
+    const output = sanitizePostgresJsonValue(tool.outputSchema.parse(result.output));
+    const eventPayload = sanitizePostgresJsonValue({
+      ...result.eventPayload,
+      ...(providerStatus ? { providerStage, provider: providerStatus.providerName, model: providerStatus.model } : {}),
+    });
     await completeInvocation({
       study: input.study,
       task: input.task,
@@ -1226,7 +1445,7 @@ async function executeTask(input: {
       output,
       artifactType: result.artifactType,
       artifactTitle: result.artifactTitle,
-      eventPayload: result.eventPayload,
+      eventPayload,
     });
     return { kind: "completed" as const, key: input.task.key, output };
   } catch (error) {
@@ -1443,13 +1662,25 @@ function totalTokens(value: unknown): number {
   return 0;
 }
 
+function getRunProviderSummary() {
+  const stages = (["research", "reasoning", "report", "judge"] as const).map(getProviderStageStatus);
+  const providers = [...new Set(stages.map((stage) => stage.providerName))];
+  const models = [...new Set(stages.map((stage) => stage.model))];
+  return {
+    provider: providers.length === 1 ? providers[0] : `mixed:${providers.join("+")}`,
+    model: models.join(" + "),
+  };
+}
+
 async function materializeStudy(study: HarnessStudy, state: HarnessState) {
   const database = await getDatabase();
   const personaResult = personaPanelSchema.safeParse(state.personas);
   const panelResult = personaPanelSchema.shape.panel.safeParse(state.panel);
   const batchOne = z.array(interviewSchema).safeParse(state.interviews_one);
   const batchTwo = z.array(interviewSchema).safeParse(state.interviews_two);
-  const reportResult = reportSchema.safeParse(state.report);
+  const finalizedReportResult = finalReportSchema.safeParse(state.final_report);
+  const draftReportResult = reportSchema.safeParse(state.report);
+  const reportResult = finalizedReportResult.success ? finalizedReportResult : draftReportResult;
 
   await database.transaction(async (transaction) => {
     const personaIdsByName = new Map<string, string>();
@@ -1531,7 +1762,6 @@ async function materializeStudy(study: HarnessStudy, state: HarnessState) {
       );
       const research = mergedResearchState(state);
       const discussion = discussionSchema.safeParse(state.discussion);
-      const provider = getOpenAIProviderStatus();
       await materializeReportEvidenceGraph(transaction, {
         workspaceId: study.workspaceId,
         studyId: study.studyId,
@@ -1552,10 +1782,10 @@ async function materializeStudy(study: HarnessStudy, state: HarnessState) {
           } : undefined,
           discussion: discussion.success ? discussion.data : undefined,
         }),
-        provider: provider.providerName,
+        provider: reportResult.data.provider,
         providerModel: reportResult.data.model,
         providerResponseId: reportResult.data.responseId,
-        promptVersion: REPORT_PROMPT_VERSION,
+        promptVersion: reportResult.data.promptVersion,
       });
       await groundStudyPersonasFromEvidence(transaction, {
         workspaceId: study.workspaceId,
@@ -1574,6 +1804,17 @@ async function materializeStudy(study: HarnessStudy, state: HarnessState) {
           content,
         },
         personas: personaContextCandidates,
+        study: {
+          brief: study.brief,
+          studyType: study.studyType,
+          framework: study.framework,
+          methods: study.methods,
+          audience: study.audience,
+          personaCount: study.personaCount,
+          workflowType: study.workflowType,
+          workflowVersion: study.workflowVersion,
+          taskGraph: study.workflowTaskGraph ?? createResearchTaskPlan(study),
+        },
       });
     }
 
@@ -1581,12 +1822,12 @@ async function materializeStudy(study: HarnessStudy, state: HarnessState) {
       if (!item || typeof item !== "object" || !("usage" in item)) return sum;
       return sum + totalTokens(item.usage);
     }, 0);
-    const provider = getOpenAIProviderStatus();
+    const provider = getRunProviderSummary();
     await transaction.query(
       `update study_runs set status = 'completed', provider = $2, provider_model = $3,
               usage = $4::jsonb, finished_at = now(), error_message = null
        where id = $1`,
-      [study.runId, provider.providerName, provider.researchModel, JSON.stringify({ total_tokens: usage })],
+      [study.runId, provider.provider, provider.model, JSON.stringify({ total_tokens: usage })],
     );
     await transaction.query(
       `update studies set status = 'completed', current_stage = $2, consumed_tokens = $3, updated_at = now()
@@ -1617,7 +1858,7 @@ export async function runStudyHarness(runId: string) {
   await ensureTasks(study);
   const database = await getDatabase();
   const recoveredTasks = await database.transaction((transaction) => recoverInterruptedTasks(transaction, runId));
-  const provider = getOpenAIProviderStatus();
+  const provider = getRunProviderSummary();
   const strategy = await database.transaction(async (transaction) => {
     const assigned = await assignActiveStrategy({
       queryable: transaction,
@@ -1645,7 +1886,7 @@ export async function runStudyHarness(runId: string) {
       `update study_runs set status = 'running', provider = $2, provider_model = $3,
               started_at = coalesce(started_at, now()), error_message = null
        where id = $1 and status <> 'completed'`,
-      [study.runId, provider.providerName, provider.researchModel],
+      [study.runId, provider.provider, provider.model],
     );
     await transaction.query(
       "update studies set status = 'running', current_stage = 'execution', updated_at = now() where id = $1",
@@ -1653,8 +1894,8 @@ export async function runStudyHarness(runId: string) {
     );
   });
   await appendEvent(database, study.studyId, study.runId, resuming ? "run.resumed" : "run.started", {
-    provider: provider.providerName,
-    model: provider.researchModel,
+    provider: provider.provider,
+    model: provider.model,
     harness: study.workflowVersion,
     strategy: {
       experimentKey: strategy.experimentKey,
@@ -1930,7 +2171,7 @@ async function claimStudyJob(workerId: string) {
        order by job.available_at, job.id
        for update skip locked
        limit 1`,
-      [getOpenAIProviderStatus().providerName],
+      [getRunProviderSummary().provider],
     );
     const job = result.rows[0];
     if (!job) return null;

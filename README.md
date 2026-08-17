@@ -25,11 +25,15 @@ Open [http://localhost:3000](http://localhost:3000).
 
 Register a local account at [http://localhost:3000/auth/signup](http://localhost:3000/auth/signup). Local data is stored under `.data/` and is excluded from Git.
 
-Report follow-up conversations use DeepSeek's Responses-compatible API. Configure
-`DEEPSEEK_API_KEY`; the default model is `deepseek-v4-flash`. DeepSeek does not persist
-`conversation` or `previous_response_id`, so successful turns are stored in PostgreSQL
-and replayed on every follow-up. Provider failures are returned to the client and do not
-create synthetic fallback assistant messages.
+The recommended high-quality routing uses DeepSeek V4 Flash for planning and high-volume
+research, DeepSeek V4 Pro for audience reasoning and independent report review, and Terra
+for report synthesis. Configure `PLAN_PROVIDER`, `RESEARCH_PROVIDER`,
+`REASONING_PROVIDER`, `REPORT_PROVIDER`, and `REPORT_JUDGE_PROVIDER`; model overrides are
+available through `DEEPSEEK_FAST_MODEL`, `DEEPSEEK_REASONING_MODEL`, `REPORT_MODEL`, and
+`REPORT_JUDGE_MODEL`. The report DAG persists the Terra draft and the V4 Pro quality review.
+Approved drafts pass through without another model call; rejected drafts receive a targeted
+Terra revision constrained to the existing evidence catalog. DeepSeek follow-up turns remain
+application-managed and are persisted and replayed from PostgreSQL.
 
 For production or long-running research, run the worker separately from the web process:
 
@@ -44,6 +48,10 @@ The web process also wakes one queued job after plan confirmation so local devel
 ```bash
 pnpm lint
 pnpm build
+pnpm smoke:report-routing
+LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated api-access
+DEEPSEEK_PROVIDER_SMOKE_CONFIRM=1 pnpm smoke:deepseek-provider
+REPORT_PROVIDER_SMOKE_CONFIRM=1 pnpm smoke:report-provider
 ```
 
 Recovery evidence and audit material live under `recovery/` and are intentionally excluded from application linting.

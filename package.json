@@ -8,6 +8,10 @@
     "start": "next start",
     "research:worker": "tsx scripts/research-worker.mjs",
     "research:worker:once": "tsx scripts/research-worker.mjs --once",
+    "smoke:deepseek-provider": "tsx scripts/deepseek-provider-smoke.ts",
+    "smoke:report-routing": "tsx scripts/report-routing-smoke.ts",
+    "smoke:report-provider": "tsx scripts/report-provider-smoke.ts",
+    "smoke:api-access": "tsx scripts/api-access-smoke.ts",
     "smoke:realtime-interview": "tsx scripts/realtime-interview-smoke.ts",
     "smoke:experiment-comparison": "tsx scripts/experiment-comparison-smoke.ts",
     "smoke:evidence-graph": "tsx scripts/evidence-graph-smoke.ts",
@@ -26,6 +30,7 @@
     "smoke:intent-workflow-contract": "tsx scripts/intent-workflow-contract-smoke.ts",
     "smoke:market-insight-workflow": "tsx scripts/market-insight-workflow-smoke.ts",
     "import:zenodo-llm-interviews": "tsx scripts/import-zenodo-llm-interviews.ts",
+    "backfill:context-candidates": "tsx scripts/backfill-context-candidates.ts",
     "smoke:isolated": "node scripts/run-isolated-smoke.mjs",
     "lint": "eslint",
     "archive:public": "node scripts/archive-public-site.mjs"

@@ -6,7 +6,9 @@ import {
   Beaker,
   BrainCircuit,
   Check,
+  CheckCircle2,
   CircleAlert,
+  ChevronDown,
   Database,
   FileCheck2,
   FileClock,
@@ -48,10 +50,17 @@ type ContextEvaluationCaseDraft = {
   assetTypes: ["research_sample"];
   scopes: ["workspace"];
   topK: number;
-  expectedChunkPublicIds: [string];
+  expectedChunkPublicIds: string[];
   labelNote: string;
   sourceTitle: string;
   sourcePreview: string;
+};
+type ContextEvaluationReviewProposal = {
+  sourcePublicId: string;
+  query: string;
+  rationale: string;
+  confidence: number;
+  topK: number;
 };
 type Notice = { kind: "success" | "error"; text: string } | null;
 type Filter = "all" | "memory" | "pending" | "active" | "attention";
@@ -64,6 +73,8 @@ const assetTypeLabels: Record<string, string> = {
   research_sample: "Research Sample",
   persona: "Persona",
   study_context: "Study Context",
+  research_template: "Research Template",
+  knowledge_gap: "Knowledge Gap",
 };
 
 const purposeLabels: Record<string, string> = {
@@ -82,10 +93,13 @@ const relationLabels: Record<string, string> = {
   mentions: "Mentions",
   supersedes: "Supersedes",
   related_to: "Related to",
+  resolved_by: "Resolved by",
 };
 
 function assetIcon(assetType: string) {
   if (assetType === "persona") return <UserRound size={17} />;
+  if (assetType === "research_template") return <FileCheck2 size={17} />;
+  if (assetType === "knowledge_gap") return <CircleAlert size={17} />;
   if (assetType.endsWith("memory")) return <Database size={17} />;
   if (assetType === "research_sample") return <FileJson size={17} />;
   return <FileText size={17} />;
@@ -93,13 +107,18 @@ function assetIcon(assetType: string) {
 
 function statusLabel(asset: ContextAsset) {
   if (asset.status === "tombstoned") return "已下架";
+  if (asset.retentionExpiresAt && new Date(asset.retentionExpiresAt).getTime() <= Date.now()) return "已过期";
   if (asset.reviewStatus === "pending") return "待审核";
   if (asset.reviewStatus === "rejected") return "已拒绝";
+  if (asset.status === "archived") return "已归档";
   return "可检索";
 }
 
 function governanceAttention(asset: ContextAsset) {
-  return asset.consentStatus === "unknown" || asset.piiStatus === "not_reviewed" || asset.piiStatus === "present";
+  const expiry = asset.retentionExpiresAt ? new Date(asset.retentionExpiresAt).getTime() : null;
+  const expiresSoon = expiry !== null && expiry <= Date.now() + 30 * 24 * 60 * 60 * 1000;
+  return asset.consentStatus === "unknown" || asset.piiStatus === "not_reviewed"
+    || asset.piiStatus === "present" || expiresSoon;
 }
 
 function evaluationMetric(metrics: Record<string, unknown>, key: string) {
@@ -119,6 +138,8 @@ export function ContextAssetWorkspace({
   initialAgentEvalSuites,
   initialEvaluationSets,
   initialEvaluationSources,
+  initialReviewProposals,
+  embeddingProviderConfigured,
   canCreate,
   canReview,
 }: {
@@ -127,6 +148,8 @@ export function ContextAssetWorkspace({
   initialAgentEvalSuites: AgentEvalSuite[];
   initialEvaluationSets: ContextEvaluationSet[];
   initialEvaluationSources: ContextEvaluationSource[];
+  initialReviewProposals: readonly ContextEvaluationReviewProposal[];
+  embeddingProviderConfigured: boolean;
   canCreate: boolean;
   canReview: boolean;
 }) {
@@ -135,10 +158,15 @@ export function ContextAssetWorkspace({
   const [evaluationSets, setEvaluationSets] = useState(initialEvaluationSets);
   const [evaluationSources, setEvaluationSources] = useState(initialEvaluationSources);
   const [evaluationCases, setEvaluationCases] = useState<ContextEvaluationCaseDraft[]>([]);
+  const [evaluationSourceSearch, setEvaluationSourceSearch] = useState("");
+  const [selectedEvaluationChunkIds, setSelectedEvaluationChunkIds] = useState<string[]>([]);
+  const [expandedEvaluationChunkId, setExpandedEvaluationChunkId] = useState<string | null>(null);
+  const [reviewProposals, setReviewProposals] = useState(() => initialReviewProposals.filter((proposal) => initialEvaluationSources.some((source) => source.publicId === proposal.sourcePublicId)));
   const [evaluationBuilderOpen, setEvaluationBuilderOpen] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
+  const deferredEvaluationSourceSearch = useDeferredValue(evaluationSourceSearch.trim().toLowerCase());
   const [selectedId, setSelectedId] = useState(initialAssets[0]?.publicId ?? null);
   const [importOpen, setImportOpen] = useState(initialAssets.length === 0 && canCreate);
   const [assetType, setAssetType] = useState("document");
@@ -158,10 +186,19 @@ export function ContextAssetWorkspace({
     if (filter === "active" && asset.status !== "active") return false;
     if (filter === "attention" && !governanceAttention(asset)) return false;
     if (!deferredSearch) return true;
-    return `${asset.title} ${asset.description} ${asset.sourceName ?? ""} ${asset.assetType}`.toLowerCase().includes(deferredSearch);
+    return `${asset.title} ${asset.description} ${asset.sourceName ?? ""} ${asset.assetType} ${assetTypeLabels[asset.assetType] ?? ""}`
+      .toLowerCase().includes(deferredSearch);
   }), [assets, deferredSearch, filter]);
 
   const selected = assets.find((asset) => asset.publicId === selectedId) ?? null;
+  const visibleEvaluationSources = useMemo(() => evaluationSources.filter((source) => {
+    if (!deferredEvaluationSourceSearch) return true;
+    return `${source.title} ${source.sourceName ?? ""} ${source.contentPreview}`.toLowerCase().includes(deferredEvaluationSourceSearch);
+  }), [deferredEvaluationSourceSearch, evaluationSources]);
+  const selectedEvaluationSources = useMemo(
+    () => selectedEvaluationChunkIds.map((id) => evaluationSources.find((source) => source.publicId === id)).filter((source): source is ContextEvaluationSource => Boolean(source)),
+    [evaluationSources, selectedEvaluationChunkIds],
+  );
   const metrics = useMemo(() => ({
     memory: assets.filter((asset) => asset.memoryKind && asset.status !== "tombstoned").length,
     pending: assets.filter((asset) => asset.reviewStatus === "pending").length,
@@ -221,10 +258,9 @@ export function ContextAssetWorkspace({
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
-    const sourcePublicId = String(data.get("sourcePublicId") ?? "");
-    const source = evaluationSources.find((item) => item.publicId === sourcePublicId);
-    if (!source) {
-      setNotice({ kind: "error", text: "请选择已授权的真实研究样本 chunk" });
+    const selectedSources = evaluationSources.filter((item) => selectedEvaluationChunkIds.includes(item.publicId));
+    if (!selectedSources.length) {
+      setNotice({ kind: "error", text: "至少选择一个能直接回答问题的研究样本 chunk" });
       return;
     }
     const query = String(data.get("query") ?? "").trim();
@@ -234,18 +270,62 @@ export function ContextAssetWorkspace({
       assetTypes: ["research_sample"],
       scopes: ["workspace"],
       topK: Number(data.get("topK") ?? 8),
-      expectedChunkPublicIds: [source.publicId],
+      expectedChunkPublicIds: selectedSources.map((source) => source.publicId),
       labelNote,
-      sourceTitle: source.title,
-      sourcePreview: source.contentPreview,
+      sourceTitle: selectedSources.length === 1 ? selectedSources[0].title : `${selectedSources[0].title} 等 ${selectedSources.length} 个 chunk`,
+      sourcePreview: selectedSources.map((source) => source.contentPreview).join("\n\n---\n\n"),
     }]);
+    setSelectedEvaluationChunkIds([]);
+    setExpandedEvaluationChunkId(null);
     form.reset();
     setNotice(null);
+  }
+
+  function acceptReviewProposal(proposal: ContextEvaluationReviewProposal) {
+    const source = evaluationSources.find((item) => item.publicId === proposal.sourcePublicId);
+    if (!source) {
+      setNotice({ kind: "error", text: "该建议对应的合规样本已不可用，无法加入草稿" });
+      return;
+    }
+    setEvaluationCases((current) => {
+      if (current.some((item) => item.query === proposal.query && item.expectedChunkPublicIds[0] === proposal.sourcePublicId)) return current;
+      return [...current, {
+        query: proposal.query,
+        assetTypes: ["research_sample"],
+        scopes: ["workspace"],
+        topK: proposal.topK,
+        expectedChunkPublicIds: [source.publicId],
+        labelNote: "",
+        sourceTitle: source.title,
+        sourcePreview: source.contentPreview,
+      }];
+    });
+    setReviewProposals((current) => current.filter((item) => item.sourcePublicId !== proposal.sourcePublicId || item.query !== proposal.query));
+    setNotice({ kind: "success", text: "已加入待保存草稿；请补写独立的人工判断依据" });
+  }
+
+  function updateEvaluationCaseNote(index: number, labelNote: string) {
+    setEvaluationCases((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, labelNote } : item));
+  }
+
+  function toggleEvaluationChunk(publicId: string) {
+    setSelectedEvaluationChunkIds((current) => {
+      if (current.includes(publicId)) return current.filter((id) => id !== publicId);
+      if (current.length >= 5) {
+        setNotice({ kind: "error", text: "一条人工标签最多选择 5 个 chunk" });
+        return current;
+      }
+      return [...current, publicId];
+    });
   }
 
   async function createEvaluationSet(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!evaluationCases.length) return;
+    if (evaluationCases.some((item) => item.labelNote.trim().length < 2)) {
+      setNotice({ kind: "error", text: "每条标签都需要填写独立的人工判断依据后才能保存" });
+      return;
+    }
     setBusy("evaluation:create");
     setNotice(null);
     try {
@@ -298,6 +378,22 @@ export function ContextAssetWorkspace({
       setNotice({ kind: "success", text: status });
     } catch (error) {
       setNotice({ kind: "error", text: error instanceof Error ? error.message : "检索评估运行失败" });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function archiveEvaluationSet(publicId: string) {
+    setBusy(`evaluation:archive:${publicId}`);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/context/evaluations/${publicId}/archive`, { method: "POST" });
+      const body = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "检索评估集归档失败");
+      await reloadEvaluations();
+      setNotice({ kind: "success", text: "检索评估集已归档，历史标签和运行记录仅保留审计用途" });
+    } catch (error) {
+      setNotice({ kind: "error", text: error instanceof Error ? error.message : "检索评估集归档失败" });
     } finally {
       setBusy(null);
     }
@@ -584,30 +680,70 @@ export function ContextAssetWorkspace({
       <section className="context-retrieval-evals" aria-label="检索评估">
         <header><div><Beaker size={15} /><strong>检索评估</strong><span>HUMAN RELEVANCE · GATE 20</span></div>{canReview ? <button className="button button-muted" type="button" onClick={() => setEvaluationBuilderOpen((value) => !value)}>{evaluationBuilderOpen ? <X size={14} /> : <Plus size={14} />}{evaluationBuilderOpen ? "取消" : "新建评估集"}</button> : null}</header>
         {evaluationBuilderOpen ? <div className="context-evaluation-builder">
-          <form className="context-evaluation-case-form" onSubmit={addEvaluationCase}>
-            <label><span>真实用户会使用的检索问题</span><input name="query" required minLength={2} maxLength={1000} /></label>
-            <label><span>人工确认相关的样本 chunk</span><select name="sourcePublicId" required defaultValue=""><option value="">选择已授权样本</option>{evaluationSources.map((source) => <option key={source.publicId} value={source.publicId}>{source.title} · {source.contentPreview.slice(0, 72)}</option>)}</select></label>
-            <div><label><span>Top K</span><input name="topK" type="number" min={1} max={20} defaultValue={8} /></label><label><span>相关性判断依据</span><input name="labelNote" required minLength={2} maxLength={1000} /></label></div>
-            <button className="button button-muted" type="submit" disabled={!evaluationSources.length}><Plus size={14} />加入标签</button>
-          </form>
+          <div className="context-evaluation-entry">
+            <form className="context-evaluation-case-form" onSubmit={addEvaluationCase}>
+              <label><span>真实用户会使用的检索问题</span><input name="query" required minLength={2} maxLength={1000} /></label>
+              <section className="context-source-picker" aria-label="人工审阅研究样本">
+                <header><div><strong>选择相关 chunk</strong><span>只选能直接回答问题的片段</span></div><b>{selectedEvaluationChunkIds.length} 已选</b></header>
+                <label className="context-source-search"><Search size={13} /><input value={evaluationSourceSearch} onChange={(event) => setEvaluationSourceSearch(event.target.value)} placeholder="搜索标题、来源或内容" /></label>
+                {selectedEvaluationSources.length ? <div className="context-source-selected" aria-label="已选相关 chunk">
+                  <div className="context-source-selected-heading"><span>本条标签的证据</span><small>{selectedEvaluationSources.length} / 5</small></div>
+                  <div>{selectedEvaluationSources.map((source) => <span key={source.publicId}>{source.title}<button type="button" aria-label={`移除 ${source.title}`} onClick={() => toggleEvaluationChunk(source.publicId)}><X size={11} /></button></span>)}</div>
+                </div> : null}
+                <div className="context-source-list">
+                  {visibleEvaluationSources.map((source) => {
+                    const checked = selectedEvaluationChunkIds.includes(source.publicId);
+                    const expanded = expandedEvaluationChunkId === source.publicId;
+                    return <article key={source.publicId} className={checked ? "selected" : ""}>
+                      <div className="context-source-row"><label><input type="checkbox" checked={checked} disabled={!checked && selectedEvaluationChunkIds.length >= 5} onChange={() => toggleEvaluationChunk(source.publicId)} /><span><strong>{source.title}</strong><small>{source.sourceName ?? "Zenodo research sample"} · {source.publicId}</small></span></label><button type="button" aria-label={expanded ? "收起 chunk 内容" : "阅读完整 chunk"} aria-expanded={expanded} onClick={() => setExpandedEvaluationChunkId((current) => current === source.publicId ? null : source.publicId)}>{expanded ? <ChevronDown className="context-source-chevron open" size={14} /> : <ChevronDown className="context-source-chevron" size={14} />}</button></div>
+                      <p className={expanded ? "expanded" : ""}>{source.contentPreview}</p>
+                      <footer><code>{source.contentPreview.length} chars</code>{checked ? <span><CheckCircle2 size={12} />已加入本条标签</span> : <span>点击左侧复选框标记</span>}</footer>
+                    </article>;
+                  })}
+                  {visibleEvaluationSources.length === 0 ? <p className="context-source-empty">没有匹配的合规样本 chunk</p> : null}
+                </div>
+                <small className="context-source-limit">每条标签最多可选 5 个 chunk；标签建议覆盖不同受访者和不同主题。{selectedEvaluationChunkIds.length >= 5 ? " 已达到本条上限。" : ""}</small>
+              </section>
+              <div><label><span>Top K</span><input name="topK" type="number" min={1} max={20} defaultValue={8} /></label><label><span>相关性判断依据</span><input name="labelNote" required minLength={2} maxLength={1000} /></label></div>
+              <button className="button button-muted" type="submit" disabled={!evaluationSources.length}><Plus size={14} />加入标签</button>
+            </form>
+            <section className="context-proposal-queue" aria-label="模型建议待复核">
+              <header><div><BrainCircuit size={14} /><strong>模型建议待复核</strong><span>{reviewProposals.length}</span></div><small>不属于人工标签</small></header>
+              <p>逐条核对问题和证据。加入草稿后，仍需填写你的独立判断依据才能保存。</p>
+              <div>{reviewProposals.map((proposal) => {
+                const source = evaluationSources.find((item) => item.publicId === proposal.sourcePublicId);
+                if (!source) return null;
+                return <article key={`${proposal.sourcePublicId}:${proposal.query}`}>
+                  <div className="context-proposal-heading"><strong>{proposal.query}</strong><span>{Math.round(proposal.confidence * 100)}% 置信</span></div>
+                  <code>{source.title} · {source.publicId}</code>
+                  <blockquote>{source.contentPreview}</blockquote>
+                  <small>模型理由：{proposal.rationale}</small>
+                  <footer><button className="button button-muted" type="button" onClick={() => acceptReviewProposal(proposal)}><Check size={14} />确认加入草稿</button><button type="button" title="跳过建议" onClick={() => setReviewProposals((current) => current.filter((item) => item.sourcePublicId !== proposal.sourcePublicId || item.query !== proposal.query))}><X size={14} /></button></footer>
+                </article>;
+              })}{reviewProposals.length === 0 ? <p className="context-proposal-empty">没有待复核的模型建议。</p> : null}</div>
+            </section>
+          </div>
           <form className="context-evaluation-set-form" onSubmit={createEvaluationSet}>
             <header><strong>待保存标签</strong><span>{evaluationCases.length} / 20</span></header>
-            <div className="context-evaluation-case-drafts">{evaluationCases.map((item, index) => <article key={`${item.expectedChunkPublicIds[0]}:${index}`}><div><strong>{item.query}</strong><span>{item.sourceTitle}</span><small>{item.labelNote}</small></div><button type="button" title="移除标签" onClick={() => setEvaluationCases((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={14} /></button></article>)}{evaluationCases.length === 0 ? <p>尚无标签</p> : null}</div>
+            <div className="context-evaluation-case-drafts">{evaluationCases.map((item, index) => <article key={`${item.expectedChunkPublicIds[0]}:${index}`}><div><strong>{item.query}</strong><span>{item.sourceTitle}</span><small>{item.expectedChunkPublicIds.length} 个相关 chunk · {item.sourcePreview.length} chars</small><input aria-label={`${item.query} 的人工判断依据`} value={item.labelNote} onChange={(event) => updateEvaluationCaseNote(index, event.target.value)} required minLength={2} maxLength={1000} placeholder="填写独立的人工判断依据" /></div><button type="button" title="移除标签" onClick={() => setEvaluationCases((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={14} /></button></article>)}{evaluationCases.length === 0 ? <p>尚无标签</p> : null}</div>
             <div><label><span>评估集名称</span><input name="name" required minLength={2} maxLength={180} /></label><label><span>描述</span><input name="description" maxLength={1000} /></label></div>
-            <footer><span>{evaluationSources.length} 个合规样本 chunk 可标注</span><button className="button button-green" type="submit" disabled={!evaluationCases.length || busy !== null}>{busy === "evaluation:create" ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}保存评估集</button></footer>
+            <footer><span>{evaluationSources.length} 个合规样本 chunk 可标注</span><button className="button button-green" type="submit" disabled={!evaluationCases.length || evaluationCases.some((item) => item.labelNote.trim().length < 2) || busy !== null}>{busy === "evaluation:create" ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}保存评估集</button></footer>
           </form>
         </div> : null}
         <div className="context-evaluation-list">{evaluationSets.map((evaluationSet) => {
           const latestRun = evaluationSet.runs[0] ?? null;
-          const gate = latestRun ? evaluationGate(latestRun.metrics) : null;
-          const ready = evaluationSet.humanLabeledCaseCount >= 20;
+          const latestCompletedRun = evaluationSet.runs.find((run) => run.status === "completed") ?? null;
+          const metricRun = latestCompletedRun ?? latestRun;
+          const gate = metricRun ? evaluationGate(metricRun.metrics) : null;
+          const archived = evaluationSet.status === "archived";
+          const ready = !archived && evaluationSet.humanLabeledCaseCount >= 20;
           return <article key={evaluationSet.publicId}>
-            <div className="context-evaluation-heading"><div><strong>{evaluationSet.name}</strong><code>{evaluationSet.labelingProtocol}</code></div><span className={ready ? "ready" : "pending"}>{evaluationSet.humanLabeledCaseCount} / 20</span></div>
+            <div className="context-evaluation-heading"><div><strong>{evaluationSet.name}</strong><code>{evaluationSet.labelingProtocol}</code></div><span className={ready ? "ready" : "pending"}>{archived ? "已归档" : `${evaluationSet.humanLabeledCaseCount} / 20`}</span></div>
             <div className="context-evaluation-progress"><span style={{ width: `${Math.min(100, evaluationSet.humanLabeledCaseCount * 5)}%` }} /></div>
-            <dl><div><dt>Precision@K</dt><dd>{latestRun ? evaluationMetric(latestRun.metrics, "precisionAtK") : "—"}</dd></div><div><dt>Recall@K</dt><dd>{latestRun ? evaluationMetric(latestRun.metrics, "recallAtK") : "—"}</dd></div><div><dt>MRR</dt><dd>{latestRun ? evaluationMetric(latestRun.metrics, "meanReciprocalRank") : "—"}</dd></div></dl>
-            <footer><span>{gate?.eligibleForIndexTrial ? "已通过 shadow index 门槛" : latestRun ? gate?.reasons?.[0] ?? latestRun.status : "尚未运行"}</span>{canReview ? <div><button type="button" title="运行确定性基线" disabled={busy !== null} onClick={() => runEvaluation(evaluationSet.publicId, "baseline")}>{busy === `evaluation:${evaluationSet.publicId}:baseline` ? <LoaderCircle className="spin" size={14} /> : <Play size={14} />}Baseline</button><button type="button" title="评估生产 embedding 候选" disabled={busy !== null || !ready} onClick={() => runEvaluation(evaluationSet.publicId, "openai")}>{busy === `evaluation:${evaluationSet.publicId}:openai` ? <LoaderCircle className="spin" size={14} /> : <Beaker size={14} />}Candidate</button></div> : null}</footer>
+            <dl><div><dt>Precision@K</dt><dd>{metricRun ? evaluationMetric(metricRun.metrics, "precisionAtK") : "—"}</dd></div><div><dt>Recall@K</dt><dd>{metricRun ? evaluationMetric(metricRun.metrics, "recallAtK") : "—"}</dd></div><div><dt>MRR</dt><dd>{metricRun ? evaluationMetric(metricRun.metrics, "meanReciprocalRank") : "—"}</dd></div></dl>
+            <footer><span>{archived ? "已归档，不参与检索评估或索引决策" : latestRun?.status === "failed" ? `最近运行失败：${latestRun.errorMessage ?? "未知错误"}` : gate?.eligibleForIndexTrial ? "已通过 shadow index 门槛" : latestRun ? gate?.reasons?.[0] ?? latestRun.status : "尚未运行"}</span>{canReview && !archived ? <div><button type="button" title="归档评估集" disabled={busy !== null} onClick={() => archiveEvaluationSet(evaluationSet.publicId)}>{busy === `evaluation:archive:${evaluationSet.publicId}` ? <LoaderCircle className="spin" size={14} /> : <Archive size={14} />}归档</button><button type="button" title="运行确定性基线" disabled={busy !== null || !ready} onClick={() => runEvaluation(evaluationSet.publicId, "baseline")}>{busy === `evaluation:${evaluationSet.publicId}:baseline` ? <LoaderCircle className="spin" size={14} /> : <Play size={14} />}Baseline</button><button type="button" title={embeddingProviderConfigured ? "评估生产 embedding 候选" : "请先配置 OPENAI_EMBEDDING_BASE_URL"} disabled={busy !== null || !ready || !embeddingProviderConfigured} onClick={() => runEvaluation(evaluationSet.publicId, "openai")}>{busy === `evaluation:${evaluationSet.publicId}:openai` ? <LoaderCircle className="spin" size={14} /> : <Beaker size={14} />}Candidate</button></div> : null}</footer>
           </article>;
-        })}{evaluationSets.length === 0 ? <p className="context-agent-eval-empty">尚无人工相关性评估集。</p> : null}</div>
+        })}{evaluationSets.length === 0 ? <div className="context-evaluation-empty"><div className="context-evaluation-empty-icon"><Beaker size={18} /></div><div><strong>先建立 20 条真实人工 case</strong><p>每条 case 由检索问题、直接相关的研究样本 chunk 和你的判断依据组成。完成后才能比较 Baseline 与 Candidate 检索。</p></div>{canReview ? <button className="button button-muted" type="button" onClick={() => setEvaluationBuilderOpen(true)}><Plus size={14} />开始标注</button> : null}</div> : null}</div>
       </section>
 
       <section className="context-agent-evals" aria-label="Agent Eval">
@@ -699,6 +835,8 @@ export function ContextAssetWorkspace({
               <div><dt>关系</dt><dd>{selected.relationCount}</dd></div>
               <div><dt>内容 Hash</dt><dd><code title={selected.contentHash}>{selected.contentHash.slice(0, 12)}</code></dd></div>
               <div><dt>保留期</dt><dd>{selected.retentionExpiresAt ? new Date(selected.retentionExpiresAt).toLocaleDateString("zh-CN") : "工作区默认"}</dd></div>
+              <div><dt>去重指纹</dt><dd>{selected.candidateDedupeKey ? <code title={selected.candidateDedupeKey}>{selected.candidateDedupeKey.slice(0, 12)}</code> : "不适用"}</dd></div>
+              <div><dt>过期策略</dt><dd>{selected.expiryPolicy === "exclude_on_expiry" ? "过期退出检索" : "无"}</dd></div>
             </dl>
             {selected.memoryKind ? <section className="context-memory-detail">
               {!memoryDetail || memoryDetail.publicId !== selected.publicId ? <div className="context-memory-loading"><LoaderCircle className="spin" size={16} />加载 Memory 治理记录</div> : null}

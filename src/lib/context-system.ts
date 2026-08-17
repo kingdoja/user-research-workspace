@@ -73,6 +73,8 @@ type ContextEmbeddingEvaluationTarget = {
   version: string;
 };
 
+type ContextEmbeddingApiStyle = "openai" | "volcengine_multimodal";
+
 type ContextEvaluationMetrics = {
   precisionAtK: number;
   recallAtK: number;
@@ -80,6 +82,18 @@ type ContextEvaluationMetrics = {
 };
 
 let contextEmbeddingClient: OpenAI | null = null;
+
+const volcengineMultimodalEmbeddingResponseSchema = z.object({
+  data: z.union([
+    z.object({ embedding: z.array(z.number()) }).passthrough(),
+    z.array(z.object({ embedding: z.array(z.number()) }).passthrough()).min(1),
+  ]),
+  usage: z.object({
+    prompt_tokens: z.number().optional(),
+    input_tokens: z.number().optional(),
+    total_tokens: z.number().optional(),
+  }).passthrough().optional(),
+}).passthrough();
 
 const contextPurposeSchema = z.enum(["general", "intent_planning", "research_execution", "realtime_interview", "report_generation", "skill_execution"]);
 const contextMemoryKinds = ["core", "working", "team"] as const;
@@ -180,7 +194,7 @@ export const contextReviewInputSchema = z.object({
 
 export const contextEdgeInputSchema = z.object({
   targetPublicId: z.string().trim().min(8).max(120),
-  relation: z.enum(["derived_from", "supports", "contradicts", "mentions", "supersedes", "related_to"]),
+  relation: z.enum(["derived_from", "supports", "contradicts", "mentions", "supersedes", "related_to", "resolved_by"]),
   note: z.string().trim().max(500).default(""),
 });
 
@@ -205,7 +219,7 @@ export const contextEvaluationSetInputSchema = z.object({
     expectedChunkPublicIds: z.array(z.string().trim().min(8).max(120)).min(1).max(30)
       .refine((publicIds) => new Set(publicIds).size === publicIds.length, "期望 chunk 不能重复"),
     labelNote: z.string().trim().min(2).max(1000),
-  })).min(1).max(100),
+  })).min(20, "human_relevance_v1 至少需要 20 条人工确认标签").max(100),
 });
 
 export const contextSearchInputSchema = z.object({
@@ -287,6 +301,21 @@ function getOpenAIEmbeddingProviderName() {
   return process.env.OPENAI_EMBEDDING_PROVIDER_NAME?.trim() || "openai";
 }
 
+function getContextEmbeddingApiStyle(): ContextEmbeddingApiStyle {
+  return process.env.CONTEXT_EMBEDDING_API_STYLE?.trim() === "volcengine_multimodal"
+    ? "volcengine_multimodal"
+    : "openai";
+}
+
+function getOpenAIEmbeddingBaseUrl() {
+  return process.env.OPENAI_EMBEDDING_BASE_URL?.trim() || process.env.OPENAI_BASE_URL?.trim() || "";
+}
+
+function hasDedicatedEmbeddingEndpoint() {
+  // A chat-only compatibility endpoint must not be silently reused for embeddings.
+  return !process.env.OPENAI_BASE_URL?.trim() || Boolean(process.env.OPENAI_EMBEDDING_BASE_URL?.trim());
+}
+
 function getOpenAIEmbeddingApiKey() {
   return process.env.OPENAI_EMBEDDING_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim();
 }
@@ -325,7 +354,8 @@ export function getContextEmbeddingProviderStatus() {
     baseline: CONTEXT_EMBEDDING_BASELINE,
     openai: {
       providerName: getOpenAIEmbeddingProviderName(),
-      configured: Boolean(getOpenAIEmbeddingApiKey()),
+      apiStyle: getContextEmbeddingApiStyle(),
+      configured: Boolean(getOpenAIEmbeddingApiKey()) && hasDedicatedEmbeddingEndpoint(),
       model: getOpenAIEmbeddingModel(),
       version: getOpenAIEmbeddingVersion(),
     },
@@ -338,7 +368,7 @@ function getContextEmbeddingClient() {
   if (!apiKey) throw new Error("OPENAI_EMBEDDING_API_KEY_MISSING");
   contextEmbeddingClient ??= new OpenAI({
     apiKey,
-    baseURL: process.env.OPENAI_EMBEDDING_BASE_URL?.trim() || process.env.OPENAI_BASE_URL?.trim() || undefined,
+    baseURL: getOpenAIEmbeddingBaseUrl() || undefined,
     timeout: getContextEmbeddingTimeoutMs(),
     maxRetries: 1,
   });
@@ -384,6 +414,78 @@ async function createOpenAIEmbeddings(texts: string[], model: string) {
   };
 }
 
+async function createVolcengineMultimodalEmbeddings(texts: string[], model: string) {
+  const apiKey = getOpenAIEmbeddingApiKey();
+  if (!apiKey) throw new Error("OPENAI_EMBEDDING_API_KEY_MISSING");
+  const baseUrl = getOpenAIEmbeddingBaseUrl();
+  if (!baseUrl) throw new Error("OPENAI_EMBEDDING_BASE_URL_MISSING");
+  const endpoint = new URL("embeddings/multimodal", `${baseUrl.replace(/\/+$/, "")}/`);
+  const vectors = new Map<string, number[]>();
+  const concurrency = getContextEmbeddingBatchSize();
+  let dimensions: number | null = null;
+  let requestCount = 0;
+  let promptTokens = 0;
+  let totalTokens = 0;
+  const startedAt = Date.now();
+
+  for (let offset = 0; offset < texts.length; offset += concurrency) {
+    const input = texts.slice(offset, offset + concurrency);
+    const results = await Promise.all(input.map(async (text) => {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ model, input: [{ type: "text", text }] }),
+        signal: AbortSignal.timeout(getContextEmbeddingTimeoutMs()),
+      });
+      if (!response.ok) throw new Error(`VOLCENGINE_EMBEDDING_REQUEST_FAILED_${response.status}`);
+      const parsed = volcengineMultimodalEmbeddingResponseSchema.safeParse(await response.json());
+      if (!parsed.success) throw new Error("VOLCENGINE_EMBEDDING_RESPONSE_INVALID");
+      const item = Array.isArray(parsed.data.data) ? parsed.data.data[0] : parsed.data.data;
+      const vector = item.embedding.map(Number);
+      if (!vector.length || vector.some((value) => !Number.isFinite(value))) {
+        throw new Error("VOLCENGINE_EMBEDDING_RESPONSE_INVALID");
+      }
+      return {
+        text,
+        vector,
+        promptTokens: parsed.data.usage?.prompt_tokens ?? parsed.data.usage?.input_tokens ?? 0,
+        totalTokens: parsed.data.usage?.total_tokens ?? 0,
+      };
+    }));
+    requestCount += results.length;
+    for (const result of results) {
+      if (dimensions !== null && result.vector.length !== dimensions) {
+        throw new Error("OPENAI_EMBEDDING_DIMENSION_MISMATCH");
+      }
+      dimensions ??= result.vector.length;
+      promptTokens += result.promptTokens;
+      totalTokens += result.totalTokens;
+      vectors.set(result.text, result.vector);
+    }
+  }
+
+  return {
+    vectors,
+    telemetry: {
+      requestCount,
+      inputCount: texts.length,
+      dimensions,
+      promptTokens,
+      totalTokens,
+      latencyMs: Date.now() - startedAt,
+    },
+  };
+}
+
+function createProductionEmbeddings(texts: string[], model: string) {
+  return getContextEmbeddingApiStyle() === "volcengine_multimodal"
+    ? createVolcengineMultimodalEmbeddings(texts, model)
+    : createOpenAIEmbeddings(texts, model);
+}
+
 function scoreCandidate(query: string, terms: string[], candidate: { title: string; content: string; asset_type: string }) {
   const title = candidate.title.toLowerCase();
   const content = candidate.content.toLowerCase();
@@ -403,6 +505,17 @@ function scoreCandidate(query: string, terms: string[], candidate: { title: stri
 
 function hashContextContent(content: string) {
   return createHash("sha256").update(content).digest("hex");
+}
+
+function normalizeCandidateText(value: string) {
+  return value.normalize("NFKC").toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function candidateExpiry(days: number) {
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
 }
 
 const defaultMemoryPolicies: Array<{
@@ -542,6 +655,12 @@ async function bindContextMemory(queryable: Queryable, input: {
   return { ...binding.rows[0], policyId: selectedPolicy.id };
 }
 
+type CandidateAssetRef = {
+  id: string;
+  public_id: string;
+  retention_expires_at?: string | null;
+};
+
 async function appendContextAssetEvent(
   transaction: Queryable,
   input: {
@@ -614,6 +733,8 @@ type InsertContextAssetInput = {
   reviewStatus: Exclude<ContextReviewStatus, "rejected">;
   originKind?: string | null;
   originPublicId?: string | null;
+  candidateDedupeKey?: string | null;
+  expiryPolicy?: "none" | "exclude_on_expiry";
   metadata?: Record<string, unknown>;
   actorUserId?: string;
 };
@@ -626,12 +747,12 @@ async function insertContextAssetRecord(transaction: Queryable, input: InsertCon
        public_id, workspace_id, created_by, asset_type, scope, study_id, title, description, source_uri,
        status, ingestion_method, source_name, source_mime_type, source_hash, evidence_kind,
        consent_status, pii_status, retention_expires_at, review_status, reviewed_by, reviewed_at,
-       origin_kind, origin_public_id, metadata
+       origin_kind, origin_public_id, candidate_dedupe_key, expiry_policy, metadata
      ) values (
        $1, $2, $3, $4, $5, $6, $7, $8, $9,
        $10, $11, $12, $13, $14, $15,
        $16, $17, $18, $19, $20, $21,
-       $22, $23, $24::jsonb
+       $22, $23, $24, $25, $26::jsonb
      ) returning id::text as id, public_id`,
     [
       createPublicId("cxa"), input.workspaceId, input.createdBy, input.assetType, input.scope, input.studyId,
@@ -640,7 +761,9 @@ async function insertContextAssetRecord(transaction: Queryable, input: InsertCon
       input.retentionExpiresAt, input.reviewStatus,
       input.reviewStatus === "approved" ? input.createdBy : null,
       input.reviewStatus === "approved" ? new Date().toISOString() : null,
-      input.originKind ?? null, input.originPublicId ?? null, JSON.stringify(input.metadata ?? {}),
+      input.originKind ?? null, input.originPublicId ?? null,
+      input.candidateDedupeKey ?? null, input.expiryPolicy ?? "none",
+      JSON.stringify(input.metadata ?? {}),
     ],
   );
   const version = await insertVersion(transaction, {
@@ -661,6 +784,8 @@ async function insertContextAssetRecord(transaction: Queryable, input: InsertCon
       sourceHash,
       originKind: input.originKind ?? null,
       originPublicId: input.originPublicId ?? null,
+      candidateDedupeKey: input.candidateDedupeKey ?? null,
+      expiryPolicy: input.expiryPolicy ?? "none",
     },
   });
   return { ...asset.rows[0], versionPublicId: version.public_id, sourceHash };
@@ -679,7 +804,8 @@ export async function listContextAssets(viewer: Viewer) {
     consent_status: string; pii_status: string; retention_expires_at: string | null;
     review_status: ContextReviewStatus; reviewed_at: string | null; review_note: string | null;
     creator_name: string | null; reviewer_name: string | null; origin_kind: string | null;
-    origin_public_id: string | null; content_hash: string; content_preview: string;
+    origin_public_id: string | null; candidate_dedupe_key: string | null; expiry_policy: string;
+    content_hash: string; content_preview: string;
     chunk_count: number; relation_count: number;
     memory_kind: ContextMemoryKind | null; memory_subject_type: string | null;
     memory_confidence: "low" | "medium" | "high" | null; memory_valid_until: string | null;
@@ -696,7 +822,8 @@ export async function listContextAssets(viewer: Viewer) {
             asset.retention_expires_at::text as retention_expires_at, asset.review_status,
             asset.reviewed_at::text as reviewed_at, asset.review_note,
             creator.display_name as creator_name, reviewer.display_name as reviewer_name,
-            asset.origin_kind, asset.origin_public_id, version.content_hash,
+            asset.origin_kind, asset.origin_public_id, asset.candidate_dedupe_key,
+            asset.expiry_policy, version.content_hash,
             left(coalesce(version.content->>'text', ''), 320) as content_preview,
             (select count(*)::int from context_chunks chunk where chunk.asset_version_id = version.id) as chunk_count,
             (select count(*)::int from context_edges edge where edge.from_asset_id = asset.id or edge.to_asset_id = asset.id) as relation_count,
@@ -717,7 +844,7 @@ export async function listContextAssets(viewer: Viewer) {
        on memory_policy.workspace_id = asset.workspace_id
       and memory_policy.memory_kind = memory.memory_kind and memory_policy.status = 'active'
      where asset.workspace_id = $1 and (asset.scope <> 'user' or asset.created_by = $2)
-     order by asset.updated_at desc, asset.id desc limit 100`,
+     order by asset.updated_at desc, asset.id desc limit 300`,
     [viewer.workspaceId, viewer.userId],
   );
   return result.rows.map((row) => ({
@@ -748,6 +875,8 @@ export async function listContextAssets(viewer: Viewer) {
     reviewerName: row.reviewer_name,
     originKind: row.origin_kind,
     originPublicId: row.origin_public_id,
+    candidateDedupeKey: row.candidate_dedupe_key,
+    expiryPolicy: row.expiry_policy,
     contentHash: row.content_hash,
     contentPreview: row.content_preview,
     chunkCount: row.chunk_count,
@@ -1324,10 +1453,10 @@ export async function publishContextVersion(
 async function loadManagedContextAsset(queryable: Queryable, viewer: Viewer, publicId: string, lock = false) {
   const result = await queryable.query<{
     id: string; current_version: number; created_by: string; scope: ContextScope;
-    status: string; index_generation: number;
+    asset_type: string; status: string; index_generation: number; retention_expires_at: string | null;
   }>(
     `select id::text as id, current_version, created_by::text as created_by, scope,
-            status, index_generation
+            asset_type, status, index_generation, retention_expires_at::text as retention_expires_at
      from context_assets where public_id = $1 and workspace_id = $2${lock ? " for update" : ""}`,
     [publicId, viewer.workspaceId],
   );
@@ -1371,6 +1500,8 @@ export async function reviewContextAsset(
     const asset = await loadManagedContextAsset(transaction, viewer, publicId, true);
     if (typeof asset === "string") return asset;
     if (asset.status === "tombstoned") return "tombstoned" as const;
+    if (input.action === "approve" && asset.retention_expires_at
+      && new Date(asset.retention_expires_at).getTime() <= Date.now()) return "expired" as const;
     const approved = input.action === "approve";
     await transaction.query(
       `update context_assets set status = $2, review_status = $3, reviewed_by = $4,
@@ -1421,6 +1552,19 @@ export async function createContextEdge(
       eventType: "relation.created",
       payload: { targetPublicId: input.targetPublicId, relation: input.relation, note: input.note },
     });
+    if (input.relation === "resolved_by" && source.asset_type === "knowledge_gap" && target.status === "active") {
+      await transaction.query(
+        `update context_assets set status = 'archived', updated_at = now() where id = $1`,
+        [source.id],
+      );
+      await appendContextAssetEvent(transaction, {
+        workspaceId: viewer.workspaceId,
+        assetId: source.id,
+        actorUserId: viewer.userId,
+        eventType: "knowledge_gap.resolved",
+        payload: { evidenceAssetPublicId: input.targetPublicId, note: input.note },
+      });
+    }
     return { sourcePublicId, targetPublicId: input.targetPublicId, relation: input.relation };
   });
 }
@@ -1438,6 +1582,22 @@ export async function proposeStudyContextCandidates(
       content: unknown;
     };
     personas: Array<{ publicId: string; name: string; profile: unknown }>;
+    study: {
+      brief: string;
+      studyType: string;
+      framework: string;
+      methods: string[];
+      audience: string;
+      personaCount: number;
+      workflowType: string;
+      workflowVersion: string;
+      taskGraph: Array<{
+        key: string;
+        title: string;
+        toolName: string;
+        dependsOn: string[];
+      }>;
+    };
   },
 ) {
   async function existingOrigin(originKind: string, originPublicId: string, assetType: string) {
@@ -1451,9 +1611,79 @@ export async function proposeStudyContextCandidates(
     return result.rows[0] ?? null;
   }
 
+  async function linkDerivedAsset(assetId: string, reportAssetId: string, candidateKind: string) {
+    await transaction.query(
+      `insert into context_edges (workspace_id, from_asset_id, to_asset_id, relation, metadata, created_by)
+       values ($1, $2, $3, 'derived_from', $4::jsonb, $5)
+       on conflict (from_asset_id, to_asset_id, relation) do nothing`,
+      [
+        input.workspaceId, assetId, reportAssetId,
+        JSON.stringify({ studyPublicId: input.studyPublicId, candidateKind }), input.userId,
+      ],
+    );
+  }
+
+  async function reusableCandidate(
+    assetType: "research_template" | "knowledge_gap",
+    dedupeKey: string,
+  ): Promise<CandidateAssetRef | null> {
+    await transaction.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+      `${input.workspaceId}:${assetType}:${dedupeKey}`,
+    ]);
+    const result = await transaction.query<{
+      id: string; public_id: string; retention_expires_at: string | null;
+    }>(
+      `select id::text as id, public_id, retention_expires_at::text as retention_expires_at
+       from context_assets
+       where workspace_id = $1 and asset_type = $2 and candidate_dedupe_key = $3
+         and status in ('draft', 'active')
+       for update`,
+      [input.workspaceId, assetType, dedupeKey],
+    );
+    const existing = result.rows[0] ?? null;
+    if (!existing?.retention_expires_at
+      || new Date(existing.retention_expires_at).getTime() > Date.now()) return existing;
+    await transaction.query(
+      "update context_assets set status = 'archived', updated_at = now() where id = $1",
+      [existing.id],
+    );
+    await appendContextAssetEvent(transaction, {
+      workspaceId: input.workspaceId,
+      assetId: existing.id,
+      actorUserId: input.userId,
+      eventType: "candidate.expired",
+      payload: { replacementStudyPublicId: input.studyPublicId },
+    });
+    return null;
+  }
+
+  async function recordDuplicate(asset: { id: string; public_id: string }, candidateKind: string) {
+    const recorded = await transaction.query<{ exists: boolean }>(
+      `select exists(
+         select 1 from context_asset_events
+         where asset_id = $1 and event_type = 'candidate.duplicate_detected'
+           and payload->>'studyPublicId' = $2 and payload->>'reportPublicId' = $3
+       ) as exists`,
+      [asset.id, input.studyPublicId, input.report.publicId],
+    );
+    if (recorded.rows[0]?.exists) return;
+    await appendContextAssetEvent(transaction, {
+      workspaceId: input.workspaceId,
+      assetId: asset.id,
+      actorUserId: input.userId,
+      eventType: "candidate.duplicate_detected",
+      payload: {
+        candidateKind,
+        studyPublicId: input.studyPublicId,
+        reportPublicId: input.report.publicId,
+      },
+    });
+  }
+
   const reportContent = JSON.stringify(input.report.content, null, 2).slice(0, 200_000);
   let reportAsset = await existingOrigin("report", input.report.publicId, "research_sample");
   let proposed = 0;
+  let duplicates = 0;
   if (!reportAsset) {
     const inserted = await insertContextAssetRecord(transaction, {
       workspaceId: input.workspaceId,
@@ -1521,7 +1751,176 @@ export async function proposeStudyContextCandidates(
       ],
     );
   }
-  return { proposed, reportAssetPublicId: reportAsset.public_id };
+
+  const normalizedTasks = input.study.taskGraph
+    .map((task) => ({
+      key: task.key,
+      title: task.title,
+      toolName: task.toolName,
+      dependsOn: [...task.dependsOn].sort(),
+    }))
+    .sort((left, right) => left.key.localeCompare(right.key));
+  const templateSignature = {
+    schemaVersion: "research-template-dedupe-v1",
+    studyType: input.study.studyType,
+    framework: normalizeCandidateText(input.study.framework),
+    methods: input.study.methods.map(normalizeCandidateText).sort(),
+    workflowType: input.study.workflowType,
+    workflowVersion: input.study.workflowVersion,
+    taskGraph: normalizedTasks.map((task) => ({
+      key: task.key,
+      toolName: task.toolName,
+      dependsOn: task.dependsOn,
+    })),
+  };
+  const templateDedupeKey = hashContextContent(JSON.stringify(templateSignature));
+  let templateAsset = await reusableCandidate("research_template", templateDedupeKey);
+  if (!templateAsset) {
+    const templateContent = JSON.stringify({
+      schemaVersion: "research-template-v1",
+      name: `${input.study.framework} · ${input.study.methods.join(" + ")}`,
+      applicability: {
+        studyType: input.study.studyType,
+        audience: input.study.audience,
+        objectiveExample: input.study.brief,
+      },
+      design: {
+        framework: input.study.framework,
+        methods: input.study.methods,
+        personaCount: input.study.personaCount,
+      },
+      workflow: {
+        type: input.study.workflowType,
+        version: input.study.workflowVersion,
+        tasks: normalizedTasks,
+      },
+      provenance: {
+        studyPublicId: input.studyPublicId,
+        reportPublicId: input.report.publicId,
+      },
+    }, null, 2);
+    const inserted = await insertContextAssetRecord(transaction, {
+      workspaceId: input.workspaceId,
+      createdBy: input.userId,
+      assetType: "research_template",
+      scope: "workspace",
+      studyId: null,
+      title: `研究模板：${input.study.framework}`.slice(0, 180),
+      description: `${input.study.methods.join("、")} · ${input.study.audience}`.slice(0, 1000),
+      sourceUri: null,
+      content: templateContent,
+      changeNote: "Generated from completed study workflow",
+      ingestionMethod: "study_output",
+      sourceName: `Study ${input.studyPublicId}`,
+      sourceMimeType: "application/json",
+      evidenceKind: "mixed",
+      consentStatus: "not_required",
+      piiStatus: "none",
+      retentionExpiresAt: candidateExpiry(365),
+      reviewStatus: "pending",
+      originKind: "workflow_template",
+      originPublicId: input.report.publicId,
+      candidateDedupeKey: templateDedupeKey,
+      expiryPolicy: "exclude_on_expiry",
+      metadata: {
+        studyPublicId: input.studyPublicId,
+        candidateKind: "research_template",
+        dedupeVersion: "research-template-dedupe-v1",
+        reviewPolicy: "admin_approval_required",
+      },
+    });
+    templateAsset = { id: inserted.id, public_id: inserted.public_id };
+    proposed += 1;
+  } else {
+    duplicates += 1;
+    await recordDuplicate(templateAsset, "research_template");
+  }
+  if (!templateAsset) throw new Error("RESEARCH_TEMPLATE_CANDIDATE_MISSING");
+  await linkDerivedAsset(templateAsset.id, reportAsset.id, "research_template");
+
+  const reportObject = input.report.content && typeof input.report.content === "object"
+    && !Array.isArray(input.report.content) ? input.report.content as Record<string, unknown> : {};
+  const reportTextArray = (key: "nextQuestions" | "limitations") => (
+    Array.isArray(reportObject[key])
+      ? reportObject[key].filter((item): item is string => typeof item === "string" && item.trim().length >= 10)
+      : []
+  );
+  const gapCandidates = [
+    ...reportTextArray("nextQuestions").slice(0, 6)
+      .map((statement) => ({ kind: "next_question", statement })),
+    ...reportTextArray("limitations").slice(0, 6)
+      .map((statement) => ({ kind: "limitation", statement })),
+  ];
+  const knowledgeGapAssetPublicIds: string[] = [];
+  for (const gap of gapCandidates) {
+    const dedupeKey = hashContextContent(JSON.stringify({
+      schemaVersion: "knowledge-gap-dedupe-v1",
+      kind: gap.kind,
+      statement: normalizeCandidateText(gap.statement),
+    }));
+    let gapAsset = await reusableCandidate("knowledge_gap", dedupeKey);
+    if (!gapAsset) {
+      const content = JSON.stringify({
+        schemaVersion: "knowledge-gap-v1",
+        kind: gap.kind,
+        statement: gap.statement,
+        status: "open",
+        provenance: {
+          studyPublicId: input.studyPublicId,
+          reportPublicId: input.report.publicId,
+        },
+      }, null, 2);
+      const inserted = await insertContextAssetRecord(transaction, {
+        workspaceId: input.workspaceId,
+        createdBy: input.userId,
+        assetType: "knowledge_gap",
+        scope: "workspace",
+        studyId: null,
+        title: `${gap.kind === "next_question" ? "待验证" : "证据缺口"}：${gap.statement}`.slice(0, 180),
+        description: gap.kind === "next_question"
+          ? "研究报告提出的后续验证问题"
+          : "研究报告明确披露的限制，需要补充证据",
+        sourceUri: null,
+        content,
+        changeNote: "Generated from completed study report",
+        ingestionMethod: "study_output",
+        sourceName: `Study ${input.studyPublicId}`,
+        sourceMimeType: "application/json",
+        evidenceKind: "mixed",
+        consentStatus: "not_required",
+        piiStatus: "none",
+        retentionExpiresAt: candidateExpiry(180),
+        reviewStatus: "pending",
+        originKind: "report_knowledge_gap",
+        originPublicId: `${input.report.publicId}:${gap.kind}:${dedupeKey.slice(0, 12)}`,
+        candidateDedupeKey: dedupeKey,
+        expiryPolicy: "exclude_on_expiry",
+        metadata: {
+          studyPublicId: input.studyPublicId,
+          candidateKind: "knowledge_gap",
+          gapKind: gap.kind,
+          dedupeVersion: "knowledge-gap-dedupe-v1",
+          reviewPolicy: "admin_approval_required",
+        },
+      });
+      gapAsset = { id: inserted.id, public_id: inserted.public_id };
+      proposed += 1;
+    } else {
+      duplicates += 1;
+      await recordDuplicate(gapAsset, "knowledge_gap");
+    }
+    if (!gapAsset) throw new Error("KNOWLEDGE_GAP_CANDIDATE_MISSING");
+    await linkDerivedAsset(gapAsset.id, reportAsset.id, "knowledge_gap");
+    knowledgeGapAssetPublicIds.push(gapAsset.public_id);
+  }
+
+  return {
+    proposed,
+    duplicates,
+    reportAssetPublicId: reportAsset.public_id,
+    templateAssetPublicId: templateAsset.public_id,
+    knowledgeGapAssetPublicIds,
+  };
 }
 
 export async function reindexContextAsset(viewer: Viewer, publicId: string) {
@@ -1645,6 +2044,19 @@ export async function createContextEvaluationSet(
   });
 }
 
+export async function archiveContextEvaluationSet(viewer: Viewer, evaluationSetPublicId: string) {
+  if (viewer.role !== "owner" && viewer.role !== "admin") return "forbidden" as const;
+  const database = await getDatabase();
+  const archived = await database.query<{ public_id: string }>(
+    `update context_evaluation_sets
+     set status = 'archived', updated_at = now()
+     where public_id = $1 and workspace_id = $2 and status <> 'archived'
+     returning public_id`,
+    [evaluationSetPublicId, viewer.workspaceId],
+  );
+  return archived.rows[0] ? { publicId: archived.rows[0].public_id, status: "archived" as const } : "not_found" as const;
+}
+
 export async function listContextEvaluationSourceChunks(viewer: Viewer) {
   if (viewer.role !== "owner" && viewer.role !== "admin") return [];
   const database = await getDatabase();
@@ -1653,7 +2065,7 @@ export async function listContextEvaluationSourceChunks(viewer: Viewer) {
     source_name: string | null; content: string; content_hash: string;
   }>(
     `select chunk.public_id, asset.public_id as asset_public_id, version.public_id as asset_version_public_id,
-            asset.title, asset.source_name, left(chunk.content, 360) as content, version.content_hash
+            asset.title, asset.source_name, chunk.content, version.content_hash
      from context_chunks chunk
      join context_asset_versions version on version.id = chunk.asset_version_id
      join context_assets asset on asset.id = version.asset_id
@@ -2065,12 +2477,21 @@ export async function runContextEvaluation(
   if (viewer.role !== "owner" && viewer.role !== "admin") return "forbidden" as const;
   const database = await getDatabase();
   const target = resolveContextEmbeddingEvaluationTarget(input);
+  if (target.provider === "openai" && !getContextEmbeddingProviderStatus().openai.configured) {
+    return "embedding_endpoint_not_configured" as const;
+  }
   const evaluationSet = await database.query<{ id: string }>(
     `select id::text as id from context_evaluation_sets
      where public_id = $1 and workspace_id = $2 and status = 'active' limit 1`,
     [evaluationSetPublicId, viewer.workspaceId],
   );
   if (!evaluationSet.rows[0]) return "not_found" as const;
+  const humanLabeledCases = await database.query<{ count: number }>(
+    `select count(*)::int as count from context_evaluation_cases
+     where evaluation_set_id = $1 and labeling_method = 'human_annotated'`,
+    [evaluationSet.rows[0].id],
+  );
+  if (humanLabeledCases.rows[0].count < 20) return "insufficient_human_labels" as const;
   const run = await database.query<{ id: string; public_id: string }>(
     `insert into context_evaluation_runs (
        public_id, evaluation_set_id, workspace_id, created_by, strategy,
@@ -2123,7 +2544,7 @@ export async function runContextEvaluation(
       throw new Error("CONTEXT_EMBEDDING_EVALUATION_INPUT_LIMIT_EXCEEDED");
     }
     const openAIEmbeddingResult = target.provider === "openai"
-      ? await createOpenAIEmbeddings(embeddingTexts, target.model)
+      ? await createProductionEmbeddings(embeddingTexts, target.model)
       : null;
     const candidateScores: Array<{ precision: number; recall: number; reciprocalRank: number }> = [];
     const baselineScores: Array<{ precision: number; recall: number; reciprocalRank: number }> = [];

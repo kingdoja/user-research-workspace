@@ -149,8 +149,10 @@ async function main() {
     );
     assert.deepEqual(recoveryState.rows[0], { status: "pending", checkpoint_stable: true, interrupted: 1 });
     assert.equal(classifyTaskError(new Error("OPENAI_API_KEY_MISSING")).disposition, "terminal");
+    assert.equal(classifyTaskError(new Error("DEEPSEEK_API_KEY_MISSING")).disposition, "terminal");
+    assert.equal(classifyTaskError(new Error("OPENAI_INVALID_SCHEMA:report:invalid_type")).disposition, "retry");
 
-    console.log(JSON.stringify({ retryAttempts: 2, artifactCount: 1, waitingInputResumed: true, leaseRecovered: true, terminalClassified: true }, null, 2));
+    console.log(JSON.stringify({ retryAttempts: 2, artifactCount: 1, waitingInputResumed: true, leaseRecovered: true, terminalClassified: true, schemaRetryClassified: true }, null, 2));
   } finally {
     if (workspaceId) await database.query("delete from workspaces where id = $1", [workspaceId]);
     await database.query("delete from auth.users where id = $1", [authUserId]);
