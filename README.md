@@ -70,9 +70,12 @@ Caddy TLS proxy and remote deployment gate under `deploy/` and `scripts/`. See
 
 The Runner probes its container engine and both configured images before declaring readiness.
 Use `/live` for process liveness and `/ready` for traffic admission; `/health` remains a
-readiness-compatible endpoint. Prometheus metrics are available at `/metrics` only with the
-same `x-sandbox-token` used by `/execute`. `SIGTERM`/`SIGINT` stops new admission, drains active
-executions for the configured grace period, and then aborts and removes overdue containers.
+readiness-compatible endpoint. Prometheus metrics are available at `/metrics` with the
+configured metrics token. `SIGTERM`/`SIGINT` stops new admission, drains active executions for
+the configured grace period, and then aborts and removes overdue containers. Production
+separates metrics access with `SANDBOX_RUNNER_METRICS_AUTH_TOKEN`; the included Prometheus job
+uses a Bearer credentials file. Run `pnpm verify:sandbox-worker` on the dedicated Linux host
+and `pnpm smoke:sandbox-operations` for the repository-side operations contract.
 
 ## Verification
 
@@ -80,8 +83,10 @@ executions for the configured grace period, and then aborts and removes overdue 
 pnpm lint
 pnpm build
 pnpm smoke:sandbox-runner
+pnpm smoke:sandbox-operations
 # Against a deployed HTTPS Runner:
-SANDBOX_VERIFY_URL=https://sandbox.example.com SANDBOX_VERIFY_TOKEN=... pnpm verify:sandbox-deployment
+SANDBOX_VERIFY_URL=https://sandbox.example.com SANDBOX_VERIFY_TOKEN=... \
+SANDBOX_VERIFY_METRICS_TOKEN=... pnpm verify:sandbox-deployment
 pnpm smoke:report-routing
 LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated api-access
 LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated platform-control

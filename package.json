@@ -11,6 +11,8 @@
     "sandbox:runner": "tsx services/sandbox-runner/server.ts",
     "smoke:sandbox-runner": "tsx scripts/sandbox-runner-smoke.ts",
     "verify:sandbox-deployment": "tsx scripts/verify-sandbox-deployment.ts",
+    "verify:sandbox-worker": "tsx scripts/verify-sandbox-worker.ts",
+    "smoke:sandbox-operations": "tsx scripts/sandbox-operations-smoke.ts",
     "smoke:deepseek-provider": "tsx scripts/deepseek-provider-smoke.ts",
     "smoke:report-routing": "tsx scripts/report-routing-smoke.ts",
     "smoke:report-provider": "tsx scripts/report-provider-smoke.ts",
@@ -68,7 +70,8 @@
     "eslint-config-next": "16.3.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.12",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "yaml": "^2.9.0"
   },
   "packageManager": "pnpm@11.16.0"
 }

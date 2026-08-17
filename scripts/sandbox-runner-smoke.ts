@@ -10,6 +10,7 @@ const runtime = process.env.SANDBOX_CONTAINER_RUNTIME === "podman" ? "podman" : 
 const javascriptImage = process.env.SANDBOX_JAVASCRIPT_IMAGE ?? "node:24-alpine";
 const pythonImage = process.env.SANDBOX_PYTHON_IMAGE ?? "python:3.13-alpine";
 const authToken = "sandbox-smoke-token-000000000000";
+const metricsAuthToken = "sandbox-metrics-token-0000000000";
 
 async function assertImageAvailable(image: string) {
   const child = spawn(runtime, ["image", "inspect", image], { stdio: "ignore", shell: false });
@@ -74,9 +75,17 @@ async function main() {
   assert.throws(() => loadSandboxRunnerConfig({
     NODE_ENV: "production",
     SANDBOX_RUNNER_AUTH_TOKEN: authToken,
+    SANDBOX_RUNNER_METRICS_AUTH_TOKEN: metricsAuthToken,
     SANDBOX_JAVASCRIPT_IMAGE: "node:24-alpine",
     SANDBOX_PYTHON_IMAGE: "python:3.13-alpine",
   }), /pinned by sha256 digest/);
+  assert.throws(() => loadSandboxRunnerConfig({
+    NODE_ENV: "production",
+    SANDBOX_RUNNER_AUTH_TOKEN: authToken,
+    SANDBOX_RUNNER_METRICS_AUTH_TOKEN: authToken,
+    SANDBOX_JAVASCRIPT_IMAGE: `node@sha256:${"a".repeat(64)}`,
+    SANDBOX_PYTHON_IMAGE: `python@sha256:${"b".repeat(64)}`,
+  }), /distinct SANDBOX_RUNNER_METRICS_AUTH_TOKEN/);
   assert.throws(() => loadSandboxRunnerConfig({
     NODE_ENV: "development",
     SANDBOX_RUNNER_AUTH_TOKEN: "short",
@@ -86,6 +95,7 @@ async function main() {
     host: "127.0.0.1",
     port: 0,
     authToken,
+    metricsAuthToken,
     maxConcurrency: 1,
     maxRequestBytes: 524_288,
     containerRuntime: runtime,
@@ -120,7 +130,7 @@ async function main() {
       assert.equal(ready.checks.runtimeAvailable, true);
       assert.deepEqual(ready.checks.imagesAvailable, { javascript: true, python: true });
     }
-    const unauthorizedMetrics = await fetch(`${baseUrl}/metrics`);
+    const unauthorizedMetrics = await fetch(`${baseUrl}/metrics`, { headers: { "x-sandbox-token": authToken } });
     assert.equal(unauthorizedMetrics.status, 401);
     assert.deepEqual(await unauthorizedMetrics.json(), { error: "unauthorized" });
 
@@ -232,7 +242,7 @@ export default async ({ left, right }) => {
     assert.deepEqual(await busyResponse.json(), { error: "runner_busy" });
     assert.equal((await busyExecution).status, 200);
 
-    const metricsResponse = await fetch(`${baseUrl}/metrics`, { headers: { "x-sandbox-token": authToken } });
+    const metricsResponse = await fetch(`${baseUrl}/metrics`, { headers: { authorization: `Bearer ${metricsAuthToken}` } });
     const metrics = await metricsResponse.text();
     assert.equal(metricsResponse.status, 200);
     assert.match(metricsResponse.headers.get("content-type") ?? "", /^text\/plain/);
@@ -241,7 +251,8 @@ export default async ({ left, right }) => {
     assert.match(metrics, /atypica_sandbox_runner_executions_failed_total 4/);
     assert.match(metrics, /code="SANDBOX_TIMEOUT"/);
     assert.match(metrics, /reason="busy"/);
-    assert.doesNotMatch(metrics, new RegExp(authToken));
+    assert.equal(metrics.includes(authToken), false);
+    assert.equal(metrics.includes(metricsAuthToken), false);
     assert.doesNotMatch(metrics, /large\.mjs|index\.mjs|executionId|sbx_/);
 
     const drainingExecution = post(executeUrl, request({

@@ -1,0 +1,12 @@
+scrape_configs:
+  - job_name: atypica-sandbox-runner
+    scheme: https
+    scrape_interval: 15s
+    scrape_timeout: 5s
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/atypica-sandbox-runner-metrics-token
+    static_configs:
+      - targets:
+          - sandbox.example.com

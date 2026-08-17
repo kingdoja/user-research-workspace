@@ -465,6 +465,13 @@ Runtime 默认值：每 run 2 个并发 task、每 workspace 2 个活跃研究 r
 - `smoke:sandbox-runner` 已用真实容器新增验证 runtime/image readiness、镜像缺失降级、指标认证/敏感值隔离、并发拒绝、正常排空、超时强制排空和无残留容器。远程部署门禁同步验证 liveness/readiness 与认证指标。
 - 运行手册已定义发布门禁、告警信号、systemd 排空演练和回滚顺序。这些是可重复的代码/配置交付；真实 worker、DNS/TLS、密钥存储、监控采集器和告警路由仍属外部运维资源。
 
+## 2026-08-17 Sandbox Runner 生产资源接入准备记录
+
+- Runner 支持独立 `SANDBOX_RUNNER_METRICS_AUTH_TOKEN`；执行 API 仍只接受 `x-sandbox-token`，Prometheus 可以标准 Bearer authorization 读取 metrics。本地开发在未配置时可回退到执行 token，但 `NODE_ENV=production` 和 worker 预检均强制两者显式配置且不同。
+- `deploy/prometheus/` 新增 HTTPS scrape job、Bearer `credentials_file` 与 6 条告警：target down、not ready、readiness probe 失败、unavailable 拒绝、持续容量拒绝和高执行失败率。Alertmanager 路由依赖真实运维环境，不在仓库中虚构接收人。
+- `verify:sandbox-worker` 只允许在专用 Linux worker 上通过；它检查 mode-0600 环境文件、非占位且分离的凭据、rootless Podman、digest 镜像、systemd enable/active 以及本机 liveness/readiness/metrics，且不输出 secret。
+- `smoke:sandbox-operations` 用 YAML 解析器验证 scrape/告警结构、敏感值不入配置、凭据分离和 systemd 额外 15 秒清理预算。真实主机、DNS/TLS、Prometheus/Alertmanager 和密钥分发未在当前环境提供，因此本阶段是可执行接入准备，不是真实上线记录。
+
 ## 验收标准
 
 - 任意一次运行可以重放：workflow、skill version、prompt version、context version、provider model 均可定位。

@@ -39,8 +39,11 @@ SANDBOX_RUNNER_AUTH_TOKEN='replace-with-at-least-24-characters' pnpm sandbox:run
 - `GET /ready` verifies the container engine and both pre-pulled images; it returns `503`
   while the runtime is unavailable or the process is draining.
 - `GET /health` is a backward-compatible alias of `/ready`.
-- `GET /metrics` emits Prometheus text and requires `x-sandbox-token`. Labels are restricted
-  to language, bounded error code and rejection reason; inputs, source, file paths, tokens and
+- `GET /metrics` emits Prometheus text and requires the metrics token through standard Bearer
+  authorization or `x-sandbox-token`. Production requires `SANDBOX_RUNNER_METRICS_AUTH_TOKEN`
+  to differ from execution access; local development falls back to the execution token when
+  it is omitted. Labels are restricted to
+  language, bounded error code and rejection reason; inputs, source, file paths, tokens and
   execution IDs are never metric labels.
 - `POST /execute` returns `503 runner_unavailable` when runtime readiness is down,
   `503 runner_draining` after shutdown begins, or `429 runner_busy` at the concurrency limit.
@@ -76,8 +79,9 @@ install -m 0644 deploy/atypica-sandbox-runner.service ~/.config/systemd/user/
 ```
 
 Replace the token in the installed environment file with at least 32 random bytes. The
-example pins the images that passed repository QA. Pull those exact references before the
-service starts, then confirm rootless execution:
+metrics token must be a different value with the same entropy. The example pins the images
+that passed repository QA. Pull those exact references before the service starts, then confirm
+rootless execution:
 
 ```bash
 source ~/.config/atypica/sandbox-runner.env
@@ -88,8 +92,18 @@ systemctl --user daemon-reload
 systemctl --user enable --now atypica-sandbox-runner.service
 curl --fail http://127.0.0.1:8787/live
 curl --fail http://127.0.0.1:8787/ready
-curl --fail -H "x-sandbox-token: $SANDBOX_RUNNER_AUTH_TOKEN" http://127.0.0.1:8787/metrics
+curl --fail -H "Authorization: Bearer $SANDBOX_RUNNER_METRICS_AUTH_TOKEN" http://127.0.0.1:8787/metrics
 ```
+
+After the unit is active, verify host-specific invariants from the dedicated Runner account:
+
+```bash
+pnpm verify:sandbox-worker
+```
+
+This command intentionally fails outside Linux or when the environment file is not private,
+Podman is not rootless, an image is missing, the systemd user unit is inactive, credentials are
+shared/placeholders, or local liveness/readiness/metrics fail. It never prints either token.
 
 Install `deploy/Caddyfile.sandbox.example` on the same worker, replace the hostname, and
 expose only ports 80/443. Keep `127.0.0.1:8787` private. Caddy manages TLS and proxies to the
@@ -115,6 +129,7 @@ After TLS is live, run the deployment gate from a trusted operator machine:
 ```bash
 SANDBOX_VERIFY_URL=https://sandbox.example.com \
 SANDBOX_VERIFY_TOKEN="$SKILL_SECRET_SANDBOX_RUNNER_TOKEN" \
+SANDBOX_VERIFY_METRICS_TOKEN="$SANDBOX_RUNNER_METRICS_AUTH_TOKEN" \
 pnpm verify:sandbox-deployment
 ```
 
@@ -122,6 +137,9 @@ The gate checks liveness, runtime/image readiness, authenticated metrics, digest
 bad-token rejection, JavaScript and Python execution, non-root/read-only/default-deny
 isolation, timeout and output limits. On the worker, add
 `SANDBOX_VERIFY_CONTAINER_RUNTIME=podman` to also prove no execution containers remain.
+Install the Prometheus scrape and alert files from `deploy/prometheus/`, validate them with
+`promtool`, and route their `critical` and `warning` severities in the environment's existing
+Alertmanager. Do not place either token directly in Prometheus YAML.
 
 ## Release, fault drill and rollback
 
@@ -145,5 +163,6 @@ Roll back by restoring the last reviewed checkout and environment file, ensuring
 digests are present, restarting the user unit, waiting for `/ready`, and rerunning the remote
 gate. If readiness stays down, keep the Runner out of traffic and inspect `journalctl --user -u
 atypica-sandbox-runner.service`; do not bypass readiness or enable host execution. Rotate the
-shared token in the Runner and Next.js secret stores in one maintenance window because
-overlapping tokens are not accepted by design.
+execution token in the Runner and Next.js secret stores in one maintenance window because
+overlapping values are not accepted. Rotate the independent metrics token in the Runner and
+Prometheus credentials file together.

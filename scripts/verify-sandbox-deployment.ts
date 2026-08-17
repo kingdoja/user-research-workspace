@@ -5,6 +5,7 @@ import { once } from "node:events";
 const protocol = "atypica.sandbox/v1";
 const baseUrlValue = process.env.SANDBOX_VERIFY_URL?.trim();
 const authToken = process.env.SANDBOX_VERIFY_TOKEN ?? "";
+const metricsAuthToken = process.env.SANDBOX_VERIFY_METRICS_TOKEN ?? authToken;
 const allowHttp = process.env.SANDBOX_VERIFY_ALLOW_HTTP === "1";
 
 if (!baseUrlValue) throw new Error("SANDBOX_VERIFY_URL is required");
@@ -22,6 +23,9 @@ if (baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash) {
 }
 if (authToken.length < 24) {
   throw new Error("SANDBOX_VERIFY_TOKEN must contain at least 24 characters");
+}
+if (metricsAuthToken.length < 24) {
+  throw new Error("SANDBOX_VERIFY_METRICS_TOKEN must contain at least 24 characters");
 }
 
 const healthUrl = new URL("/health", baseUrl);
@@ -177,7 +181,7 @@ export default ({ left, right }) => {
 
   const residualContainers = await assertNoLocalContainers();
   const metricsResponse = await fetch(metricsUrl, {
-    headers: { "x-sandbox-token": authToken },
+    headers: { authorization: `Bearer ${metricsAuthToken}` },
     redirect: "error",
     signal: AbortSignal.timeout(5_000),
   });
@@ -186,7 +190,8 @@ export default ({ left, right }) => {
   assert.match(metrics, /atypica_sandbox_runner_ready 1/);
   assert.match(metrics, /atypica_sandbox_runner_executions_accepted_total [1-9][0-9]*/);
   assert.match(metrics, /code="SANDBOX_TIMEOUT"/);
-  assert.doesNotMatch(metrics, new RegExp(authToken));
+  assert.equal(metrics.includes(authToken), false);
+  assert.equal(metrics.includes(metricsAuthToken), false);
   assert.doesNotMatch(metrics, /executionId|sbx_|verify\.mjs|verify\.py/);
   console.log(JSON.stringify({
     target: baseUrl.origin,

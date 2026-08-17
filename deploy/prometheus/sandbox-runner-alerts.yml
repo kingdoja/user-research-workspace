@@ -1,0 +1,56 @@
+groups:
+  - name: atypica-sandbox-runner
+    rules:
+      - alert: AtypicaSandboxRunnerDown
+        expr: up{job="atypica-sandbox-runner"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Sandbox Runner metrics target is down
+          description: Prometheus has been unable to scrape the Sandbox Runner for two minutes.
+
+      - alert: AtypicaSandboxRunnerNotReady
+        expr: max_over_time(atypica_sandbox_runner_ready{job="atypica-sandbox-runner"}[2m]) < 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Sandbox Runner is not ready
+          description: The Runner cannot admit work because its runtime, images, or lifecycle state is unhealthy.
+
+      - alert: AtypicaSandboxReadinessProbeFailures
+        expr: increase(atypica_sandbox_runner_readiness_probe_failures_total{job="atypica-sandbox-runner"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Sandbox runtime readiness checks are failing
+          description: Inspect rootless Podman and the pinned JavaScript and Python images.
+
+      - alert: AtypicaSandboxUnavailableRejections
+        expr: increase(atypica_sandbox_runner_rejections_total{job="atypica-sandbox-runner",reason="unavailable"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Sandbox executions are rejected as unavailable
+          description: New work reached a Runner whose runtime readiness was down.
+
+      - alert: AtypicaSandboxSustainedCapacityRejections
+        expr: increase(atypica_sandbox_runner_rejections_total{job="atypica-sandbox-runner",reason="busy"}[10m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Sandbox Runner is rejecting work at its concurrency limit
+          description: Review queue pressure and execution duration before increasing the concurrency limit.
+
+      - alert: AtypicaSandboxHighExecutionFailureRatio
+        expr: (sum(rate(atypica_sandbox_runner_executions_failed_total{job="atypica-sandbox-runner"}[10m])) / clamp_min(sum(rate(atypica_sandbox_runner_executions_accepted_total{job="atypica-sandbox-runner"}[10m])), 0.001)) > 0.2 and sum(increase(atypica_sandbox_runner_executions_accepted_total{job="atypica-sandbox-runner"}[10m])) >= 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Sandbox execution failure ratio is above 20 percent
+          description: Compare bounded runtime error codes with the previous release before rollback or remediation.

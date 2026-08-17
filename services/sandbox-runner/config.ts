@@ -9,6 +9,7 @@ export type SandboxRunnerConfig = {
   host: string;
   port: number;
   authToken: string;
+  metricsAuthToken: string;
   maxConcurrency: number;
   maxRequestBytes: number;
   containerRuntime: "docker" | "podman";
@@ -45,6 +46,13 @@ export function loadSandboxRunnerConfig(environment: NodeJS.ProcessEnv = process
   if (authToken.length < 24) {
     throw new Error("SANDBOX_RUNNER_AUTH_TOKEN must contain at least 24 characters");
   }
+  const metricsAuthToken = environment.SANDBOX_RUNNER_METRICS_AUTH_TOKEN ?? authToken;
+  if (metricsAuthToken.length < 24) {
+    throw new Error("SANDBOX_RUNNER_METRICS_AUTH_TOKEN must contain at least 24 characters");
+  }
+  if (production && (!environment.SANDBOX_RUNNER_METRICS_AUTH_TOKEN || metricsAuthToken === authToken)) {
+    throw new Error("Production requires a distinct SANDBOX_RUNNER_METRICS_AUTH_TOKEN");
+  }
   const javascriptImage = imageSchema.parse(environment.SANDBOX_JAVASCRIPT_IMAGE ?? "node:24-alpine");
   const pythonImage = imageSchema.parse(environment.SANDBOX_PYTHON_IMAGE ?? "python:3.13-alpine");
   const requireDigest = environment.SANDBOX_RUNNER_REQUIRE_IMAGE_DIGEST === "1" || production;
@@ -56,6 +64,7 @@ export function loadSandboxRunnerConfig(environment: NodeJS.ProcessEnv = process
     host: environment.SANDBOX_RUNNER_HOST?.trim() || "127.0.0.1",
     port: integerFromEnv(environment.SANDBOX_RUNNER_PORT, 8787, 1, 65_535),
     authToken,
+    metricsAuthToken,
     maxConcurrency: integerFromEnv(environment.SANDBOX_RUNNER_MAX_CONCURRENCY, 4, 1, 64),
     maxRequestBytes: integerFromEnv(environment.SANDBOX_RUNNER_MAX_REQUEST_BYTES, 524_288, 262_144, 2_097_152),
     containerRuntime: runtimeNameSchema.parse(environment.SANDBOX_CONTAINER_RUNTIME ?? "docker"),

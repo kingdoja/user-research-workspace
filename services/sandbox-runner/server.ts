@@ -48,12 +48,23 @@ function writeMetrics(response: ServerResponse, content: string) {
   response.end(content);
 }
 
-function authenticated(request: IncomingMessage, expectedToken: string) {
-  const provided = request.headers["x-sandbox-token"];
-  if (typeof provided !== "string") return false;
+function tokenMatches(provided: string | undefined, expectedToken: string) {
+  if (!provided) return false;
   const expectedBuffer = Buffer.from(expectedToken);
   const providedBuffer = Buffer.from(provided);
   return expectedBuffer.length === providedBuffer.length && timingSafeEqual(expectedBuffer, providedBuffer);
+}
+
+function authenticated(request: IncomingMessage, expectedToken: string) {
+  const provided = request.headers["x-sandbox-token"];
+  return typeof provided === "string" && tokenMatches(provided, expectedToken);
+}
+
+function metricsAuthenticated(request: IncomingMessage, expectedToken: string) {
+  const authorization = request.headers.authorization?.match(/^Bearer ([^\s]+)$/i)?.[1];
+  const sandboxToken = request.headers["x-sandbox-token"];
+  return tokenMatches(authorization, expectedToken)
+    || (typeof sandboxToken === "string" && tokenMatches(sandboxToken, expectedToken));
 }
 
 function readRequestBody(request: IncomingMessage, limit: number) {
@@ -234,7 +245,7 @@ export async function startSandboxRunner(config: SandboxRunnerConfig): Promise<S
       return;
     }
     if (request.method === "GET" && url.pathname === "/metrics") {
-      if (!authenticated(request, config.authToken)) {
+      if (!metricsAuthenticated(request, config.metricsAuthToken)) {
         writeJson(response, 401, { error: "unauthorized" });
         return;
       }
