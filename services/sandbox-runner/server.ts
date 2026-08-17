@@ -60,6 +60,10 @@ export async function startSandboxRunner(config: SandboxRunnerConfig) {
         activeExecutions,
         maxConcurrency: config.maxConcurrency,
         runtimes: ["javascript", "python"],
+        imageDigestsPinned: {
+          javascript: config.javascriptImage.includes("@sha256:"),
+          python: config.pythonImage.includes("@sha256:"),
+        },
       });
       return;
     }

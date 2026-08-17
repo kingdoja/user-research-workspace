@@ -10,6 +10,7 @@
     "research:worker:once": "tsx scripts/research-worker.mjs --once",
     "sandbox:runner": "tsx services/sandbox-runner/server.ts",
     "smoke:sandbox-runner": "tsx scripts/sandbox-runner-smoke.ts",
+    "verify:sandbox-deployment": "tsx scripts/verify-sandbox-deployment.ts",
     "smoke:deepseek-provider": "tsx scripts/deepseek-provider-smoke.ts",
     "smoke:report-routing": "tsx scripts/report-routing-smoke.ts",
     "smoke:report-provider": "tsx scripts/report-provider-smoke.ts",

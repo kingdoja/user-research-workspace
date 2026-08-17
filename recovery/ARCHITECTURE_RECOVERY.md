@@ -450,7 +450,10 @@ Runtime 默认值：每 run 2 个并发 task、每 workspace 2 个活跃研究 r
 - 默认使用 `--network none`。只有运维配置 `SANDBOX_RUNNER_EGRESS_NETWORK` 时才接受 `networkAccess=true`；该网络必须由外部防火墙或代理实施 egress policy，不得复用应用或数据库网络。
 - 生产模式强制 JavaScript/Python runtime image 使用 `@sha256:` digest；服务默认只监听 `127.0.0.1`，生产由独立 HTTPS ingress 暴露。推荐 rootless Podman 或 gVisor，不允许把 rootful Docker socket 挂进公网容器。
 - `smoke:sandbox-runner` 已通过真实容器验证 JavaScript/Python、平台 HTTP 调用、认证、非 root、Workspace 只读、无默认路由、路径穿越拒绝、`1000ms` 超时、输出上限、联网显式拒绝和清理无残留。Sandbox HTTP 调度额外保留 10 秒用于容器清理和响应传输，但任务容器仍按 manifest 的原始 timeout 严格终止。
-- 本阶段完成的是可部署 Runner 与本地 Docker 验收；生产 HTTPS 域名、专用 worker、镜像 digest 和受控 egress network 仍属于部署配置，不虚构为已经上线。
+- 新增可审核的生产部署包：rootless Podman 的 systemd user unit、digest 固定环境样例、Caddy HTTPS 反向代理与 `verify:sandbox-deployment` 远程门禁。门禁会验证健康、digest、认证、双 runtime、隔离、超时、输出上限和容器残留。
+- 使用临时 TLS 反向代理模拟 Caddy，从生产模式 Next.js `/agent` 完成真实端到端验收：DeepSeek V4 Pro reasoning 路由策略版本锁定、`code_execute` grant、HTTPS Runner、一次性非 root 容器、Sandbox 审计、Provider decision ledger 和 `deliverables/sandbox-ledger-e2e.json` 工作区文件同时完成；输出为 `{sum: 100, count: 3, runtime: "sandbox"}`。
+- Browser 验收中发现并修复两个客户端状态缺陷：Skill 审批后本地列表未立即解锁启用开关，Agent HTTP 请求未进入忙碌态而可重复提交。QA 验收后已删除 2 个一次性账号、2 个 workspace、Skills、Runs、临时证书与容器，未保留测试数据。
+- 本阶段完成的是可重复部署工作流与本地生产配置验收；真实生产 HTTPS 域名和专用 Linux worker 仍需运维资源，不虚构为已经上线。
 
 ## 验收标准
 

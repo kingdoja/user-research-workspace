@@ -635,6 +635,7 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 11. [x] Scout 已增加 Bluesky 官方公共 AppView Connector，并严格区分搜索发现与可引用快照；当前网络环境无法完成官方站点实时连通验证，因此部署验收仍需执行一次真实 API smoke。
 12. [x] Source Snapshot 大正文已迁入 S3 兼容对象存储；隔离 PostgreSQL smoke 和本地 MinIO 的不可变复用、hash 元数据及回读完整性均已验证。
 13. [x] Universal Agent 工作台已完成：支持持久化会话/文件、结构化动作循环、每轮外部执行确认、精确 Skill 版本锁定、Sandbox 审计和 Provider 路由账本；独立 Runner 已通过真实 JavaScript/Python 容器 smoke。
+14. [x] Sandbox Runner 生产部署工作流已完成：rootless Podman + systemd user unit、Caddy HTTPS、镜像 digest、双端 token 和远程执行门禁均有显式配置与验收契约；已从生产模式 `/agent` 以真实 DeepSeek 路由和 HTTPS Sandbox 完成工作区交付闭环。实际上线仍需专用 Linux worker 与 DNS/TLS 资源。
 
 不建议现在做：
 

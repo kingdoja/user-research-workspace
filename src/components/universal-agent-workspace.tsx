@@ -42,6 +42,7 @@ export function UniversalAgentWorkspace({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const [sending, setSending] = useState(false);
   const [rightTab, setRightTab] = useState<RightTab>("skills");
   const [createOpen, setCreateOpen] = useState(initialWorkspace.threads.length === 0);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
@@ -71,29 +72,36 @@ export function UniversalAgentWorkspace({
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedThread) return;
+    if (!selectedThread || sending) return;
     setNotice(null);
+    setSending(true);
     const form = event.currentTarget;
     const data = new FormData(form);
-    const response = await fetch(`/api/agent/threads/${selectedThread.publicId}/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        content: String(data.get("message")),
-        skillPublicIds: selectedSkills,
-        externalExecutionAllowed: externalAllowed,
-      }),
-    });
-    const body = await response.json().catch(() => ({})) as { error?: string };
-    if (!response.ok) {
-      setNotice({ kind: "error", text: body.error ?? "Agent 执行失败" });
+    try {
+      const response = await fetch(`/api/agent/threads/${selectedThread.publicId}/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content: String(data.get("message")),
+          skillPublicIds: selectedSkills,
+          externalExecutionAllowed: externalAllowed,
+        }),
+      });
+      const body = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) {
+        setNotice({ kind: "error", text: body.error ?? "Agent 执行失败" });
+        startTransition(() => router.refresh());
+        return;
+      }
+      form.reset();
+      setExternalAllowed(false);
+      setNotice({ kind: "success", text: "本轮已完成并写入审计记录" });
       startTransition(() => router.refresh());
-      return;
+    } catch {
+      setNotice({ kind: "error", text: "Agent 请求中断，请在 Runs 中核对状态后再试" });
+    } finally {
+      setSending(false);
     }
-    form.reset();
-    setExternalAllowed(false);
-    setNotice({ kind: "success", text: "本轮已完成并写入审计记录" });
-    startTransition(() => router.refresh());
   }
 
   function toggleSkill(publicId: string) {
@@ -163,14 +171,14 @@ export function UniversalAgentWorkspace({
           )}
         </div>
         <form className="agent-composer" onSubmit={sendMessage}>
-          <textarea name="message" required minLength={1} maxLength={12000} disabled={!selectedThread || !canRun || pending} placeholder="交给 Universal Agent…" />
+          <textarea name="message" required minLength={1} maxLength={12000} disabled={!selectedThread || !canRun || pending || sending} placeholder="交给 Universal Agent…" />
           <div>
             <label className={externalAllowed ? "agent-execution-toggle active" : "agent-execution-toggle"}>
-              <input type="checkbox" checked={externalAllowed} onChange={(event) => setExternalAllowed(event.target.checked)} disabled={!canRun || pending} />
+              <input type="checkbox" checked={externalAllowed} onChange={(event) => setExternalAllowed(event.target.checked)} disabled={!canRun || pending || sending} />
               <ShieldCheck size={14} />允许本轮执行已选 Skill
             </label>
-            <button className="button button-green" type="submit" disabled={!selectedThread || !canRun || pending || !initialWorkspace.provider.configured}>
-              {pending ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{pending ? "执行中" : "运行"}
+            <button className="button button-green" type="submit" disabled={!selectedThread || !canRun || pending || sending || !initialWorkspace.provider.configured}>
+              {sending ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{sending ? "执行中" : "运行"}
             </button>
           </div>
         </form>

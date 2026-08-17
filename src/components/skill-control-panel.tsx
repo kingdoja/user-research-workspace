@@ -191,8 +191,13 @@ export function SkillControlPanel({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ grants: grantsFor(skill) }),
       });
-      const body = await readJson(response);
+      const body = await readJson(response) as { error?: string; status?: string; grantedCapabilities?: SkillCapability[] };
       if (!response.ok) throw new Error(body.error ?? "Skill 审批失败");
+      setSkills((current) => current.map((item) => (
+        item.publicId === skill.publicId
+          ? { ...item, status: "active", capabilityState: "granted", executable: true }
+          : item
+      )));
       setNotice({ kind: "success", text: `${skill.name} 已审批，可选择启用` });
       refresh();
     } catch (error) {

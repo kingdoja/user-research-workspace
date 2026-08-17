@@ -64,7 +64,9 @@ SANDBOX_RUNNER_AUTH_TOKEN='replace-with-at-least-24-characters' pnpm sandbox:run
 
 The default listener is `127.0.0.1:8787`. Production must place HTTPS in front of it, use a
 dedicated worker host with rootless Podman or another hardened runtime, and pin both runtime
-images by digest. See [`services/sandbox-runner/README.md`](services/sandbox-runner/README.md).
+images by digest. The repository includes a systemd user unit, production environment sample,
+Caddy TLS proxy and remote deployment gate under `deploy/` and `scripts/`. See
+[`services/sandbox-runner/README.md`](services/sandbox-runner/README.md).
 
 ## Verification
 
@@ -72,6 +74,8 @@ images by digest. See [`services/sandbox-runner/README.md`](services/sandbox-run
 pnpm lint
 pnpm build
 pnpm smoke:sandbox-runner
+# Against a deployed HTTPS Runner:
+SANDBOX_VERIFY_URL=https://sandbox.example.com SANDBOX_VERIFY_TOKEN=... pnpm verify:sandbox-deployment
 pnpm smoke:report-routing
 LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated api-access
 LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated platform-control

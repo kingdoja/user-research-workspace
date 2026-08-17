@@ -1,0 +1,33 @@
+[Unit]
+Description=atypica isolated Sandbox Runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/atypica
+EnvironmentFile=%h/.config/atypica/sandbox-runner.env
+ExecStart=/usr/bin/pnpm sandbox:runner
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillMode=control-group
+
+# The unit runs under an unprivileged deployment account. Do not set systemd's
+# NoNewPrivileges here: rootless Podman may need newuidmap/newgidmap. Each task
+# container independently enables no-new-privileges and drops all capabilities.
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+UMask=0077
+
+[Install]
+WantedBy=default.target
