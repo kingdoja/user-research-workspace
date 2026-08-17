@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import OpenAI from "openai";
 import { z } from "zod";
 import type { StudyMethod } from "@/lib/research-types";
@@ -783,6 +784,24 @@ let deepSeekClient: OpenAI | null = null;
 export type ProviderStage = "plan" | "research" | "reasoning" | "report" | "judge" | "followup";
 type ProviderProtocol = "responses" | "chat_completions";
 
+export type ProviderRouteOverride = {
+  stage: ProviderStage;
+  providerName: string;
+  model: string;
+  protocol: ProviderProtocol;
+};
+
+const providerRouteStorage = new AsyncLocalStorage<ProviderRouteOverride>();
+
+export function withProviderRoute<Result>(override: ProviderRouteOverride, callback: () => Promise<Result>) {
+  return providerRouteStorage.run(override, callback);
+}
+
+function activeProviderRoute(stage: ProviderStage) {
+  const override = providerRouteStorage.getStore();
+  return override?.stage === stage ? override : null;
+}
+
 type ConversationMessage = {
   role: "user" | "assistant" | "system" | "developer";
   content: string;
@@ -842,6 +861,8 @@ function getDeepSeekClient() {
 }
 
 function configuredProvider(stage: ProviderStage) {
+  const override = activeProviderRoute(stage);
+  if (override) return override.providerName.trim().toLowerCase();
   if (stage === "followup") return "deepseek";
   const variable = stage === "plan"
     ? process.env.PLAN_PROVIDER
@@ -874,6 +895,8 @@ function getRequiredApiKey(stage: ProviderStage) {
 }
 
 function getStageModel(stage: ProviderStage) {
+  const override = activeProviderRoute(stage);
+  if (override) return override.model;
   if (usesDeepSeek(stage)) {
     if (stage === "plan") {
       return process.env.DEEPSEEK_PLAN_MODEL?.trim()
@@ -925,6 +948,8 @@ function getFollowupModel() {
 }
 
 function getApiProtocol(stage: ProviderStage): ProviderProtocol {
+  const override = activeProviderRoute(stage);
+  if (override) return override.protocol;
   const configured = usesDeepSeek(stage)
     ? process.env.DEEPSEEK_API_PROTOCOL
     : process.env.OPENAI_API_PROTOCOL;

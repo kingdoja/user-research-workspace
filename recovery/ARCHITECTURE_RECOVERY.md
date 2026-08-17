@@ -421,6 +421,17 @@ Runtime 默认值：每 run 2 个并发 task、每 workspace 2 个活跃研究 r
 - `pnpm lint`、`pnpm exec tsc --noEmit`、`pnpm build` 和无费用的 `pnpm smoke:report-routing` 已通过。`smoke:deepseek-provider` 与 `smoke:report-provider` 会调用真实付费 Provider，本次未设置确认变量，因此不把真实 Plan/Research/Report/Judge 调用列为已验收。
 - 可重复 API/MCP 命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated api-access`，仅允许 localhost / `127.0.0.1` 数据库。
 
+## 2026-08-17 跨工作区协作与 Provider 路由部署记录
+
+- 当前数据库已应用 `20260817030000_platform_collaboration_routing.sql`。发布包保存 Study/Report/Context/Skill 的精确版本或内容 hash 与不可变快照；接收方在提交前看不到草稿，第三方工作区始终不可见。
+- 发布包使用 `draft → submitted → accepted/rejected/revoked` 状态机。接受只创建 `pending_review` 的本地治理引用，不自动激活 Context 或 Skill；撤回会归档引用并取消仍在进行的关联委托。公开报告 share token 继续只承担展示，不作为团队授权。
+- 委托记录发送/接收工作区、可选发布包、负责人、期限和说明，并限制 `proposed → accepted → in_progress → completed` 及拒绝/取消转换；所有发布和委托动作写入独立事件账本。
+- Provider 路由按 `plan/research/reasoning/report/judge/followup` 阶段保存版本、候选 Provider/model/protocol、权重或优先级、质量等级、预期延迟和显式价格来源。激活新版本会退役同工作区同阶段旧版本。
+- Runtime 在每次 Provider 工具调用前解析候选、应用成本/延迟/质量门槛并锁定 Run + stage 的精确策略版本；实际调用通过异步上下文使用命中的 Provider/model/protocol，决策保存候选拒绝原因、预计/实际成本、token、延迟、质量分和错误结果。完成 Run 的 Provider 摘要来自实际成功决策，而非静态环境默认值。
+- `/platform` 提供协作流和 Provider 路由两组后台视图。Browser 已验证桌面和 390×844 移动端布局、表单字段、导航、无横向溢出与 console error/warn；一次性账号与工作区已删除。
+- 隔离 PostgreSQL 15 完整迁移链 `platform-control` smoke 已验证草稿隐藏、第三方隔离、快照不可变、待审核导入、撤回归档、委托状态机、版本化路由绑定、运行时覆盖、成本结算和决策结果不可变。`pnpm exec tsc --noEmit`、ESLint 与 `pnpm build` 均通过，未调用真实付费 Provider。
+- 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated platform-control`，仅允许 localhost / `127.0.0.1` 数据库。
+
 ## 验收标准
 
 - 任意一次运行可以重放：workflow、skill version、prompt version、context version、provider model 均可定位。

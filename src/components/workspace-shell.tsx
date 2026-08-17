@@ -12,6 +12,7 @@ import {
   LogOut,
   Menu,
   MessageCircleMore,
+  Network,
   PanelLeftClose,
   Sparkles,
   X,
@@ -33,6 +34,7 @@ const productNavigation = [
   { href: "/interview", label: "AI 访谈", icon: MessageCircleMore },
   { href: "/interview/experiments", label: "访谈实验", icon: Gauge },
   { href: "/sage", label: "AI Sage", icon: Sparkles },
+  { href: "/platform", label: "平台控制", icon: Network },
 ];
 
 type WorkspaceShellProps = {

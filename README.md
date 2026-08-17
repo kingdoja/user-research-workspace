@@ -11,6 +11,7 @@ This repository is a clean-room reconstruction created from the surviving public
 - Added a PostgreSQL-compatible embedded PGlite database for local recovery work, with a documented migration path to Supabase/PostgreSQL.
 - Added a durable Plan-and-Execute research harness with typed tools, checkpoints, artifacts, idempotent invocations, a leased job queue, and SSE progress events.
 - Added a product-kernel health endpoint at `/api/health`.
+- Added `/platform` for governed cross-workspace publishing/delegation and versioned provider cost/quality routing.
 
 The original private server code and data are not present in the public deployment artifacts. AI execution, report generation, payments, file storage, background jobs, email, and production deployment still require provider integrations.
 
@@ -50,6 +51,7 @@ pnpm lint
 pnpm build
 pnpm smoke:report-routing
 LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated api-access
+LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated platform-control
 DEEPSEEK_PROVIDER_SMOKE_CONFIRM=1 pnpm smoke:deepseek-provider
 REPORT_PROVIDER_SMOKE_CONFIRM=1 pnpm smoke:report-provider
 ```

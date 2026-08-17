@@ -585,8 +585,8 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 - [ ] Universal Agent 与通用代码 Skill sandbox；当前仅有声明式、受治理的远程 Skill 包。
 - [x] Workspace scoped API keys、哈希鉴权、精确 scope、撤销/过期和外部调用审计。
 - [x] 对外无状态 MCP server；复用 API key 契约，每个 tool 单独做 scope 判断。
-- 跨工作区的团队协作、委托管理和发布流；单工作区 Team Memory 与审核已完成。
-- 多 Provider 成本/质量路由和策略实验后台。
+- [x] 跨工作区不可变发布包、接收审核、撤回归档、委托状态机和事件审计；公开 share token 不承担协作授权，接收资产只生成待治理引用。
+- [x] 多 Provider 成本/质量路由后台；策略按阶段版本化，显式保存价格来源、质量/延迟/成本门槛与候选权重，Run 绑定精确版本并记录每次决策、用量、成本和延迟。
 - Fast Insight、Podcast、Sage 等第二产品线。
 
 ## 13. 当前仓库差距与建议顺序
@@ -613,6 +613,8 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 - Context Asset → Memory Binding → Purpose Policy → Retrieval Decision 的排序前门禁，以及 Working Memory → approved Observation → pending Core/Team candidate 的双重审核闭环。
 - Workspace Skill → Enable Setting → immutable Run Binding / audited Execution 的受控执行闭环，支持 HTTP JSON 与 MCP Streamable HTTP client。
 - `.skill` / `SKILL.md` → submitted → immutable capability grants → approved/active → health/revoke 的声明式包治理闭环；secret 仅引用环境变量，Run 绑定快照保留授权范围。
+- Workspace A immutable Publication Snapshot → Workspace B pending governed reference，以及 Publication-linked Delegation 的跨工作区协作闭环；草稿、撤回和第三方工作区均保持隔离。
+- Routing Policy → immutable Version/Route price metadata → per-stage Run Binding → Provider Decision ledger 的真实调用闭环；策略实验继续负责分组，路由策略负责 Provider 选择。
 - Brief → governed `intent_planning` Retrieval Snapshot → immutable Intent Version → confirmed Plan Version → compiled WorkflowDefinition → Run 的版本锁定闭环；Runtime 从锁定任务图执行，Replay 分开展示 Planning/Execution Context。
 - Product Line → Intent/Plan snapshot → Research 或 Market Insight WorkflowDefinition → 同一 Runtime/SkillInvocation/Replay 的跨业务线复用闭环；Market Insight 默认排除 Persona 与合成访谈。
 - Completed Study → locked Workflow / final Report → pending Template / Gap → review / dedupe / expiry / resolution → governed Context reuse 的研究资产闭环；7 个历史模板和 84 个 Gap 已回填但仍待人工审核。

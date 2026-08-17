@@ -21,6 +21,7 @@ import {
   runProviderAudienceCall,
   runProviderDiscussionChat,
   synthesizeProviderResearchReport,
+  withProviderRoute,
   type ProviderDeepResearchValidation,
   type ProviderResearchDiscussion,
   type ProviderResearchInterviews,
@@ -28,6 +29,7 @@ import {
   type ProviderStage,
   type ResearchReport,
 } from "@/lib/openai-provider";
+import { finishProviderRouteDecision, resolveProviderRoute } from "@/lib/platform-control";
 import { materializeReportEvidenceGraph } from "@/lib/evidence-graph";
 import { groundStudyPersonasFromEvidence } from "@/lib/persona-evidence";
 import { buildReportEvidenceCatalog } from "@/lib/report-evidence";
@@ -1376,7 +1378,29 @@ async function executeTask(input: {
   const providerStage = typeof tool.providerStage === "function"
     ? tool.providerStage(input.state)
     : tool.providerStage;
-  const providerStatus = providerStage ? getProviderStageStatus(providerStage) : null;
+  const providerRoute = providerStage
+    ? await database.transaction((transaction) => resolveProviderRoute({
+        queryable: transaction,
+        workspaceId: input.study.workspaceId,
+        runId: input.study.runId,
+        taskId: input.task.id,
+        stage: providerStage,
+        subjectKey: `study:${input.study.publicId}:task:${input.task.key}:attempt:${input.task.attempt + 1}`,
+      }))
+    : null;
+  const providerStatus = providerStage
+    ? providerRoute
+      ? {
+          stage: providerStage,
+          providerName: providerRoute.override.providerName,
+          model: providerRoute.override.model,
+          protocol: providerRoute.override.protocol,
+          configured: true,
+          requiredVariable: providerRoute.override.providerName === "deepseek" ? "DEEPSEEK_API_KEY" : "OPENAI_API_KEY",
+        }
+      : getProviderStageStatus(providerStage)
+    : null;
+  const providerStartedAt = Date.now();
   const timeoutSeconds = Number(input.strategy.config.taskTimeoutSeconds ?? input.task.timeoutSeconds);
   const timeout = Math.max(15, Math.min(3600, timeoutSeconds)) * 1000;
   const controller = new AbortController();
@@ -1422,22 +1446,35 @@ async function executeTask(input: {
       if (!rateAccepted) throw new Error("RUNTIME_RATE_LIMITED");
     }
     const parsedInput = tool.inputSchema.parse(input.task.input);
-    const result = await tool.execute({
-      study: input.study,
-      task: {
-        key: input.task.key,
-        publicId: input.task.publicId,
-        attempt: invocation.attempt,
-      },
-      state: input.state,
-      context: input.context,
-      signal: controller.signal,
-      strategy: input.strategy,
-    }, parsedInput);
+    const execute = () => tool.execute({
+        study: input.study,
+        task: {
+          key: input.task.key,
+          publicId: input.task.publicId,
+          attempt: invocation.attempt,
+        },
+        state: input.state,
+        context: input.context,
+        signal: controller.signal,
+        strategy: input.strategy,
+      }, parsedInput);
+    const result = providerRoute
+      ? await withProviderRoute(providerRoute.override, execute)
+      : await execute();
     if (controller.signal.aborted || await isRunCancellationRequested(input.study.runId)) {
       throw controller.signal.reason ?? abortError("RUNTIME_CANCELLED");
     }
     const output = sanitizePostgresJsonValue(tool.outputSchema.parse(result.output));
+    if (providerRoute) {
+      const outputRecord = output && typeof output === "object" ? output as Record<string, unknown> : {};
+      await finishProviderRouteDecision({
+        queryable: database,
+        decisionId: providerRoute.decisionId,
+        usage: outputRecord.usage,
+        latencyMs: Date.now() - providerStartedAt,
+        qualityScore: providerStage === "judge" && typeof outputRecord.score === "number" ? outputRecord.score : null,
+      });
+    }
     const eventPayload = sanitizePostgresJsonValue({
       ...result.eventPayload,
       ...(providerStatus ? { providerStage, provider: providerStatus.providerName, model: providerStatus.model } : {}),
@@ -1454,6 +1491,14 @@ async function executeTask(input: {
     });
     return { kind: "completed" as const, key: input.task.key, output };
   } catch (error) {
+    if (providerRoute) {
+      await finishProviderRouteDecision({
+        queryable: database,
+        decisionId: providerRoute.decisionId,
+        latencyMs: Date.now() - providerStartedAt,
+        errorCode: describeOpenAIError(error).code ?? "PROVIDER_CALL_FAILED",
+      });
+    }
     const resolution = await failInvocation({
       study: input.study,
       task: input.task,
@@ -1827,7 +1872,19 @@ async function materializeStudy(study: HarnessStudy, state: HarnessState) {
       if (!item || typeof item !== "object" || !("usage" in item)) return sum;
       return sum + totalTokens(item.usage);
     }, 0);
-    const provider = getRunProviderSummary();
+    const routedProviders = await transaction.query<{ provider_name: string; model: string }>(
+      `select distinct provider_name, model from provider_route_decisions
+       where run_id = $1 and status = 'completed' order by provider_name, model`,
+      [study.runId],
+    );
+    const provider = routedProviders.rows.length
+      ? {
+          provider: routedProviders.rows.length === 1
+            ? routedProviders.rows[0].provider_name
+            : `mixed:${[...new Set(routedProviders.rows.map((row) => row.provider_name))].join("+")}`,
+          model: routedProviders.rows.map((row) => row.model).join(" + "),
+        }
+      : getRunProviderSummary();
     await transaction.query(
       `update study_runs set status = 'completed', provider = $2, provider_model = $3,
               usage = $4::jsonb, finished_at = now(), error_message = null
