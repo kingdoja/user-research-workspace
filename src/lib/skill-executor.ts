@@ -16,7 +16,11 @@ const executorLimitsSchema = z.object({
 });
 
 const sandboxFilePathSchema = z.string().trim().min(1).max(180)
-  .regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/);
+  .regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/)
+  .refine(
+    (value) => value !== "package.json" && value !== ".atypica" && !value.startsWith(".atypica/"),
+    "Sandbox path is reserved by the runner",
+  );
 const sandboxFilesSchema = z.record(sandboxFilePathSchema, z.string().max(120_000))
   .refine((files) => Object.keys(files).length >= 1 && Object.keys(files).length <= 32, "Sandbox source files must contain 1-32 files")
   .refine(
@@ -303,7 +307,10 @@ export async function executeConfiguredSkill(input: {
   policy?: SkillExecutionPolicy;
 }) {
   validateSchema(input.inputSchema, input.arguments, "input");
-  const timeoutSignal = AbortSignal.timeout(input.config.timeoutMs);
+  // The isolated runner still enforces timeoutMs exactly; the caller needs a
+  // small window for container teardown and the audited HTTP response.
+  const requestTimeoutMs = input.config.kind === "sandbox" ? input.config.timeoutMs + 10_000 : input.config.timeoutMs;
+  const timeoutSignal = AbortSignal.timeout(requestTimeoutMs);
   const signal = input.signal ? AbortSignal.any([input.signal, timeoutSignal]) : timeoutSignal;
   let output: Record<string, unknown> | unknown[];
   try {

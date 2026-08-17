@@ -440,8 +440,17 @@ Runtime 默认值：每 run 2 个并发 task、每 workspace 2 个活跃研究 r
 - Universal Agent reasoning 复用既有 Provider routing control plane，按 `reasoning` stage 记录版本绑定和实际决策；跨 workspace 的 Thread、Skill、文件和 Sandbox 执行均通过服务端成员校验隔离。
 - 隔离迁移链 `universal-agent` smoke 已验证：Sandbox v2、显式代码授权、精确版本锁定、持久化 deliverable、Provider routing ledger、跨 workspace 隔离和不可变绑定；`platform-control`、`skill-executor`、`skill-package-governance` 回归继续通过。
 - Browser 实测 `/agent` 桌面 1280×720 和移动 390×844：页面身份、会话加载、Skills/Files/Runs Tab 切换、无横向溢出、无框架错误覆盖层、console error/warn 均通过；一次性 QA 账号与 workspace 已删除。
-- 生产部署仍需配置 `SKILL_EXECUTOR_ALLOWED_ORIGINS` 指向独立 HTTPS Runner，并为 Runner 实现 `atypica.sandbox/v1` 协议；本仓库提供的是平台契约和 allowlist dispatch，不把本地 smoke HTTP stub 当作生产沙箱。
+- 生产部署仍需配置 `SKILL_EXECUTOR_ALLOWED_ORIGINS` 指向独立 HTTPS Runner；本仓库现已包含可部署的 `atypica.sandbox/v1` Runner，但必须把它部署到专用 worker，而不是与 Next.js 共进程。
 - 可重复命令：`LOCAL_SMOKE_DATABASE_URL=postgresql://...@127.0.0.1:5432/postgres pnpm smoke:isolated universal-agent`，仅允许 localhost / `127.0.0.1` 数据库。
+
+## 2026-08-17 独立 Sandbox Runner 实现记录
+
+- 新增 `services/sandbox-runner` 独立 HTTP 服务；它只接受带 `x-sandbox-token` 的严格 `atypica.sandbox/v1` 请求，限制请求体、文件数、单文件/总源码大小、语言、入口文件和保留路径。Runner 不读取应用数据库，也不会把自身环境变量或认证 token 传入任务容器。
+- 每次执行创建一次性 Docker/Podman 容器：UID `65532`、只读 rootfs、只读 Workspace mount、`cap-drop ALL`、`no-new-privileges`、独立 `/tmp`、CPU/内存/PID/FD/超时/输出上限，并在成功、失败、超时和超限后强制删除容器与临时目录。没有宿主机执行回退。
+- 默认使用 `--network none`。只有运维配置 `SANDBOX_RUNNER_EGRESS_NETWORK` 时才接受 `networkAccess=true`；该网络必须由外部防火墙或代理实施 egress policy，不得复用应用或数据库网络。
+- 生产模式强制 JavaScript/Python runtime image 使用 `@sha256:` digest；服务默认只监听 `127.0.0.1`，生产由独立 HTTPS ingress 暴露。推荐 rootless Podman 或 gVisor，不允许把 rootful Docker socket 挂进公网容器。
+- `smoke:sandbox-runner` 已通过真实容器验证 JavaScript/Python、平台 HTTP 调用、认证、非 root、Workspace 只读、无默认路由、路径穿越拒绝、`1000ms` 超时、输出上限、联网显式拒绝和清理无残留。Sandbox HTTP 调度额外保留 10 秒用于容器清理和响应传输，但任务容器仍按 manifest 的原始 timeout 严格终止。
+- 本阶段完成的是可部署 Runner 与本地 Docker 验收；生产 HTTPS 域名、专用 worker、镜像 digest 和受控 egress network 仍属于部署配置，不虚构为已经上线。
 
 ## 验收标准
 

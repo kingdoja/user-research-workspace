@@ -582,7 +582,7 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 
 - [x] 受控 HTTP JSON / MCP Streamable HTTP client executor、工作区启停与 Run 级版本锁定。
 - [x] Market Insight 第二产品线复用同一 Intent/Plan/Workflow/Run/Skill/Context 契约，并以独立模板、任务图和输出契约锁定到 Run。
-- [x] Universal Agent 与通用代码 Skill sandbox；会话、消息、Run、步骤和 workspace 文件持久化，代码只交给 allowlist 内的外部隔离 Runner。
+- [x] Universal Agent 与通用代码 Skill sandbox；会话、消息、Run、步骤和 workspace 文件持久化，代码只交给 allowlist 内的独立 Runner，并以一次性 Docker/Podman 容器实施非 root、只读、默认断网和资源限制。
 - [x] Workspace scoped API keys、哈希鉴权、精确 scope、撤销/过期和外部调用审计。
 - [x] 对外无状态 MCP server；复用 API key 契约，每个 tool 单独做 scope 判断。
 - [x] 跨工作区不可变发布包、接收审核、撤回归档、委托状态机和事件审计；公开 share token 不承担协作授权，接收资产只生成待治理引用。
@@ -634,7 +634,7 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 10. [x] `.skill` 治理和第二产品线稳定后，已开放 workspace scoped API keys 和无状态 MCP server；团队发布流仍待完成。
 11. [x] Scout 已增加 Bluesky 官方公共 AppView Connector，并严格区分搜索发现与可引用快照；当前网络环境无法完成官方站点实时连通验证，因此部署验收仍需执行一次真实 API smoke。
 12. [x] Source Snapshot 大正文已迁入 S3 兼容对象存储；隔离 PostgreSQL smoke 和本地 MinIO 的不可变复用、hash 元数据及回读完整性均已验证。
-13. [x] Universal Agent 工作台已完成：支持持久化会话/文件、结构化动作循环、每轮外部执行确认、精确 Skill 版本锁定、Sandbox 审计和 Provider 路由账本。
+13. [x] Universal Agent 工作台已完成：支持持久化会话/文件、结构化动作循环、每轮外部执行确认、精确 Skill 版本锁定、Sandbox 审计和 Provider 路由账本；独立 Runner 已通过真实 JavaScript/Python 容器 smoke。
 
 不建议现在做：
 
