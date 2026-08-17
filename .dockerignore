@@ -1,0 +1,10 @@
+.git
+.data
+.env*
+.next
+node_modules
+recovery
+*.tsbuildinfo
+npm-debug.log*
+pnpm-debug.log*
+
