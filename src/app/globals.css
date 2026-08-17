@@ -59,7 +59,8 @@
 @media (max-width:560px) { .study-compare-header { padding-inline:14px; }.study-compare-header>div>span,.study-compare-header>strong { display:none; }.study-compare-controls { grid-template-columns:1fr; padding:14px; }.study-compare-arrow { display:none; }.study-compare-diff-summary { align-items:flex-start; flex-direction:column; padding-inline:14px; }.study-run-replay-pane { padding:16px 14px 40px; }.study-run-metric-strip { grid-template-columns:1fr 1fr; }.study-run-metric-strip>div:nth-child(3) { border-top:1px solid #343538; border-left:0; }.study-run-metric-strip>div:nth-child(4) { border-top:1px solid #343538; }.study-run-version-list { grid-template-columns:1fr; }.study-run-version-list>div:nth-child(n+2) { border-top:1px solid #343538; }.study-run-version-list>div:nth-child(even) { border-left:0; }.study-run-plan-summary dl { grid-template-columns:1fr; } }
 
 /* Auditable Scout source snapshots */
-.console-source-audit-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:1px; margin:18px 24px 0; background:#343538; }
+.console-source-audit-list { display:grid; gap:8px; margin:18px 24px 0; }
+.console-source-audit-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:1px; margin:0; background:#343538; }
 .console-source-audit-summary>div { min-width:0; padding:10px; background:#1b1c1e; }
 .console-source-audit-summary dt { color:#707175; font-size:8px; }
 .console-source-audit-summary dd { margin:5px 0 0; overflow:hidden; text-overflow:ellipsis; color:#d0d1cf; font-size:11px; white-space:nowrap; }
@@ -74,7 +75,8 @@
 .console-source-rejections li small { color:#b07c80; font-size:8px; }
 .console-source-rejections li>span { flex:0 0 auto; color:#77787a; }
 @media (max-width:640px) {
-  .console-source-audit-summary { grid-template-columns:repeat(2,minmax(0,1fr)); margin-inline:18px; }
+  .console-source-audit-list { margin-inline:18px; }
+  .console-source-audit-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .console-source-rejections { margin-inline:18px; }
 }
 

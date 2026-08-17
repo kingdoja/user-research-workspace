@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getContextEmbeddingProviderStatus } from "@/lib/context-system";
 import { getFollowupProviderStatus, getOpenAIProviderStatus } from "@/lib/openai-provider";
 import { getPublicWebSearchStatus } from "@/lib/public-web-search";
+import { getBlueskyPublicConnectorStatus } from "@/lib/bluesky-social-connector";
+import { getSourceRawStorageStatus } from "@/lib/source-raw-storage";
 
 export async function GET() {
   const provider = getOpenAIProviderStatus();
@@ -65,6 +67,8 @@ export async function GET() {
       },
       contextEmbedding: getContextEmbeddingProviderStatus(),
       search,
+      social: getBlueskyPublicConnectorStatus(),
+      sourceRawStorage: getSourceRawStorageStatus(),
     },
   });
 }

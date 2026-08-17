@@ -4,8 +4,15 @@ import { isIP } from "node:net";
 import * as cheerio from "cheerio";
 import type { Queryable } from "@/lib/db";
 import { createPublicId } from "@/lib/identifiers";
+import {
+  createConfiguredSourceRawStorage,
+  createSourceRawObjectKey,
+  getSourceRawInlineLimitBytes,
+  type SourceRawStorage,
+  type SourceRawStorageLocator,
+} from "@/lib/source-raw-storage";
 
-export const SOURCE_CONNECTOR_POLICY_VERSION = "public-source-policy-v1";
+export const SOURCE_CONNECTOR_POLICY_VERSION = "public-source-policy-v2";
 export const SOURCE_RESPONSE_BYTE_LIMIT = 1_500_000;
 export const SOURCE_PAGE_TEXT_LIMIT = 5_000;
 
@@ -19,7 +26,7 @@ function stringifyJson(value: unknown) {
   )) ?? "null";
 }
 
-export type SourceProvider = "seed" | "tavily" | "bing";
+export type SourceProvider = "seed" | "tavily" | "bing" | "bluesky";
 export type SourceCandidateStatus = "discovered" | "collected" | "rejected" | "unavailable" | "removed";
 
 export type ConnectorCapabilities = {
@@ -45,6 +52,7 @@ export type SourceCandidate = {
   title: string;
   url: string;
   providerExcerpt?: string;
+  discoveryMetadata?: Record<string, unknown>;
 };
 
 export type SourceSnapshot = {
@@ -58,6 +66,8 @@ export type SourceSnapshot = {
   lastModified: string | null;
   contentHash: string | null;
   rawContent: string | null;
+  rawStorage: SourceRawStorageLocator | null;
+  rawByteLength: number | null;
   normalizedText: string | null;
   fetchedAt: string;
   metadata: Record<string, unknown>;
@@ -66,7 +76,7 @@ export type SourceSnapshot = {
 export type SourceObservation = {
   publicId: string;
   key: string;
-  kind: "page_excerpt";
+  kind: "page_excerpt" | "social_post";
   content: string;
   confidence: "high" | "medium" | "low";
   locator: Record<string, unknown>;
@@ -86,8 +96,8 @@ export type CollectedSourceCandidate = SourceCandidate & {
 
 export type SourceConnectorAudit = {
   publicId: string;
-  connectorKey: "public-web";
-  provider: "tavily" | "bing";
+  connectorKey: "public-web" | "bluesky-public";
+  provider: "tavily" | "bing" | "bluesky";
   policyVersion: string;
   status: "completed" | "partial" | "failed";
   queries: string[];
@@ -103,7 +113,7 @@ export type SourceConnectorAudit = {
 
 export type SourceConnectorAuditSummary = Omit<SourceConnectorAudit, "candidates"> & {
   candidates: Array<Omit<CollectedSourceCandidate, "providerExcerpt" | "snapshot" | "observation"> & {
-    snapshot: null | Omit<SourceSnapshot, "rawContent" | "normalizedText">;
+    snapshot: null | Omit<SourceSnapshot, "rawContent" | "rawStorage" | "normalizedText">;
     observation: null | Omit<SourceObservation, "content">;
   }>;
 };
@@ -372,6 +382,8 @@ export async function collectSourceCandidate(candidate: SourceCandidate, options
       lastModified: response.headers.get("last-modified"),
       contentHash: createHash("sha256").update(rawContent).digest("hex"),
       rawContent,
+      rawStorage: null,
+      rawByteLength: bytesRead,
       normalizedText,
       fetchedAt,
       metadata: { robotsChecked: true, redirectPolicy: "manual-public-only" },
@@ -419,6 +431,8 @@ export async function collectSourceCandidate(candidate: SourceCandidate, options
         lastModified: null,
         contentHash: null,
         rawContent: null,
+        rawStorage: null,
+        rawByteLength: null,
         normalizedText: null,
         fetchedAt,
         metadata: { reason: classified.code, ...classified.metadata },
@@ -442,6 +456,7 @@ export function summarizeSourceConnectorAudit(audit: SourceConnectorAudit): Sour
         score: candidate.score,
         title: candidate.title,
         url: candidate.url,
+        discoveryMetadata: candidate.discoveryMetadata,
         canonicalUrl: candidate.canonicalUrl,
         status: candidate.status,
         rejectionReason: candidate.rejectionReason,
@@ -460,6 +475,7 @@ export function summarizeSourceConnectorAudit(audit: SourceConnectorAudit): Sour
           etag: snapshot.etag,
           lastModified: snapshot.lastModified,
           contentHash: snapshot.contentHash,
+          rawByteLength: snapshot.rawByteLength,
           fetchedAt: snapshot.fetchedAt,
           metadata: snapshot.metadata,
         } : null,
@@ -479,7 +495,9 @@ export function summarizeSourceConnectorAudit(audit: SourceConnectorAudit): Sour
 
 export function buildSourceConnectorAudit(input: {
   publicId?: string;
-  provider: "tavily" | "bing";
+  connectorKey?: SourceConnectorAudit["connectorKey"];
+  provider: SourceConnectorAudit["provider"];
+  policyVersion?: string;
   queries: string[];
   startedAt: string;
   candidates: CollectedSourceCandidate[];
@@ -490,9 +508,9 @@ export function buildSourceConnectorAudit(input: {
   const unavailableCount = input.candidates.filter((candidate) => candidate.status === "unavailable").length;
   return {
     publicId: input.publicId ?? createPublicId("scr"),
-    connectorKey: "public-web",
+    connectorKey: input.connectorKey ?? "public-web",
     provider: input.provider,
-    policyVersion: SOURCE_CONNECTOR_POLICY_VERSION,
+    policyVersion: input.policyVersion ?? SOURCE_CONNECTOR_POLICY_VERSION,
     status: collectedCount === 0 ? "failed" : rejectedCount || unavailableCount ? "partial" : "completed",
     queries: input.queries,
     startedAt: input.startedAt,
@@ -504,6 +522,67 @@ export function buildSourceConnectorAudit(input: {
     candidates: input.candidates,
     metadata: input.metadata ?? {},
   };
+}
+
+export type PreparedSourceConnectorAudit = {
+  audit: SourceConnectorAudit;
+  createdObjects: SourceRawStorageLocator[];
+  storage: SourceRawStorage | null;
+};
+
+export async function prepareSourceConnectorAuditRawStorage(input: {
+  workspaceId: string;
+  audit: SourceConnectorAudit;
+  storage?: SourceRawStorage | null;
+  inlineLimitBytes?: number;
+}): Promise<PreparedSourceConnectorAudit> {
+  const storage = input.storage === undefined ? createConfiguredSourceRawStorage() : input.storage;
+  const inlineLimitBytes = input.inlineLimitBytes ?? getSourceRawInlineLimitBytes();
+  const createdObjects: SourceRawStorageLocator[] = [];
+  const candidates: CollectedSourceCandidate[] = [];
+  try {
+    for (const candidate of input.audit.candidates) {
+      const snapshot = candidate.snapshot;
+      if (!snapshot?.rawContent) {
+        candidates.push(candidate);
+        continue;
+      }
+      const rawByteLength = Buffer.byteLength(snapshot.rawContent, "utf8");
+      if (rawByteLength <= inlineLimitBytes) {
+        candidates.push({ ...candidate, snapshot: { ...snapshot, rawByteLength, rawStorage: null } });
+        continue;
+      }
+      if (!storage) throw new Error("SOURCE_OBJECT_STORAGE_REQUIRED");
+      if (!snapshot.contentHash) throw new Error("SOURCE_CONTENT_HASH_REQUIRED");
+      const write = await storage.putImmutable({
+        key: createSourceRawObjectKey(input.workspaceId, snapshot.contentHash),
+        body: snapshot.rawContent,
+        contentType: snapshot.contentType || "application/octet-stream",
+        contentHash: snapshot.contentHash,
+      });
+      const { created, ...rawStorage } = write;
+      if (created) createdObjects.push(rawStorage);
+      candidates.push({
+        ...candidate,
+        snapshot: {
+          ...snapshot,
+          rawContent: null,
+          rawStorage,
+          rawByteLength,
+          metadata: { ...snapshot.metadata, rawStorageMode: "external", rawStorageProvider: "s3" },
+        },
+      });
+    }
+  } catch (error) {
+    if (storage) await Promise.allSettled(createdObjects.map((locator) => storage.delete(locator)));
+    throw error;
+  }
+  return { audit: { ...input.audit, candidates }, createdObjects, storage };
+}
+
+export async function cleanupPreparedSourceRawStorage(prepared: PreparedSourceConnectorAudit) {
+  if (!prepared.storage) return;
+  await Promise.allSettled(prepared.createdObjects.map((locator) => prepared.storage!.delete(locator)));
 }
 
 export async function materializeSourceConnectorAudit(queryable: Queryable, input: {
@@ -543,18 +622,28 @@ export async function materializeSourceConnectorAudit(queryable: Queryable, inpu
       ],
     );
     if (!candidate.snapshot) continue;
+    const rawByteLength = candidate.snapshot.rawByteLength
+      ?? (candidate.snapshot.rawContent ? Buffer.byteLength(candidate.snapshot.rawContent, "utf8") : null);
+    if (candidate.snapshot.rawContent && rawByteLength !== null && rawByteLength > getSourceRawInlineLimitBytes()) {
+      throw new Error("SOURCE_OBJECT_STORAGE_REQUIRED");
+    }
     const snapshot = await queryable.query<{ id: string }>(
       `insert into source_snapshots (
          public_id, candidate_id, status, canonical_url, http_status, content_type, content_length,
-         etag, last_modified, content_hash, raw_content, normalized_text, fetched_at, metadata
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb)
+         etag, last_modified, content_hash, raw_content, raw_storage_provider, raw_storage_bucket,
+         raw_storage_key, raw_storage_version_id, raw_storage_etag, raw_byte_length,
+         normalized_text, fetched_at, metadata
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb)
        returning id::text as id`,
       [
         stripNullBytes(candidate.snapshot.publicId), storedCandidate.rows[0].id, stripNullBytes(candidate.snapshot.status),
         stripNullBytes(candidate.snapshot.canonicalUrl), candidate.snapshot.httpStatus, stripNullBytes(candidate.snapshot.contentType),
         candidate.snapshot.contentLength, stripNullBytes(candidate.snapshot.etag), stripNullBytes(candidate.snapshot.lastModified),
-        stripNullBytes(candidate.snapshot.contentHash), stripNullBytes(candidate.snapshot.rawContent), stripNullBytes(candidate.snapshot.normalizedText),
-        stripNullBytes(candidate.snapshot.fetchedAt), stringifyJson(candidate.snapshot.metadata),
+        stripNullBytes(candidate.snapshot.contentHash), stripNullBytes(candidate.snapshot.rawContent), candidate.snapshot.rawStorage?.provider ?? null,
+        candidate.snapshot.rawStorage?.bucket ?? null, candidate.snapshot.rawStorage?.key ?? null,
+        candidate.snapshot.rawStorage?.versionId ?? null, candidate.snapshot.rawStorage?.etag ?? null,
+        rawByteLength,
+        stripNullBytes(candidate.snapshot.normalizedText), stripNullBytes(candidate.snapshot.fetchedAt), stringifyJson(candidate.snapshot.metadata),
       ],
     );
     if (!candidate.observation) continue;

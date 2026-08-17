@@ -257,18 +257,20 @@ function SourcesConsole({ artifact }: { artifact: Artifact }) {
   const sources = asRecords(content.sources);
   const queries = asStrings(content.queries);
   const audit = asRecord(content.audit);
-  const candidates = asRecords(audit.candidates);
+  const listedAudits = asRecords(content.audits);
+  const audits = listedAudits.length ? listedAudits : Object.keys(audit).length ? [audit] : [];
+  const candidates = audits.flatMap((item) => asRecords(item.candidates));
   const rejectedCandidates = candidates.filter((candidate) => textValue(candidate.status) !== "collected");
   return (
     <section className="console-sources">
-      <header className="console-section-heading"><div><FileSearch size={18} /><span>SCOUT AGENT</span></div><h2>{artifact.title}</h2><p>公开网页证据按实际检索词归档，供后续 Persona、验证和报告工具读取。</p></header>
+      <header className="console-section-heading"><div><FileSearch size={18} /><span>SCOUT AGENT</span></div><h2>{artifact.title}</h2><p>公开网页与官方社交 API 证据按实际检索词归档，只有完成快照的来源才供后续工具读取。</p></header>
       <div className="console-query-list">{queries.map((query) => <span key={query}>{query}</span>)}</div>
-      {Object.keys(audit).length ? <dl className="console-source-audit-summary">
-        <div><dt>Connector</dt><dd>{textValue(audit.provider, "public-web")}</dd></div>
-        <div><dt>候选</dt><dd>{numberValue(audit.candidateCount)}</dd></div>
-        <div><dt>已快照</dt><dd>{numberValue(audit.collectedCount)}</dd></div>
-        <div><dt>拒绝 / 不可用</dt><dd>{numberValue(audit.rejectedCount) + numberValue(audit.unavailableCount)}</dd></div>
-      </dl> : null}
+      {audits.length ? <div className="console-source-audit-list">{audits.map((item, index) => <dl className="console-source-audit-summary" key={textValue(item.publicId, String(index))}>
+        <div><dt>Connector</dt><dd>{textValue(item.connectorKey, textValue(item.provider, "public-web"))}</dd></div>
+        <div><dt>候选</dt><dd>{numberValue(item.candidateCount)}</dd></div>
+        <div><dt>已快照</dt><dd>{numberValue(item.collectedCount)}</dd></div>
+        <div><dt>拒绝 / 不可用</dt><dd>{numberValue(item.rejectedCount) + numberValue(item.unavailableCount)}</dd></div>
+      </dl>)}</div> : null}
       <ol>{sources.map((source, index) => <li key={textValue(source.url, String(index))}>
         <span>{String(index + 1).padStart(2, "0")}</span>
         <div>

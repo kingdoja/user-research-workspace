@@ -9,6 +9,7 @@ const allowedSmokes = new Map([
   ["evidence-graph", { command: "pnpm", args: ["smoke:evidence-graph"], confirmation: "EVIDENCE_GRAPH_SMOKE_CONFIRM" }],
   ["reasoning-runtime", { command: "pnpm", args: ["smoke:reasoning-runtime"], confirmation: "REASONING_RUNTIME_SMOKE_CONFIRM" }],
   ["source-connector", { command: "pnpm", args: ["smoke:source-connector"], confirmation: "SOURCE_CONNECTOR_SMOKE_CONFIRM" }],
+  ["social-connector", { command: "pnpm", args: ["smoke:social-connector"], confirmation: "SOCIAL_CONNECTOR_SMOKE_CONFIRM" }],
   ["task-recovery", { command: "pnpm", args: ["smoke:task-recovery"], confirmation: "TASK_RECOVERY_SMOKE_CONFIRM" }],
   ["interview-metrics", { command: "pnpm", args: ["smoke:interview-metrics"], confirmation: "INTERVIEW_METRICS_SMOKE_CONFIRM" }],
   ["context-hybrid", { command: "pnpm", args: ["smoke:context-hybrid"], confirmation: "CONTEXT_HYBRID_SMOKE_CONFIRM" }],

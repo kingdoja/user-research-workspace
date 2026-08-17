@@ -9,10 +9,17 @@ import {
   type PublicWebSource,
 } from "@/lib/public-web-search";
 import {
+  cleanupPreparedSourceRawStorage,
   materializeSourceConnectorAudit,
+  prepareSourceConnectorAuditRawStorage,
   summarizeSourceConnectorAudit,
+  type PreparedSourceConnectorAudit,
   type SourceConnectorAuditSummary,
 } from "@/lib/source-connectors";
+import {
+  collectBlueskyPublicSources,
+  getBlueskyPublicConnectorStatus,
+} from "@/lib/bluesky-social-connector";
 import { buildReportEvidenceCatalog, formatReportEvidenceCatalog } from "@/lib/report-evidence";
 
 const DEFAULT_MODEL = "gpt-5.6-terra";
@@ -706,6 +713,7 @@ export type ProviderResearchSources = {
   sources: PublicWebSource[];
   metadata: PublicWebSearchMetadata;
   audit?: SourceConnectorAuditSummary;
+  audits?: SourceConnectorAuditSummary[];
   responseId: string;
   model: string;
   usage: unknown;
@@ -1755,7 +1763,11 @@ export async function researchPublicWeb(input: {
   const queries = sourcePlan.queries.slice(0, 5);
   const seedUrls = [...new Set([...(input.additionalSeedUrls ?? []), ...sourcePlan.seedUrls])].slice(0, 24);
   const collected = await collectPublicWebSources(queries, seedUrls, input.signal);
-  const sources = collected.sources;
+  const socialStatus = getBlueskyPublicConnectorStatus();
+  const social = socialStatus.enabled
+    ? await collectBlueskyPublicSources(queries, input.signal)
+    : null;
+  const sources = [...collected.sources, ...(social?.sources ?? [])];
 
   if (sources.length < 3) {
     throw new Error("PUBLIC_WEB_SOURCES_INSUFFICIENT");
@@ -1764,17 +1776,39 @@ export async function researchPublicWeb(input: {
   if (input.auditScope) {
     const auditScope = input.auditScope;
     const database = await getDatabase();
-    await database.transaction((transaction) => materializeSourceConnectorAudit(transaction, {
-      ...auditScope,
-      audit: collected.audit,
-    }));
+    const prepared: PreparedSourceConnectorAudit[] = [];
+    try {
+      for (const audit of [collected.audit, ...(social ? [social.audit] : [])]) {
+        prepared.push(await prepareSourceConnectorAuditRawStorage({ workspaceId: auditScope.workspaceId, audit }));
+      }
+      await database.transaction(async (transaction) => {
+        for (const item of prepared) {
+          await materializeSourceConnectorAudit(transaction, { ...auditScope, audit: item.audit });
+        }
+      });
+    } catch (error) {
+      await Promise.all(prepared.map(cleanupPreparedSourceRawStorage));
+      throw error;
+    }
+    collected.audit = prepared[0].audit;
+    if (social) social.audit = prepared[1].audit;
   }
+
+  const audits = [collected.audit, ...(social ? [social.audit] : [])].map(summarizeSourceConnectorAudit);
 
   return {
     queries,
     sources,
-    metadata: collected.metadata,
-    audit: summarizeSourceConnectorAudit(collected.audit),
+    metadata: {
+      ...collected.metadata,
+      finalSourceCount: sources.length,
+      socialConnectorEnabled: socialStatus.enabled,
+      socialSourceCount: social?.sources.length ?? 0,
+      socialCandidateCount: social?.audit.candidateCount ?? 0,
+      socialConnectorRunPublicId: social?.audit.publicId,
+    },
+    audit: audits[0],
+    audits,
     responseId: queryResponse.id,
     model: queryResponse.model,
     usage: queryResponse.usage,

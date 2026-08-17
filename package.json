@@ -17,6 +17,8 @@
     "smoke:evidence-graph": "tsx scripts/evidence-graph-smoke.ts",
     "smoke:reasoning-runtime": "tsx scripts/reasoning-runtime-smoke.ts",
     "smoke:source-connector": "tsx scripts/source-connector-smoke.ts",
+    "smoke:social-connector": "tsx scripts/social-connector-smoke.ts",
+    "smoke:source-object-storage": "tsx scripts/source-object-storage-smoke.ts",
     "smoke:task-recovery": "tsx scripts/task-recovery-smoke.ts",
     "smoke:interview-metrics": "tsx scripts/interview-metrics-smoke.ts",
     "smoke:context-hybrid": "tsx scripts/context-hybrid-smoke.ts",
@@ -36,6 +38,7 @@
     "archive:public": "node scripts/archive-public-site.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1111.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@next/env": "16.3.0",
     "@supabase/ssr": "^0.12.4",

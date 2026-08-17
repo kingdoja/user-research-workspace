@@ -7,9 +7,11 @@ import {
   collectSourceCandidate,
   markSourceCandidateUnavailable,
   materializeSourceConnectorAudit,
+  prepareSourceConnectorAuditRawStorage,
   summarizeSourceConnectorAudit,
   type SourceCandidate,
 } from "../src/lib/source-connectors";
+import type { SourceRawStorage } from "../src/lib/source-raw-storage";
 import { createSmokePlanVersion } from "./smoke-plan-fixture";
 
 if (process.env.SOURCE_CONNECTOR_SMOKE_CONFIRM !== "1") {
@@ -129,9 +131,29 @@ async function main() {
     assert.equal("rawContent" in auditSummary.candidates[0].snapshot!, false);
     assert.equal("content" in auditSummary.candidates[0].observation!, false);
     assert.equal("providerExcerpt" in auditSummary.candidates[0], false);
+    const storedBodies = new Map<string, string>();
+    const testStorage: SourceRawStorage = {
+      async putImmutable(input) {
+        const created = !storedBodies.has(input.key);
+        if (created) storedBodies.set(input.key, input.body);
+        return {
+          provider: "s3", bucket: "source-smoke", key: input.key, versionId: null,
+          etag: `"${input.contentHash}"`, byteLength: Buffer.byteLength(input.body), created,
+        };
+      },
+      async get(locator) { return storedBodies.get(locator.key) ?? ""; },
+      async delete(locator) { storedBodies.delete(locator.key); },
+    };
+    const prepared = await prepareSourceConnectorAuditRawStorage({
+      workspaceId: workspaceId!, audit, storage: testStorage, inlineLimitBytes: 32,
+    });
+    assert.equal(prepared.createdObjects.length, 1, "duplicate content must reuse its content-addressed object");
+    assert.equal(prepared.audit.candidates[0].snapshot?.rawContent, null);
+    assert.equal(prepared.audit.candidates[0].snapshot?.rawStorage?.provider, "s3");
+    assert.equal(await testStorage.get(prepared.audit.candidates[0].snapshot!.rawStorage!), collected[0].snapshot?.rawContent);
     await database.transaction((transaction) => materializeSourceConnectorAudit(transaction, {
       workspaceId: workspaceId!, studyId: seeded.studyId, runId: seeded.runId,
-      taskKey: "research", attempt: 1, audit,
+      taskKey: "research", attempt: 1, audit: prepared.audit,
     }));
 
     const removedSnapshot = await markSourceCandidateUnavailable(database, collected[0].publicId, "removed", "SOURCE_REMOVED_UPSTREAM");
@@ -157,7 +179,7 @@ async function main() {
       /source snapshots are immutable/,
     );
     const counts = await database.query<{
-      runs: number; candidates: number; snapshots: number; observations: number; removed: number; unavailable: number;
+      runs: number; candidates: number; snapshots: number; observations: number; removed: number; unavailable: number; externalized: number;
     }>(
       `select
          (select count(*)::int from source_connector_runs where run_id = $1) runs,
@@ -165,13 +187,15 @@ async function main() {
          (select count(*)::int from source_snapshots snapshot join source_candidates candidate on candidate.id = snapshot.candidate_id join source_connector_runs connector_run on connector_run.id = candidate.connector_run_id where connector_run.run_id = $1) snapshots,
          (select count(*)::int from source_observations observation join source_candidates candidate on candidate.id = observation.candidate_id join source_connector_runs connector_run on connector_run.id = candidate.connector_run_id where connector_run.run_id = $1) observations,
          (select count(*)::int from source_candidates candidate join source_connector_runs connector_run on connector_run.id = candidate.connector_run_id where connector_run.run_id = $1 and candidate.status = 'removed') removed,
-         (select count(*)::int from source_candidates candidate join source_connector_runs connector_run on connector_run.id = candidate.connector_run_id where connector_run.run_id = $1 and candidate.status = 'unavailable') unavailable`,
+         (select count(*)::int from source_candidates candidate join source_connector_runs connector_run on connector_run.id = candidate.connector_run_id where connector_run.run_id = $1 and candidate.status = 'unavailable') unavailable,
+         (select count(*)::int from source_snapshots snapshot join source_candidates candidate on candidate.id = snapshot.candidate_id join source_connector_runs connector_run on connector_run.id = candidate.connector_run_id where connector_run.run_id = $1 and snapshot.raw_storage_provider = 's3') externalized`,
       [seeded.runId],
     );
-    assert.deepEqual(counts.rows[0], { runs: 1, candidates: 8, snapshots: 4, observations: 2, removed: 1, unavailable: 1 });
+    assert.deepEqual(counts.rows[0], { runs: 1, candidates: 8, snapshots: 4, observations: 2, removed: 1, unavailable: 1, externalized: 2 });
     console.log(JSON.stringify({
       ...counts.rows[0], duplicateHash: true, robotsDenied: true, privateRedirectRejected: true,
       immutableSnapshot: true, evidenceSnapshotLinked: true, artifactAuditRedacted: true,
+      contentAddressedObjectStorage: true,
     }, null, 2));
   } finally {
     if (workspaceId) await database.query("delete from workspaces where id = $1", [workspaceId]);

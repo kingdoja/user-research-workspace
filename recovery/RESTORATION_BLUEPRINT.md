@@ -566,8 +566,8 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 
 - [x] 接入真实 Tavily/Bing Search Provider，并将 Provider 搜索结果约束为候选发现，不作为未经采集的事实证据。
 - [x] 增加合规 Public Web Connector、robots/公网/重定向/类型/大小/访问限制检查，以及不可变 Snapshot、Observation、hash 和 tombstone。
-- [ ] 接入至少一个有官方 API、授权数据合作方或企业数据合同支持的 Social Connector；当前不声称具备小红书、抖音、X、Instagram 的非公开 API 权限。
-- [ ] 大体积原始内容迁入对象存储；当前 MVP 在 PostgreSQL 保存受大小上限约束的原始正文、hash、locator 和权限元数据。
+- [x] 接入 Bluesky 公共 AppView/XRPC Social Connector；搜索候选必须再经 `app.bsky.feed.getPosts` 形成不可变 Snapshot/Observation 才可进入 Evidence。当前不声称具备小红书、抖音、X、Instagram 的非公开 API 权限。
+- [x] 大体积原始内容迁入 S3 兼容对象存储；超过阈值的正文按 workspace + SHA-256 内容寻址外置，PostgreSQL 仅保留不可变对象 locator、字节数、etag/version、hash 和标准化摘录，小正文继续受限内联以避免无意义网络开销。
 - [x] Context 增加 `hybrid_v1`、版本化 retrieval evaluation dataset、tombstone/reindex 和历史 snapshot 保留。
 - [x] 研究报告与新生成 Persona 自动形成带 origin/provenance 的待审核 Context 候选；批准前不进入检索，重试不重复创建。
 - [x] 从报告证据图生成 evidence-grounded Persona，并增加显式保留/淘汰策略；仅允许 Evidence locator 精确匹配，历史 Persona 保留 `ungrounded`。
@@ -604,6 +604,8 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 - Evidence Source/Item → Claim Evidence → Claim → Report Version/Node 证据链，以及逐条引用和公开分享隐私边界。
 - ReasoningDecision → 候选动作 → 动态任务/停止条件 → checkpoint replay 的确定性调度闭环。
 - Connector Run → Source Candidate → immutable Snapshot/hash → Observation → Evidence 的公开来源审计闭环。
+- Bluesky `searchPosts` candidate → `getPosts` collection → immutable social Snapshot/Observation → Evidence 的官方公共 API 证据闭环；默认关闭，部署时显式启用，不包含登录绕过或私有平台接口。
+- Raw source → 64 KiB 阈值 → workspace scoped SHA-256 S3/MinIO object → immutable database locator 的大正文外置闭环；对象写入先于数据库事务，事务失败只补偿删除本次新建对象。
 - Context Asset/Version → FTS + embedding baseline → Retrieval Snapshot → Evaluation Run 的可复现检索闭环，以及 tombstone/reindex 审计。
 - Approved Human Research Sample → Human Relevance Label → immutable source snapshot → Baseline/Candidate Gate 的人工检索评估闭环；20 条用户确认标签、Baseline、火山方舟与百炼 Candidate 均已完成，两个 Candidate 都未进入 shadow index。
 - Context Candidate → governance/review → active retrieval 的资产飞轮；研究报告与 synthetic Persona 具备 origin 幂等、来源 hash、受控关系和事件审计。
@@ -627,6 +629,8 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 8. [x] 已完成两种生产 embedding 候选的同集对照。火山方舟 `Doubao-embedding-vision 251215` Run `cer_jEggoOiHVMtdO4df` 的 P@K `0.03125`、R@K `0.25`、MRR `0.04762`；百炼 `text-embedding-v4` Run `cer_BWVjZC6Z4gMhEWyr` 的 P@K `0.0125`、R@K `0.10`、MRR `0.0625`。两者均未通过 MRR `+0.03` 且 P@K/R@K 不下降的门槛，因此不开启 pgvector/HNSW。
 9. [x] 自动沉淀研究模板和 Knowledge Gap：管理员审核、SHA-256 内容指纹去重、模板 365 天/Gap 180 天过期退出检索、`resolved_by` 解决归档均已实现；7 份历史报告已幂等回填 7 个模板和 84 个 Gap，全部待审核。
 10. [x] `.skill` 治理和第二产品线稳定后，已开放 workspace scoped API keys 和无状态 MCP server；团队发布流仍待完成。
+11. [x] Scout 已增加 Bluesky 官方公共 AppView Connector，并严格区分搜索发现与可引用快照；当前网络环境无法完成官方站点实时连通验证，因此部署验收仍需执行一次真实 API smoke。
+12. [x] Source Snapshot 大正文已迁入 S3 兼容对象存储；隔离 PostgreSQL smoke 和本地 MinIO 的不可变复用、hash 元数据及回读完整性均已验证。
 
 不建议现在做：
 
@@ -672,6 +676,8 @@ Scout 的逻辑产物不是原始帖子列表，而是：
 - [Atypica 功能与对比](https://atypica.ai/features)
 - [Plan Mode](https://atypica.ai/features/plan-mode)
 - [Scout Agent](https://atypica.ai/features/scout-agent)
+- [Bluesky API: app.bsky.feed.searchPosts](https://docs.bsky.app/docs/api/app-bsky-feed-search-posts)
+- [Bluesky API: app.bsky.feed.getPosts](https://docs.bsky.app/docs/api/app-bsky-feed-get-posts)
 - [公开报告示例](https://atypica.ai/artifacts/report/tNaAeztyDmMEPF2A/share)
 - [公开研究回放示例](https://atypica.ai/study/rTLbG4tYpR4zsGq4/share?replay=1)
 

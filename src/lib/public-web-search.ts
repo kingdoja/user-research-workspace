@@ -32,6 +32,10 @@ export type PublicWebSearchMetadata = {
   unavailableCount?: number;
   connectorRunPublicId?: string;
   policyVersion?: string;
+  socialConnectorEnabled?: boolean;
+  socialSourceCount?: number;
+  socialCandidateCount?: number;
+  socialConnectorRunPublicId?: string;
 };
 
 export type PublicWebCollectionResult = {
