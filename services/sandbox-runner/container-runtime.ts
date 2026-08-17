@@ -14,8 +14,53 @@ type ProcessResult = {
   exitCode: number | null;
   stdout: Buffer;
   stderr: Buffer;
-  termination: "timeout" | "output_limit" | null;
+  termination: "timeout" | "output_limit" | "shutdown" | null;
 };
+
+export type ContainerRuntimeReadiness = {
+  ready: boolean;
+  checkedAt: string;
+  runtimeAvailable: boolean;
+  imagesAvailable: {
+    javascript: boolean;
+    python: boolean;
+  };
+};
+
+function runtimeCheck(runtime: SandboxRunnerConfig["containerRuntime"], args: string[], timeoutMs: number) {
+  return new Promise<boolean>((resolvePromise) => {
+    const child = spawn(runtime, args, { stdio: "ignore", shell: false });
+    let settled = false;
+    const settle = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolvePromise(ok);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      settle(false);
+    }, timeoutMs);
+    child.once("error", () => settle(false));
+    child.once("close", (code) => settle(code === 0));
+  });
+}
+
+export async function probeContainerRuntime(config: SandboxRunnerConfig): Promise<ContainerRuntimeReadiness> {
+  const runtimeAvailable = await runtimeCheck(config.containerRuntime, ["info"], config.readinessProbeTimeoutMs);
+  const [javascript, python] = runtimeAvailable
+    ? await Promise.all([
+      runtimeCheck(config.containerRuntime, ["image", "inspect", config.javascriptImage], config.readinessProbeTimeoutMs),
+      runtimeCheck(config.containerRuntime, ["image", "inspect", config.pythonImage], config.readinessProbeTimeoutMs),
+    ])
+    : [false, false];
+  return {
+    ready: runtimeAvailable && javascript && python,
+    checkedAt: new Date().toISOString(),
+    runtimeAvailable,
+    imagesAvailable: { javascript, python },
+  };
+}
 
 function boundedMessage(value: Buffer) {
   return value.toString("utf8").replaceAll(/\/workspace\/[A-Za-z0-9._/-]+/g, "/workspace/<redacted>").slice(0, 1_200);
@@ -43,6 +88,7 @@ async function runContainerProcess(input: {
   containerName: string;
   timeoutMs: number;
   maxOutputBytes: number;
+  signal?: AbortSignal;
 }) {
   return new Promise<ProcessResult>((resolvePromise) => {
     const child = spawn(input.config.containerRuntime, input.args, {
@@ -61,7 +107,6 @@ async function runContainerProcess(input: {
       termination = reason;
       child.stdin.destroy();
       child.kill("SIGKILL");
-      void runtimeCommand(input.config, ["rm", "-f", input.containerName]);
       settle(null);
     };
     const timer = setTimeout(() => terminate("timeout"), input.timeoutMs);
@@ -80,6 +125,7 @@ async function runContainerProcess(input: {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      input.signal?.removeEventListener("abort", abort);
       if (extraError) stderrChunks.push(Buffer.from(extraError));
       resolvePromise({
         exitCode,
@@ -88,8 +134,11 @@ async function runContainerProcess(input: {
         termination,
       });
     };
+    const abort = () => terminate("shutdown");
     child.once("error", (error) => settle(null, error.message));
     child.once("close", (code) => settle(code));
+    input.signal?.addEventListener("abort", abort, { once: true });
+    if (input.signal?.aborted) abort();
     child.stdin.end(input.stdin);
   });
 }
@@ -152,6 +201,7 @@ function containerArguments(input: {
 export async function executeInContainer(
   request: SandboxExecutionRequest,
   config: SandboxRunnerConfig,
+  signal?: AbortSignal,
 ): Promise<SandboxExecutionResponse> {
   const startedAt = performance.now();
   const executionId = `sbx_${randomUUID().replaceAll("-", "")}`;
@@ -180,12 +230,16 @@ export async function executeInContainer(
       containerName,
       timeoutMs: request.limits.timeoutMs,
       maxOutputBytes: request.limits.maxOutputBytes,
+      signal,
     });
     if (result.termination === "timeout") {
       return response({ status: "failed", exitCode: result.exitCode, errorCode: "SANDBOX_TIMEOUT", errorMessage: "Execution timed out" });
     }
     if (result.termination === "output_limit") {
       return response({ status: "failed", exitCode: result.exitCode, errorCode: "SANDBOX_OUTPUT_LIMIT", errorMessage: "Execution output exceeded the configured limit" });
+    }
+    if (result.termination === "shutdown") {
+      return response({ status: "failed", exitCode: result.exitCode, errorCode: "SANDBOX_SHUTDOWN", errorMessage: "Execution stopped because the runner is shutting down" });
     }
     if (result.exitCode !== 0) {
       return response({

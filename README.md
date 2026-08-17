@@ -68,6 +68,12 @@ images by digest. The repository includes a systemd user unit, production enviro
 Caddy TLS proxy and remote deployment gate under `deploy/` and `scripts/`. See
 [`services/sandbox-runner/README.md`](services/sandbox-runner/README.md).
 
+The Runner probes its container engine and both configured images before declaring readiness.
+Use `/live` for process liveness and `/ready` for traffic admission; `/health` remains a
+readiness-compatible endpoint. Prometheus metrics are available at `/metrics` only with the
+same `x-sandbox-token` used by `/execute`. `SIGTERM`/`SIGINT` stops new admission, drains active
+executions for the configured grace period, and then aborts and removes overdue containers.
+
 ## Verification
 
 ```bash

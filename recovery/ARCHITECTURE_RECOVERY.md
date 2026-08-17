@@ -17,14 +17,16 @@
 - 版本化 Context Asset/Chunk/Edge、混合检索、Retrieval Snapshot、重建索引与离线评估；Reasoning 可按不足、冲突或时效条件生成有上限的动态 Context 刷新并回放。
 - 版本化 `research-intent-v1`、确认版 Plan、编译后 `workflow-definition-v1` 与 Run 的不可变绑定；Intent Planning 使用 purpose-bound Context Snapshot。
 - DAG wave、多层限流、租约恢复、策略实验、实时与批量两类工作流。
+- Universal Agent 工作台、工作区文件、`atypica.skill/v2` 代码包与独立容器 Sandbox Runner。
+- Workspace scoped API key、无状态 MCP server、跨工作区发布/委托与 Provider 路由账本。
 
 当前代码尚未形成完整的：
 
 - 独立部署的 Intent 服务；当前已是单体内明确逻辑边界，但尚未作为跨产品服务拆分。
 - 可跨业务线复用的编排 Runtime（目前 `research-harness.ts` 是研究产品专用 Runtime）。
-- 任意代码 Skill 沙箱、加密签名信任链、Skill 市场和团队发布流。
+- 加密签名信任链、Skill 市场和面向外部客户的团队发布运营流。
 - 生产 embedding/pgvector、完整本体与 Subjective World Model 训练评估闭环。
-- 对外 MCP server、scoped API key，以及经第三条业务线和外部调用验证的 Universal Agent 契约。
+- 经第三条业务线和真实外部客户流量验证的 Universal Agent 契约。
 
 因此，用户提出的四层架构是适合作为恢复目标的目标架构，但不能被描述为当前仓库已经实现。
 
@@ -454,6 +456,14 @@ Runtime 默认值：每 run 2 个并发 task、每 workspace 2 个活跃研究 r
 - 使用临时 TLS 反向代理模拟 Caddy，从生产模式 Next.js `/agent` 完成真实端到端验收：DeepSeek V4 Pro reasoning 路由策略版本锁定、`code_execute` grant、HTTPS Runner、一次性非 root 容器、Sandbox 审计、Provider decision ledger 和 `deliverables/sandbox-ledger-e2e.json` 工作区文件同时完成；输出为 `{sum: 100, count: 3, runtime: "sandbox"}`。
 - Browser 验收中发现并修复两个客户端状态缺陷：Skill 审批后本地列表未立即解锁启用开关，Agent HTTP 请求未进入忙碌态而可重复提交。QA 验收后已删除 2 个一次性账号、2 个 workspace、Skills、Runs、临时证书与容器，未保留测试数据。
 - 本阶段完成的是可重复部署工作流与本地生产配置验收；真实生产 HTTPS 域名和专用 Linux worker 仍需运维资源，不虚构为已经上线。
+
+## 2026-08-17 Sandbox Runner 运维闭环记录
+
+- Runner 启动时并每 30 秒检查容器引擎与 JavaScript/Python 固定镜像；`/live` 只表示进程存活，`/ready` 及兼容的 `/health` 只在 runtime 可用、镜像存在且未排空时返回 `200`。不可用期间新执行返回 `runner_unavailable`，不会落到宿主机执行。
+- `SIGTERM`/`SIGINT` 将 admission 切换为 draining，新请求返回 `runner_draining`，已接受任务有 125 秒排空窗口。逾期任务通过 AbortSignal 终止容器并返回 `SANDBOX_SHUTDOWN`；systemd `TimeoutStopSec=140s` 保留额外清理时间。
+- `/metrics` 输出 Prometheus 文本，并强制同一 `x-sandbox-token` 认证。指标包含 active/ready/draining、接受/成功/失败、按有限原因分组的拒绝和错误、时延 sum/count 与 readiness probe 失败；标签不包含 token、源码、输入、路径或 execution ID。
+- `smoke:sandbox-runner` 已用真实容器新增验证 runtime/image readiness、镜像缺失降级、指标认证/敏感值隔离、并发拒绝、正常排空、超时强制排空和无残留容器。远程部署门禁同步验证 liveness/readiness 与认证指标。
+- 运行手册已定义发布门禁、告警信号、systemd 排空演练和回滚顺序。这些是可重复的代码/配置交付；真实 worker、DNS/TLS、密钥存储、监控采集器和告警路由仍属外部运维资源。
 
 ## 验收标准
 

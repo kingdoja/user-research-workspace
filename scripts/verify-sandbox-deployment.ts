@@ -25,6 +25,9 @@ if (authToken.length < 24) {
 }
 
 const healthUrl = new URL("/health", baseUrl);
+const liveUrl = new URL("/live", baseUrl);
+const readyUrl = new URL("/ready", baseUrl);
+const metricsUrl = new URL("/metrics", baseUrl);
 const executeUrl = new URL("/execute", baseUrl);
 
 function executionRequest(input: {
@@ -84,13 +87,28 @@ async function assertNoLocalContainers() {
 }
 
 async function main() {
-  const healthResponse = await fetch(healthUrl, { redirect: "error", signal: AbortSignal.timeout(5_000) });
-  const health = await json(healthResponse);
-  assert.equal(healthResponse.status, 200);
-  assert.equal(health.protocol, protocol);
-  assert.equal(health.status, "ready");
-  assert.deepEqual(health.runtimes, ["javascript", "python"]);
-  assert.deepEqual(health.imageDigestsPinned, { javascript: true, python: true });
+  const liveResponse = await fetch(liveUrl, { redirect: "error", signal: AbortSignal.timeout(5_000) });
+  const live = await json(liveResponse);
+  assert.equal(liveResponse.status, 200);
+  assert.deepEqual(live, { protocol, status: "live" });
+
+  for (const endpoint of [readyUrl, healthUrl]) {
+    const readyResponse = await fetch(endpoint, { redirect: "error", signal: AbortSignal.timeout(5_000) });
+    const ready = await json(readyResponse);
+    assert.equal(readyResponse.status, 200);
+    assert.equal(ready.protocol, protocol);
+    assert.equal(ready.status, "ready");
+    assert.deepEqual(ready.runtimes, ["javascript", "python"]);
+    assert.deepEqual(ready.imageDigestsPinned, { javascript: true, python: true });
+    const checks = ready.checks as Record<string, unknown>;
+    assert.equal(typeof checks.checkedAt, "string");
+    assert.equal(checks.runtimeAvailable, true);
+    assert.deepEqual(checks.imagesAvailable, { javascript: true, python: true });
+  }
+
+  const unauthorizedMetrics = await fetch(metricsUrl, { redirect: "error", signal: AbortSignal.timeout(5_000) });
+  assert.equal(unauthorizedMetrics.status, 401);
+  assert.deepEqual(await json(unauthorizedMetrics), { error: "unauthorized" });
 
   const unauthorizedResponse = await execute(executionRequest({
     language: "javascript",
@@ -158,10 +176,25 @@ export default ({ left, right }) => {
   assert.equal(network.errorCode, "SANDBOX_NETWORK_DISABLED");
 
   const residualContainers = await assertNoLocalContainers();
+  const metricsResponse = await fetch(metricsUrl, {
+    headers: { "x-sandbox-token": authToken },
+    redirect: "error",
+    signal: AbortSignal.timeout(5_000),
+  });
+  const metrics = await metricsResponse.text();
+  assert.equal(metricsResponse.status, 200);
+  assert.match(metrics, /atypica_sandbox_runner_ready 1/);
+  assert.match(metrics, /atypica_sandbox_runner_executions_accepted_total [1-9][0-9]*/);
+  assert.match(metrics, /code="SANDBOX_TIMEOUT"/);
+  assert.doesNotMatch(metrics, new RegExp(authToken));
+  assert.doesNotMatch(metrics, /executionId|sbx_|verify\.mjs|verify\.py/);
   console.log(JSON.stringify({
     target: baseUrl.origin,
     protocol,
-    health: "passed",
+    liveness: "passed",
+    readiness: "passed",
+    healthCompatibility: "passed",
+    authenticatedMetrics: "passed",
     imageDigestsPinned: "passed",
     authentication: "passed",
     javascriptIsolation: "passed",

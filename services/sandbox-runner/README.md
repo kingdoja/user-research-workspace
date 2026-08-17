@@ -33,6 +33,24 @@ Pre-pull the two configured runtime images, then start the service:
 SANDBOX_RUNNER_AUTH_TOKEN='replace-with-at-least-24-characters' pnpm sandbox:runner
 ```
 
+## Operations contract
+
+- `GET /live` returns `200` while the HTTP process is alive.
+- `GET /ready` verifies the container engine and both pre-pulled images; it returns `503`
+  while the runtime is unavailable or the process is draining.
+- `GET /health` is a backward-compatible alias of `/ready`.
+- `GET /metrics` emits Prometheus text and requires `x-sandbox-token`. Labels are restricted
+  to language, bounded error code and rejection reason; inputs, source, file paths, tokens and
+  execution IDs are never metric labels.
+- `POST /execute` returns `503 runner_unavailable` when runtime readiness is down,
+  `503 runner_draining` after shutdown begins, or `429 runner_busy` at the concurrency limit.
+
+Readiness is checked at startup and periodically. `SIGTERM` or `SIGINT` changes admission to
+draining and lets active executions finish. At `SANDBOX_RUNNER_SHUTDOWN_GRACE_MS`, remaining
+execution controllers are aborted, their containers are force-removed, and the service exits
+non-zero so an unexpected forced drain is visible to the service manager. Keep systemd
+`TimeoutStopSec` at least 10 seconds above the Runner grace period.
+
 Production deployments must terminate HTTPS in front of the Runner, pin both images by
 digest, and keep the service on a dedicated worker host. Rootless Podman or a hardened
 container runtime such as gVisor is preferred. Mounting a rootful Docker socket into an
@@ -68,7 +86,9 @@ podman pull "$SANDBOX_PYTHON_IMAGE"
 podman info --format '{{.Host.Security.Rootless}}'
 systemctl --user daemon-reload
 systemctl --user enable --now atypica-sandbox-runner.service
-curl --fail http://127.0.0.1:8787/health
+curl --fail http://127.0.0.1:8787/live
+curl --fail http://127.0.0.1:8787/ready
+curl --fail -H "x-sandbox-token: $SANDBOX_RUNNER_AUTH_TOKEN" http://127.0.0.1:8787/metrics
 ```
 
 Install `deploy/Caddyfile.sandbox.example` on the same worker, replace the hostname, and
@@ -98,12 +118,32 @@ SANDBOX_VERIFY_TOKEN="$SKILL_SECRET_SANDBOX_RUNNER_TOKEN" \
 pnpm verify:sandbox-deployment
 ```
 
-The gate checks health, digest pinning, bad-token rejection, JavaScript and Python execution,
-non-root/read-only/default-deny isolation, timeout and output limits. On the worker, add
+The gate checks liveness, runtime/image readiness, authenticated metrics, digest pinning,
+bad-token rejection, JavaScript and Python execution, non-root/read-only/default-deny
+isolation, timeout and output limits. On the worker, add
 `SANDBOX_VERIFY_CONTAINER_RUNTIME=podman` to also prove no execution containers remain.
 
-Deploy image changes by digest, run the gate, then update the Skill version endpoint/grants
-only if its contract changed. Roll back by restoring the previous environment file and
-checkout, restarting the user unit, and rerunning the same gate. Rotate the shared token in
-the Runner and Next.js secret stores in one maintenance window; overlapping tokens are not
-accepted by design.
+## Release, fault drill and rollback
+
+Before a release, pull the new image digests, start the unit, require `/ready` to return `200`,
+and run `verify:sandbox-deployment`. Do not update the platform Skill endpoint or grants unless
+the contract changed. Watch these conditions during rollout:
+
+- `/ready` non-200 for two probe intervals;
+- `atypica_sandbox_runner_readiness_probe_failures_total` increasing;
+- busy/draining/unavailable rejection counters increasing unexpectedly;
+- failed execution rate or duration rising against the previous deployment;
+- `sandbox_runner_drain_deadline` or a non-zero service exit.
+
+Run a drain drill on the worker with one bounded test execution in flight, then execute
+`systemctl --user restart atypica-sandbox-runner.service`. Confirm the request either completes
+within the grace window or returns `SANDBOX_SHUTDOWN`, the journal records `drained` or `forced`,
+`podman ps -aq --filter label=ai.atypica.sandbox=true` is empty, and `/ready` recovers after the
+restart. `pnpm smoke:sandbox-runner` performs the same normal and forced-drain checks locally.
+
+Roll back by restoring the last reviewed checkout and environment file, ensuring the previous
+digests are present, restarting the user unit, waiting for `/ready`, and rerunning the remote
+gate. If readiness stays down, keep the Runner out of traffic and inspect `journalctl --user -u
+atypica-sandbox-runner.service`; do not bypass readiness or enable host execution. Rotate the
+shared token in the Runner and Next.js secret stores in one maintenance window because
+overlapping tokens are not accepted by design.

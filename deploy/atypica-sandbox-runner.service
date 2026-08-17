@@ -10,7 +10,9 @@ EnvironmentFile=%h/.config/atypica/sandbox-runner.env
 ExecStart=/usr/bin/pnpm sandbox:runner
 Restart=on-failure
 RestartSec=5s
-TimeoutStopSec=30s
+# Runner drains for up to 125s, then needs a short container cleanup window.
+TimeoutStopSec=140s
+KillSignal=SIGTERM
 KillMode=control-group
 
 # The unit runs under an unprivileged deployment account. Do not set systemd's

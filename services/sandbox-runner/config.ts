@@ -18,6 +18,9 @@ export type SandboxRunnerConfig = {
   cpuLimit: number;
   pidsLimit: number;
   tmpfsMb: number;
+  shutdownGraceMs: number;
+  readinessProbeIntervalMs: number;
+  readinessProbeTimeoutMs: number;
 };
 
 function integerFromEnv(value: string | undefined, fallback: number, minimum: number, maximum: number) {
@@ -62,5 +65,8 @@ export function loadSandboxRunnerConfig(environment: NodeJS.ProcessEnv = process
     cpuLimit: numberFromEnv(environment.SANDBOX_RUNNER_CPU_LIMIT, 1, 0.1, 4),
     pidsLimit: integerFromEnv(environment.SANDBOX_RUNNER_PIDS_LIMIT, 64, 16, 256),
     tmpfsMb: integerFromEnv(environment.SANDBOX_RUNNER_TMPFS_MB, 16, 4, 64),
+    shutdownGraceMs: integerFromEnv(environment.SANDBOX_RUNNER_SHUTDOWN_GRACE_MS, 125_000, 1_000, 300_000),
+    readinessProbeIntervalMs: integerFromEnv(environment.SANDBOX_RUNNER_READINESS_PROBE_INTERVAL_MS, 30_000, 1_000, 300_000),
+    readinessProbeTimeoutMs: integerFromEnv(environment.SANDBOX_RUNNER_READINESS_PROBE_TIMEOUT_MS, 5_000, 500, 30_000),
   };
 }
