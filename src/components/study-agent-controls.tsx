@@ -152,6 +152,7 @@ export function StudyAgentControls({
   const completedSteps = progressItems.filter((item) => item.status === "done").length;
   const outputCount = study.report ? 1 : 0;
   const panelCount = getArtifactPersonas(study).length;
+  const clarificationPending = study.clarification.status === "pending";
 
   useEffect(() => {
     function useSuggestion(event: Event) {
@@ -176,6 +177,7 @@ export function StudyAgentControls({
 
   function submitStudy(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (clarificationPending) return;
     const normalized = brief.trim();
     if (normalized.length < 12) return;
     setError("");
@@ -224,11 +226,19 @@ export function StudyAgentControls({
         </button>
       </nav>
       <form className="agent-followup-composer" onSubmit={submitStudy}>
-        <textarea value={brief} onChange={(event) => setBrief(event.target.value)} placeholder={study.report ? "基于当前报告继续追问" : "提出后续问题或开始一项新研究"} maxLength={study.report ? 1000 : 4000} aria-label="后续研究问题" />
+        {clarificationPending ? (
+          <div className="agent-composer-blocked" role="status">
+            <ListChecks size={18} />
+            <div><strong>等待澄清答案</strong><span>完成当前问题后生成研究计划</span></div>
+            <button type="button" onClick={() => document.querySelector(".agent-clarification-form")?.scrollIntoView({ behavior: "smooth", block: "center" })}>查看问题</button>
+          </div>
+        ) : (
+          <textarea value={brief} onChange={(event) => setBrief(event.target.value)} placeholder={study.report ? "基于当前报告继续追问" : "提出后续问题或开始一项新研究"} maxLength={study.report ? 1000 : 4000} aria-label="后续研究问题" />
+        )}
         <div className="agent-composer-actions">
           <button type="button" className="agent-new-study" onClick={() => study.report ? router.push("/newstudy") : setBrief("")}><Plus size={15} />开始新研究</button>
           <button type="button" className="agent-attach" disabled title="附件功能尚未开放"><Paperclip size={17} /><span className="sr-only">添加附件</span></button>
-          <button className="agent-send" type="submit" disabled={pending || brief.trim().length < 12}>{pending ? <LoaderCircle className="spin" size={18} /> : <ArrowUp size={18} />}<span className="sr-only">提交</span></button>
+          <button className="agent-send" type="submit" disabled={clarificationPending || pending || brief.trim().length < 12}>{pending ? <LoaderCircle className="spin" size={18} /> : <ArrowUp size={18} />}<span className="sr-only">提交</span></button>
         </div>
       </form>
       {error ? <p className="agent-composer-error" role="alert">{error}</p> : null}

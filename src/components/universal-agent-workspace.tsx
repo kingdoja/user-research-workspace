@@ -11,7 +11,10 @@ import {
   FolderOpen,
   LoaderCircle,
   MessageSquarePlus,
-  PanelRight,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Play,
   Plus,
   ShieldCheck,
@@ -24,6 +27,19 @@ import type { UniversalAgentWorkspace as AgentWorkspaceData } from "@/lib/univer
 
 type RightTab = "skills" | "files" | "runs";
 type FilePreview = { path: string; content: string; version: number; byteSize: number; checksum: string } | null;
+
+function createAgentRequestId() {
+  const browserCrypto = globalThis.crypto as Crypto | undefined;
+  if (typeof browserCrypto?.randomUUID === "function") {
+    return browserCrypto.randomUUID();
+  }
+  if (typeof browserCrypto?.getRandomValues === "function") {
+    const entropy = new Uint32Array(4);
+    browserCrypto.getRandomValues(entropy);
+    return `web:${Date.now().toString(36)}:${Array.from(entropy, (value) => value.toString(36)).join("")}`;
+  }
+  return `web:${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+}
 
 function runStatusLabel(status: AgentWorkspaceData["recentRuns"][number]["status"] | null) {
   if (status === "queued") return "排队中";
@@ -45,6 +61,8 @@ export function UniversalAgentWorkspace({
   const [pending, startTransition] = useTransition();
   const [sending, setSending] = useState(false);
   const [rightTab, setRightTab] = useState<RightTab>("skills");
+  const [leftRailOpen, setLeftRailOpen] = useState(true);
+  const [rightRailOpen, setRightRailOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(initialWorkspace.threads.length === 0);
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [externalAllowed, setExternalAllowed] = useState(false);
@@ -94,7 +112,7 @@ export function UniversalAgentWorkspace({
           content: String(data.get("message")),
           skillPublicIds: selectedSkills,
           externalExecutionAllowed: externalAllowed,
-          requestId: crypto.randomUUID(),
+          requestId: createAgentRequestId(),
         }),
       });
       const body = await response.json().catch(() => ({})) as { error?: string; message?: string; runPublicId?: string };
@@ -136,7 +154,7 @@ export function UniversalAgentWorkspace({
   }
 
   return (
-    <div className="universal-agent-shell">
+    <div className={`universal-agent-shell${leftRailOpen ? "" : " left-rail-collapsed"}${rightRailOpen ? " right-rail-open" : ""}`}>
       {notice ? (
         <div className={`universal-agent-notice ${notice.kind}`} role="status">
           {notice.kind === "error" ? <CircleAlert size={15} /> : <Check size={15} />}
@@ -146,7 +164,13 @@ export function UniversalAgentWorkspace({
       ) : null}
 
       <aside className="agent-thread-rail">
-        <header><div><span>CONVERSATIONS</span><strong>会话</strong></div><button type="button" title="新建会话" aria-label="新建会话" onClick={() => setCreateOpen((value) => !value)}><Plus size={16} /></button></header>
+        <header>
+          <div><span>CONVERSATIONS</span><strong>会话</strong></div>
+          <div className="agent-rail-header-actions">
+            <button type="button" title="新建会话" aria-label="新建会话" onClick={() => setCreateOpen((value) => !value)}><Plus size={16} /></button>
+            <button type="button" title="收起会话栏" aria-label="收起会话栏" onClick={() => setLeftRailOpen(false)}><PanelLeftClose size={16} /></button>
+          </div>
+        </header>
         {createOpen ? (
           <form className="agent-thread-create" onSubmit={createThread}>
             <input name="title" required minLength={2} maxLength={160} placeholder="会话名称" autoFocus />
@@ -168,7 +192,32 @@ export function UniversalAgentWorkspace({
       <section className="universal-conversation-pane">
         <header>
           <div><span>ACTIVE THREAD</span><strong>{selectedThread?.title ?? "Universal Agent"}</strong></div>
-          <div className="agent-thread-security"><ShieldCheck size={14} />版本锁定</div>
+          <div className="agent-conversation-actions">
+            <div className={initialWorkspace.provider.configured ? "agent-provider-state ready" : "agent-provider-state"}>
+              <span />{initialWorkspace.provider.providerName} / {initialWorkspace.provider.model}
+            </div>
+            <div className="agent-thread-security"><ShieldCheck size={14} />版本锁定</div>
+            <button
+              className="agent-pane-toggle"
+              type="button"
+              title={leftRailOpen ? "收起会话栏" : "展开会话栏"}
+              aria-label={leftRailOpen ? "收起会话栏" : "展开会话栏"}
+              aria-expanded={leftRailOpen}
+              onClick={() => setLeftRailOpen((value) => !value)}
+            >
+              {leftRailOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}
+            </button>
+            <button
+              className="agent-pane-toggle"
+              type="button"
+              title={rightRailOpen ? "收起运行资源" : "展开运行资源"}
+              aria-label={rightRailOpen ? "收起运行资源" : "展开运行资源"}
+              aria-expanded={rightRailOpen}
+              onClick={() => setRightRailOpen((value) => !value)}
+            >
+              {rightRailOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
+            </button>
+          </div>
         </header>
         <div className="agent-message-list">
           {initialWorkspace.messages.length ? initialWorkspace.messages.map((message) => (
@@ -195,7 +244,10 @@ export function UniversalAgentWorkspace({
       </section>
 
       <aside className="agent-resource-pane">
-        <header><PanelRight size={15} /><strong>运行资源</strong></header>
+        <header>
+          <div><PanelRightOpen size={15} /><strong>运行资源</strong></div>
+          <button type="button" title="收起运行资源" aria-label="收起运行资源" onClick={() => setRightRailOpen(false)}><PanelRightClose size={16} /></button>
+        </header>
         <div className="agent-resource-tabs" role="tablist">
           <button className={rightTab === "skills" ? "active" : ""} type="button" role="tab" onClick={() => setRightTab("skills")}>Skills</button>
           <button className={rightTab === "files" ? "active" : ""} type="button" role="tab" onClick={() => setRightTab("files")}>Files</button>

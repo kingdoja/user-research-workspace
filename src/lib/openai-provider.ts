@@ -27,6 +27,7 @@ const DEFAULT_MODEL = "gpt-5.6-terra";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
 const DEFAULT_DEEPSEEK_REASONING_MODEL = "deepseek-v4-pro";
 const PLAN_PROMPT_VERSION = "study-plan-v1";
+const CLARIFICATION_PROMPT_VERSION = "study-clarification-v1";
 export const REPORT_PROMPT_VERSION = "synthetic-panel-research-v2-evidence-graph";
 export const REPORT_JUDGE_PROMPT_VERSION = "research-report-judge-v1";
 export const REPORT_REVISION_PROMPT_VERSION = "research-report-revision-v1";
@@ -100,6 +101,18 @@ const planSchema = z.object({
   estimatedDurationMinutes: z.number().int().min(30).max(4320),
   estimatedTokens: z.number().int().min(10000).max(250000),
   rationale: z.string().min(20),
+});
+
+const clarificationOptionSetSchema = z.object({
+  question: z.string().min(6).max(120),
+  options: z.array(z.string().min(2).max(80)).length(4),
+});
+
+const clarificationSchema = z.object({
+  businessGoal: clarificationOptionSetSchema,
+  researchFocus: clarificationOptionSetSchema,
+  targetAudience: clarificationOptionSetSchema,
+  researchScope: clarificationOptionSetSchema,
 });
 
 const reportSchema = z.object({
@@ -505,6 +518,33 @@ const planJsonSchema = {
   additionalProperties: false,
 } as const;
 
+const clarificationOptionSetJsonSchema = {
+  type: "object",
+  properties: {
+    question: { type: "string", minLength: 6, maxLength: 120 },
+    options: {
+      type: "array",
+      minItems: 4,
+      maxItems: 4,
+      items: { type: "string", minLength: 2, maxLength: 80 },
+    },
+  },
+  required: ["question", "options"],
+  additionalProperties: false,
+} as const;
+
+const clarificationJsonSchema = {
+  type: "object",
+  properties: {
+    businessGoal: clarificationOptionSetJsonSchema,
+    researchFocus: clarificationOptionSetJsonSchema,
+    targetAudience: clarificationOptionSetJsonSchema,
+    researchScope: clarificationOptionSetJsonSchema,
+  },
+  required: ["businessGoal", "researchFocus", "targetAudience", "researchScope"],
+  additionalProperties: false,
+} as const;
+
 const reportJsonSchema = {
   type: "object",
   properties: {
@@ -697,6 +737,12 @@ const personaPanelJsonSchema = {
 
 export type ProviderStudyPlan = z.infer<typeof planSchema> & {
   source: "openai";
+  responseId: string;
+  model: string;
+  promptVersion: string;
+};
+
+export type ProviderStudyClarification = z.infer<typeof clarificationSchema> & {
   responseId: string;
   model: string;
   promptVersion: string;
@@ -1449,6 +1495,46 @@ export async function generateProviderStudyPlan(
     responseId: response.id,
     model: response.model,
     promptVersion: PLAN_PROMPT_VERSION,
+  };
+}
+
+export async function generateProviderStudyClarification(input: {
+  brief: string;
+  productLine: "research" | "market_insight";
+  userPublicId: string;
+}): Promise<ProviderStudyClarification> {
+  const model = getPlanModel();
+  const response = await createStructuredResponse("plan", {
+    model,
+    reasoning: { effort: "low" },
+    safety_identifier: safetyIdentifier(input.userPublicId),
+    store: true,
+    metadata: { surface: "study_clarification", prompt_version: CLARIFICATION_PROMPT_VERSION },
+    instructions: [
+      "你是商业研究设计师。根据用户当前提交的 Brief 生成四组必要的澄清问题。",
+      "四组分别用于确认业务决策、研究重点、目标人群或市场范围、证据与方法范围。",
+      "每组选项必须直接对应当前 Brief 中的研究对象、使用场景和决策语境；不得套用其他品类的术语、属性或人群。",
+      "不要把共享单车、通勤或出行自动解释为电动车购买、续航、充电或换电，除非 Brief 明确提到这些内容。",
+      "信息不足时使用与当前研究对象绑定的中性选项，不得虚构品牌、产品功能或用户事实。",
+      "每组必须给出四个互不重复、可直接选择的简体中文选项；选项应简洁、具体且彼此有区分度。",
+      `产品线：${input.productLine === "market_insight" ? "市场洞察" : "用户研究"}`,
+    ].join("\n"),
+    input: `当前 Brief：\n${input.brief}`,
+    text: {
+      format: {
+        type: "json_schema",
+        name: "study_clarification",
+        strict: true,
+        schema: clarificationJsonSchema,
+      },
+    },
+  }, { timeout: 30_000, maxRetries: 1 });
+
+  return {
+    ...parseOutput(response.output_text, clarificationSchema),
+    responseId: response.id,
+    model: response.model,
+    promptVersion: CLARIFICATION_PROMPT_VERSION,
   };
 }
 

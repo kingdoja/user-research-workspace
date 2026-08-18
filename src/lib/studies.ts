@@ -27,6 +27,7 @@ import {
   describeOpenAIError,
   generateProviderFollowupAnswer,
   generateProviderResearchReport,
+  generateProviderStudyClarification,
   generateProviderStudyPlan,
   getOpenAIProviderStatus,
   type ResearchCitation,
@@ -371,8 +372,8 @@ function includesAny(brief: string, terms: string[]) {
   return terms.some((term) => normalized.includes(term));
 }
 
-function createClarificationQuestions(brief: string, productLine: StudyProductLine): ClarificationQuestion[] {
-  const mobilityStudy = includesAny(brief, ["电动两轮", "电动车", "通勤", "续航", "换购"]);
+export function createFallbackClarificationQuestions(brief: string, productLine: StudyProductLine): ClarificationQuestion[] {
+  const electricMobilityStudy = includesAny(brief, ["电动两轮", "电动车", "电动自行车", "电摩", "续航", "换购", "充电", "换电"]);
   const productStudy = includesAny(brief, ["产品", "功能", "研发", "体验", "优化"]);
 
   return [
@@ -391,7 +392,7 @@ function createClarificationQuestions(brief: string, productLine: StudyProductLi
       question: "您更希望深入理解哪些方面？",
       options: productLine === "market_insight"
         ? ["市场格局与增长驱动", "竞争定位与替代方案", "新兴需求与弱信号", "进入机会与风险"]
-        : mobilityStudy
+        : electricMobilityStudy
         ? ["换购决策的完整路径", "续航预期与真实体验差距", "充电与换电场景限制", "品牌、价格与功能选择标准"]
         : ["完整决策路径", "核心痛点与未满足需求", "不同方案的比较标准", "使用体验与改进机会"],
       maxSelect: 2,
@@ -402,9 +403,9 @@ function createClarificationQuestions(brief: string, productLine: StudyProductLi
       question: productLine === "market_insight" ? "本次洞察应优先覆盖哪个市场范围？" : "本次研究应优先覆盖哪类人群？",
       options: productLine === "market_insight"
         ? ["当前核心市场", "相邻品类与替代方案", "新进入者与前沿市场", "覆盖多个地区或细分市场"]
-        : mobilityStudy
+        : electricMobilityStudy
         ? ["一线城市上班族", "新一线与二线城市通勤者", "长距离高频骑行者", "近期正在换购的人群"]
-        : ["现有用户", "近期购买或换购者", "潜在用户", "覆盖多个差异化细分群体"],
+        : ["现有用户", "近期做出相关选择的人", "潜在用户", "覆盖多个差异化细分群体"],
       maxSelect: 1,
     },
     {
@@ -424,6 +425,23 @@ function createClarificationQuestions(brief: string, productLine: StudyProductLi
       ],
       maxSelect: 1,
     },
+  ];
+}
+
+function normalizeProviderClarification(
+  clarification: Awaited<ReturnType<typeof generateProviderStudyClarification>>,
+  productLine: StudyProductLine,
+): ClarificationQuestion[] {
+  return [
+    { id: "business_goal", label: "研究目的", ...clarification.businessGoal, maxSelect: 1 },
+    { id: "research_focus", label: "研究重点", ...clarification.researchFocus, maxSelect: 2 },
+    {
+      id: "target_audience",
+      label: productLine === "market_insight" ? "市场范围" : "目标人群",
+      ...clarification.targetAudience,
+      maxSelect: 1,
+    },
+    { id: "research_scope", label: "证据范围", ...clarification.researchScope, maxSelect: 1 },
   ];
 }
 
@@ -528,7 +546,31 @@ export async function createStudy(
   const database = await getDatabase();
   const brief = briefInput.trim();
   const initialPlan = normalizeProductLinePlan(productLine, derivePlan(brief));
-  const questions = createClarificationQuestions(brief, productLine);
+  const fallbackQuestions = createFallbackClarificationQuestions(brief, productLine);
+  const providerStatus = getOpenAIProviderStatus();
+  let clarificationSource: "provider" | "local_rules" = "local_rules";
+  let clarificationProvider: { responseId: string; model: string; promptVersion: string } | null = null;
+  let clarificationFailure: ReturnType<typeof describeOpenAIError> | null = null;
+  let questions = fallbackQuestions;
+
+  if (providerStatus.planConfigured) {
+    try {
+      const generated = await generateProviderStudyClarification({
+        brief,
+        productLine,
+        userPublicId: viewer.userPublicId,
+      });
+      questions = normalizeProviderClarification(generated, productLine);
+      clarificationSource = "provider";
+      clarificationProvider = {
+        responseId: generated.responseId,
+        model: generated.model,
+        promptVersion: generated.promptVersion,
+      };
+    } catch (error) {
+      clarificationFailure = describeOpenAIError(error);
+    }
+  }
   const publicId = createPublicId("std");
   const title = createStudyTitle(brief);
 
@@ -655,7 +697,12 @@ export async function createStudy(
           contextCitationCount: context.citations.length,
           contextPolicyDecision: context.policyDecision,
         }),
-        JSON.stringify({ questions }),
+        JSON.stringify({
+          questions,
+          source: clarificationSource,
+          provider: clarificationProvider,
+          fallbackError: clarificationFailure,
+        }),
       ],
     );
 
