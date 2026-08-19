@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getViewer } from "@/lib/auth";
 import { isSameOriginRequest } from "@/lib/request-security";
 import { deletePersona, updatePersona } from "@/lib/studies";
-import { personaInputSchema } from "@/app/api/personas/route";
+import { personaInputSchema } from "@/lib/persona-input-schema";
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ publicId: string }> }) {
   if (!isSameOriginRequest(request)) return NextResponse.json({ error: "请求来源无效" }, { status: 403 });

@@ -20,6 +20,13 @@ import {
   type SkillExecutionPolicy,
 } from "@/lib/skill-executor";
 import type { CapabilityGrant, SkillCapability } from "@/lib/skill-gateway";
+import {
+  executeUniversalAgentProductTool,
+  formatUniversalAgentProductToolCatalog,
+  isUniversalAgentProductToolName,
+  UNIVERSAL_AGENT_PRODUCT_TOOLS,
+  type UniversalAgentProductToolName,
+} from "@/lib/universal-agent-product-tools";
 
 export const createAgentThreadInputSchema = z.object({
   title: z.string().trim().min(2).max(160),
@@ -60,6 +67,12 @@ export type UniversalAgentWorkspace = {
     executorType: "declarative_http" | "mcp" | "sandbox";
     packageFormat: "inline" | "atypica.skill/v1" | "atypica.skill/v2";
   }>;
+  productTools: Array<{
+    name: UniversalAgentProductToolName;
+    title: string;
+    description: string;
+    mutates: boolean;
+  }>;
   recentRuns: Array<{
     publicId: string;
     threadPublicId: string;
@@ -71,11 +84,12 @@ export type UniversalAgentWorkspace = {
   }>;
 };
 
-type AgentDecision = Omit<ProviderUniversalAgentTurn, "responseId" | "model" | "promptVersion" | "usage"> & {
+type AgentDecision = Omit<ProviderUniversalAgentTurn, "responseId" | "model" | "promptVersion" | "usage" | "productToolName"> & {
   responseId?: string;
   model?: string;
   promptVersion?: string;
   usage?: unknown;
+  productToolName?: string | null;
 };
 
 type AgentDecisionProvider = (input: Parameters<typeof generateProviderUniversalAgentTurn>[0]) => Promise<AgentDecision>;
@@ -245,6 +259,7 @@ export async function listUniversalAgentWorkspace(
       publicId: row.public_id, slug: row.slug, name: row.name, description: row.description,
       version: row.version, executorType: row.executor_type, packageFormat: row.package_format,
     })),
+    productTools: UNIVERSAL_AGENT_PRODUCT_TOOLS.map(({ name, title, description, mutates }) => ({ name, title, description, mutates })),
     recentRuns: runsResult.rows.map((row) => ({
       publicId: row.public_id, threadPublicId: row.thread_public_id, status: row.status,
       stepsUsed: row.steps_used, maxSteps: row.max_steps,
@@ -474,6 +489,18 @@ async function executeAgentTool(input: {
       binding, arguments: parseArguments(input.decision.argumentsJson),
     });
   }
+  if (input.decision.action === "execute_product_tool") {
+    const productToolName = input.decision.productToolName ?? null;
+    if (!isUniversalAgentProductToolName(productToolName)) {
+      return { error: "product_tool_name_required" };
+    }
+    return executeUniversalAgentProductTool({
+      viewer: input.viewer,
+      toolName: productToolName,
+      arguments: parseArguments(input.decision.argumentsJson),
+      executionAllowed: input.externalExecutionAllowed,
+    });
+  }
   throw new Error("AGENT_TOOL_ACTION_INVALID");
 }
 
@@ -592,18 +619,23 @@ export async function sendAgentMessage(
   });
 }
 
-async function claimAgentRun(queryable: Queryable, workerId: string) {
+async function claimAgentRun(queryable: Queryable, workerId: string, requestedRunPublicId?: string) {
   await expireAgentRunLeases(queryable);
   const claimed = await queryable.query<{ id: string; public_id: string }>(
     `update agent_runs set status = 'running', attempt_count = attempt_count + 1,
        lease_owner = $1, heartbeat_at = now(),
        lease_expires_at = now() + ($2::double precision * interval '1 millisecond')
      where id = (
-       select id from agent_runs where status = 'queued' and available_at <= now()
+       select id from agent_runs
+        where (
+          (status = 'queued' and available_at <= now())
+          or (status = 'running' and lease_owner = $1 and $3::text is not null)
+        )
+          and ($3::text is null or public_id = $3)
        order by available_at, started_at, id limit 1 for update skip locked
      )
      returning id::text as id, public_id`,
-    [workerId, AGENT_RUN_LEASE_MS],
+    [workerId, AGENT_RUN_LEASE_MS, requestedRunPublicId ?? null],
   );
   return claimed.rows[0] ?? null;
 }
@@ -790,6 +822,7 @@ async function executeClaimedAgentRun(input: {
         })),
         files: files.rows.map((file) => ({ path: file.path, byteSize: file.byte_size, version: file.version })),
         externalExecutionAllowed: run.external_execution_allowed,
+        productToolCatalog: formatUniversalAgentProductToolCatalog(),
       };
       const decision = await withAgentRunLeaseHeartbeat({
         queryable: database,
@@ -806,7 +839,9 @@ async function executeClaimedAgentRun(input: {
       };
       const decisionPayload = {
         action: decision.action, message: decision.message, path: decision.path,
-        skillPublicId: decision.skillPublicId, responseId: decision.responseId ?? null,
+        skillPublicId: decision.skillPublicId, productToolName: decision.productToolName ?? null,
+        argumentsJson: decision.argumentsJson ?? null,
+        responseId: decision.responseId ?? null,
         model: decision.model ?? null, promptVersion: decision.promptVersion ?? null,
       };
       await database.query(
@@ -903,6 +938,7 @@ async function executeClaimedAgentRun(input: {
 export async function processAgentRunQueue(input: {
   workerId: string;
   maxRuns?: number;
+  runPublicId?: string;
   decide?: AgentDecisionProvider;
 }) {
   const database = await getDatabase();
@@ -911,7 +947,7 @@ export async function processAgentRunQueue(input: {
   const maxRuns = Math.min(10, Math.max(1, input.maxRuns ?? 1));
   let processed = 0;
   while (processed < maxRuns) {
-    const claimed = await database.transaction((transaction) => claimAgentRun(transaction, workerId));
+    const claimed = await database.transaction((transaction) => claimAgentRun(transaction, workerId, input.runPublicId));
     if (!claimed) break;
     try {
       await executeClaimedAgentRun({

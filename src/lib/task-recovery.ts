@@ -2,6 +2,7 @@ import { createPublicId } from "@/lib/identifiers";
 import { type Queryable } from "@/lib/db";
 import { describeOpenAIError } from "@/lib/openai-provider";
 import { hashJson } from "@/lib/skill-executor";
+import { parseTaskInputRequest, validateTaskInputResponse } from "@/lib/task-input-contract";
 
 export type TaskFailureClass = "cancelled" | "timeout" | "rate_limited" | "upstream" | "response" | "input_required" | "configuration" | "validation" | "unknown";
 export type TaskFailureDisposition = "retry" | "waiting_input" | "terminal" | "cancelled";
@@ -99,6 +100,7 @@ export function classifyTaskError(error: unknown): TaskFailure {
       error,
       "APIConnection", "ECONN", "ETIMEDOUT", "OPENAI_INVALID_JSON",
       "OPENAI_INVALID_SCHEMA", "UPSTREAM_INCOMPATIBLE_RESPONSE",
+      "SOURCE_OBJECT_STORAGE_UNAVAILABLE", "SOURCE_OBJECT_STORAGE_CONNECTION",
     )
   ) {
     return { className: described.status && described.status >= 500 ? "upstream" : "response", code: described.code, message: described.message, retryable: true, disposition: "retry" };
@@ -218,9 +220,9 @@ export async function submitTaskInput(queryable: Queryable, input: {
   taskPublicId: string;
   response: Record<string, unknown>;
 }) {
-  const pending = await queryable.query<{ input_id: string; study_id: string; run_id: string; task_id: string; task_key: string }>(
+  const pending = await queryable.query<{ input_id: string; study_id: string; run_id: string; task_id: string; task_key: string; request_payload: Record<string, unknown> | string }>(
     `select request.id::text as input_id, study.id::text as study_id, run.id::text as run_id,
-            task.id::text as task_id, task.task_key
+            task.id::text as task_id, task.task_key, request.request_payload
      from study_task_inputs request
      join studies study on study.id = request.study_id
      join study_runs run on run.id = request.run_id
@@ -232,19 +234,24 @@ export async function submitTaskInput(queryable: Queryable, input: {
   );
   const row = pending.rows[0];
   if (!row) return "not_found" as const;
+  const rawRequest = typeof row.request_payload === "string" ? JSON.parse(row.request_payload) : row.request_payload;
+  const inputRequest = parseTaskInputRequest(rawRequest);
+  if (!inputRequest) return { validationError: "待补充输入的字段定义无效" } as const;
+  const validated = validateTaskInputResponse(inputRequest, input.response);
+  if (!validated.success) return { validationError: validated.error } as const;
 
   await queryable.query(
     `update study_task_inputs set status = 'consumed', response_payload = $2::jsonb,
             submitted_at = now(), consumed_at = now(), submitted_by = $3
      where id = $1`,
-    [row.input_id, JSON.stringify(input.response), input.viewerId],
+    [row.input_id, JSON.stringify(validated.data), input.viewerId],
   );
   await queryable.query(
     `update study_tasks set status = 'pending', input = jsonb_set(input, '{resumeInput}', $2::jsonb, true),
             next_attempt_at = now(), waiting_reason = null, waiting_payload = null, waiting_since = null,
             resumed_at = now(), resume_count = resume_count + 1, error_message = null, updated_at = now()
      where id = $1`,
-    [row.task_id, JSON.stringify(input.response)],
+    [row.task_id, JSON.stringify(validated.data)],
   );
   await queryable.query(
     `update study_runs set status = 'queued', error_message = null, finished_at = null where id = $1`,

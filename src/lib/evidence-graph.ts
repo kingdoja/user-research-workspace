@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Queryable } from "@/lib/db";
 import { createPublicId } from "@/lib/identifiers";
 import type { ResearchCitation, ResearchReport } from "@/lib/openai-provider";
-import type { ReportEvidenceCatalogItem } from "@/lib/report-evidence";
+import { getClaimSupportStatus, type ReportEvidenceCatalogItem } from "@/lib/report-evidence";
 
 export type ReportEvidenceGraph = {
   versionPublicId: string;
@@ -119,6 +119,10 @@ export async function materializeReportEvidenceGraph(queryable: Queryable, input
   );
   for (const [index, finding] of input.report.findings.entries()) {
     const refs = finding.evidenceRefs.filter((ref) => catalogByRef.has(ref));
+    const referencedEvidence = refs.flatMap((ref) => {
+      const item = catalogByRef.get(ref);
+      return item ? [item] : [];
+    });
     const claim = await queryable.query<{ id: string }>(
       `insert into claims (
          public_id, workspace_id, study_id, run_id, claim_key, statement, claim_type,
@@ -132,7 +136,8 @@ export async function materializeReportEvidenceGraph(queryable: Queryable, input
       [
         createPublicId("clm"), input.workspaceId, input.studyId, input.runId, `finding-${index + 1}`,
         finding.insight, finding.claimType, finding.confidence,
-        refs.length ? "supported" : "unsupported", finding.evidence,
+        getClaimSupportStatus(finding.claimType, referencedEvidence),
+        finding.evidence,
       ],
     );
     for (const ref of refs) {

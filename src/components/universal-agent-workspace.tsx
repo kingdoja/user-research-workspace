@@ -27,6 +27,16 @@ import type { UniversalAgentWorkspace as AgentWorkspaceData } from "@/lib/univer
 
 type RightTab = "skills" | "files" | "runs";
 type FilePreview = { path: string; content: string; version: number; byteSize: number; checksum: string } | null;
+type AgentLiveEvent = {
+  id: string;
+  runPublicId: string;
+  kind: string;
+  status: string;
+  sequence: number;
+  summary: string;
+  toolName: string | null;
+  errorCode: string | null;
+};
 
 function createAgentRequestId() {
   const browserCrypto = globalThis.crypto as Crypto | undefined;
@@ -69,8 +79,12 @@ export function UniversalAgentWorkspace({
   const [notice, setNotice] = useState<{ kind: "error" | "success"; text: string } | null>(null);
   const [filePreview, setFilePreview] = useState<FilePreview>(null);
   const [fileLoading, setFileLoading] = useState<string | null>(null);
+  const [liveEvents, setLiveEvents] = useState<AgentLiveEvent[]>([]);
   const selectedThread = initialWorkspace.threads.find((thread) => thread.publicId === initialWorkspace.selectedThreadPublicId) ?? null;
   const threadBusy = selectedThread?.lastRunStatus === "queued" || selectedThread?.lastRunStatus === "running";
+  const activeRun = selectedThread
+    ? initialWorkspace.recentRuns.find((run) => run.threadPublicId === selectedThread.publicId && (run.status === "queued" || run.status === "running"))
+    : null;
 
   useEffect(() => {
     const hasActiveRun = initialWorkspace.recentRuns.some((run) => run.status === "queued" || run.status === "running");
@@ -78,6 +92,24 @@ export function UniversalAgentWorkspace({
     const timer = window.setInterval(() => router.refresh(), 2_500);
     return () => window.clearInterval(timer);
   }, [initialWorkspace.recentRuns, router]);
+
+  const selectedThreadPublicId = selectedThread?.publicId ?? null;
+  const activeRunPublicId = activeRun?.publicId ?? null;
+
+  useEffect(() => {
+    if (!selectedThreadPublicId || !activeRunPublicId) return;
+    const source = new EventSource(`/api/agent/threads/${encodeURIComponent(selectedThreadPublicId)}/events?run=${encodeURIComponent(activeRunPublicId)}`);
+    source.addEventListener("agent-step", (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as AgentLiveEvent;
+        setLiveEvents((current) => current.some((item) => item.id === payload.id) ? current : [...current, payload].slice(-40));
+      } catch {
+        // Ignore a malformed event; the server snapshot remains authoritative.
+      }
+    });
+    source.onerror = () => source.close();
+    return () => source.close();
+  }, [activeRunPublicId, selectedThreadPublicId]);
 
   async function createThread(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -220,6 +252,12 @@ export function UniversalAgentWorkspace({
           </div>
         </header>
         <div className="agent-message-list">
+          {liveEvents.filter((event) => event.runPublicId === activeRunPublicId).map((event) => (
+            <article className={`universal-message tool ${event.status}`} key={`live-${event.id}`}>
+              <span><Code2 size={14} /></span>
+              <div><small>{event.kind.toUpperCase()} · {event.toolName ?? "DECISION"}</small><p>{event.summary}{event.errorCode ? `（${event.errorCode}）` : ""}</p></div>
+            </article>
+          ))}
           {initialWorkspace.messages.length ? initialWorkspace.messages.map((message) => (
             <article className={`universal-message ${message.role}`} key={message.publicId}>
               <span>{message.role === "user" ? "你" : message.role === "assistant" ? <Bot size={15} /> : <Code2 size={14} />}</span>
@@ -234,7 +272,7 @@ export function UniversalAgentWorkspace({
           <div>
             <label className={externalAllowed ? "agent-execution-toggle active" : "agent-execution-toggle"}>
               <input type="checkbox" checked={externalAllowed} onChange={(event) => setExternalAllowed(event.target.checked)} disabled={!canRun || pending || sending || threadBusy} />
-              <ShieldCheck size={14} />允许本轮执行已选 Skill
+              <ShieldCheck size={14} />允许本轮执行已选能力
             </label>
             <button className="button button-green" type="submit" disabled={!selectedThread || !canRun || pending || sending || threadBusy || !initialWorkspace.provider.configured}>
               {sending || threadBusy ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{sending ? "提交中" : threadBusy ? "运行中" : "运行"}
@@ -261,6 +299,12 @@ export function UniversalAgentWorkspace({
               <div><strong>{skill.name}</strong><small>{skill.slug}@{skill.version} · {skill.executorType}</small></div>
             </label>
           )) : null}
+          {rightTab === "skills" && initialWorkspace.productTools.map((tool) => (
+            <article className="agent-skill-option agent-product-tool-option" key={tool.name}>
+              <span><Bot size={15} /></span>
+              <div><strong>{tool.title}</strong><small>{tool.name} · {tool.mutates ? "执行需确认" : "只读"}</small></div>
+            </article>
+          ))}
           {rightTab === "skills" && !initialWorkspace.skills.length ? (
             <div className="agent-resource-empty">
               <Code2 size={21} />

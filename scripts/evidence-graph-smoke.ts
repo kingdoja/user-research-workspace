@@ -155,8 +155,10 @@ async function main() {
     const findings = graph.nodes.filter((node) => node.nodeType === "finding");
     assert.equal(findings.length, 3);
     assert.equal(findings[0].claim?.claimType, "fact");
+    assert.equal(findings[0].claim?.supportStatus, "supported");
     assert.equal(findings[0].claim?.evidence.length, 2);
     assert.equal(findings[1].claim?.claimType, "synthetic_simulation");
+    assert.equal(findings[1].claim?.supportStatus, "mixed");
     assert.equal(findings[1].claim?.evidence[0].ref, "synthetic-01");
     assert.equal(findings[2].claim?.supportStatus, "unsupported");
     assert.equal(findings[2].claim?.evidence.length, 0);

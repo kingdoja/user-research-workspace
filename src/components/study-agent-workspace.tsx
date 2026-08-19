@@ -28,6 +28,7 @@ import { StudyDetailActions } from "@/components/study-detail-actions";
 import { StudyFollowupSuggestions } from "@/components/study-followup-suggestions";
 import { StudyPanelOpenButton } from "@/components/study-panel-open-button";
 import { StudyRunActions } from "@/components/study-run-actions";
+import { StudyAutoRefresh } from "@/components/study-auto-refresh";
 import { StudyReplayControls } from "@/components/study-replay-controls";
 import { StudyShareControls } from "@/components/study-share-controls";
 import { StudyTaskInputForm } from "@/components/study-task-input-form";
@@ -201,7 +202,7 @@ function PlanningTrace({ study }: { study: StudyDetail }) {
         <span className="agent-avatar agent-avatar-ai"><Bot size={17} /></span>
         <div className="agent-message-content">
           <strong>atypica.AI</strong>
-          <p className="agent-thought-label">Thought for a few seconds</p>
+          <p className="agent-thought-label">计划解析 · 结构化输出</p>
           <p>{clarificationPending
             ? "这个 Brief 已经包含一个明确的研究主题，但业务决策、研究重点和目标人群仍会直接改变研究设计。我需要先确认这些关键边界。"
             : "我已分析研究需求和澄清答案，并把业务目标、范围、方法与执行约束整理成可确认的计划。"}</p>
@@ -275,6 +276,7 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
   const actionLabels: Record<string, string> = {
     continue: "继续固定 DAG",
     append_task: "追加受控任务",
+    replan: "Agent 追加受控任务",
     refresh_context: "刷新受授权 Context",
     stop_expansion: "停止动态扩展",
     finish_run: "结束运行",
@@ -289,13 +291,24 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
           {study.runAttempt ? <span>第 {study.runAttempt} 次执行</span> : null}
         </div>
         {study.runId && study.tasks.length > 0 && study.runStatus === "completed" ? <StudyReplayControls runId={study.runId} stepCount={steps.length} /> : null}
-        <p>计划已锁定。执行记录包含公开网页证据、AI 合成 Persona、模拟访谈与报告生成；模拟参与者不会被标记为真人样本。</p>
+        <div className="agent-runtime-contract">
+          <strong>Governed Research Runtime</strong>
+          <span>计划任务作为安全边界 · 动态动作写入可恢复 ledger</span>
+        </div>
+        <p>Controller 启用时选择下一步，Harness 校验工具、输入、依赖和预算后执行；未启用或失败时回退到确定性调度。模拟参与者不会被标记为真人样本。</p>
         {activeStep ? (
           <div className="agent-live-update" role="status" aria-live="polite">
             <span><LoaderCircle className="spin" size={14} />实时执行摘要</span>
             <p>{activeStep.activeSummary}</p>
             <small>{latestEvent ? `最近更新 ${new Date(latestEvent.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "正在启动研究任务"}</small>
           </div>
+        ) : null}
+        {active ? (
+          <StudyAutoRefresh
+            publicId={study.publicId}
+            after={events.at(-1)?.id ?? "0"}
+            initialEvents={events.slice(-20)}
+          />
         ) : null}
         {study.runRecoverable ? (
           <div className="agent-interrupted-state" role="alert">

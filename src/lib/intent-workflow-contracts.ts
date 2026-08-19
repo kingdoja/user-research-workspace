@@ -3,6 +3,7 @@ import type { Queryable } from "@/lib/db";
 import { createPublicId } from "@/lib/identifiers";
 import type { ContextSnapshot } from "@/lib/context-system";
 import type { StudyMethod, StudyProductLine, WorkflowType } from "@/lib/research-types";
+import { classifyResearchQuestionTypes } from "@/lib/research-report-design";
 
 type ClarificationQuestionLike = { id: string };
 type ClarificationAnswerLike = { questionId: string; selected: string[] };
@@ -62,6 +63,8 @@ function intentContent(input: {
   const researchFocus = selectedAnswer(input.answers, "research_focus");
   const marketInsight = input.productLine === "market_insight";
   const publicOnly = marketInsight || scopeAnswers.some((value) => value.includes("仅使用公开资料"));
+  const questionTypes = classifyResearchQuestionTypes(input.brief);
+  const publicEvidenceBoundary = publicOnly && questionTypes.some((type) => type === "behavioral" || type === "attitudinal" || type === "causal");
   const contextReferences = input.context.citations.map((citation) => ({
     assetPublicId: citation.assetPublicId,
     assetVersionPublicId: citation.assetVersionPublicId,
@@ -88,7 +91,9 @@ function intentContent(input: {
     },
     dataScope: {
       allowedScopes: ["user", "workspace", "study"],
-      allowedAssetTypes: ["core_memory", "team_memory", "research_sample", "persona", "study_context"],
+      allowedAssetTypes: publicOnly
+        ? ["core_memory", "team_memory", "study_context"]
+        : ["core_memory", "team_memory", "research_sample", "persona", "study_context"],
       evidenceMode: publicOnly ? "public_sources_only" : "public_and_governed_synthetic",
       contextReferences,
     },
@@ -107,10 +112,14 @@ function intentContent(input: {
       ...businessGoals.map((value) => `业务目标：${value}`),
       ...researchFocus.map((value) => `研究重点：${value}`),
       ...scopeAnswers.map((value) => `证据范围：${value}`),
+      ...(publicEvidenceBoundary ? ["公开资料只能形成方向性分析；行为、态度或因果结论仍需直接证据验证。"] : []),
     ],
-    openQuestions: input.questions
-      .filter((question) => !input.answers.some((answer) => answer.questionId === question.id))
-      .map((question) => question.id),
+    openQuestions: [
+      ...input.questions
+        .filter((question) => !input.answers.some((answer) => answer.questionId === question.id))
+        .map((question) => question.id),
+      ...(publicEvidenceBoundary ? ["需要确认是否接受方向性分析，或补充平台行为、真人研究或实验数据。"] : []),
+    ],
     sourceBrief: input.brief,
     clarificationAnswers: input.answers,
     parserSource: input.plan.source,

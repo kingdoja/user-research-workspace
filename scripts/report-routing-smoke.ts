@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 process.env.PLAN_PROVIDER = "deepseek";
 process.env.RESEARCH_PROVIDER = "deepseek";
 process.env.REASONING_PROVIDER = "deepseek";
-process.env.REPORT_PROVIDER = "funcloud";
+process.env.REPORT_PROVIDER = "yundu";
 process.env.REPORT_JUDGE_PROVIDER = "deepseek";
 process.env.DEEPSEEK_FAST_MODEL = "deepseek-v4-flash";
 process.env.DEEPSEEK_REASONING_MODEL = "deepseek-v4-pro";
@@ -27,7 +27,7 @@ async function main() {
     [
       ["deepseek", "deepseek-v4-flash"],
       ["deepseek", "deepseek-v4-pro"],
-      ["funcloud", "gpt-5.6-terra"],
+      ["yundu", "gpt-5.6-terra"],
       ["deepseek", "deepseek-v4-pro"],
     ],
   );
@@ -58,7 +58,7 @@ async function main() {
     citations: [{ title: "测试来源", url: "https://example.com/evidence" }],
     responseId: "terra-draft-response",
     model: "gpt-5.6-terra",
-    provider: "funcloud",
+    provider: "yundu",
     promptVersion: "report-v1",
     usage: { total_tokens: 1234 },
   };
@@ -76,7 +76,7 @@ async function main() {
   const finalized = finalizeApprovedReportPacket(draft, review);
   assert.equal(finalized.revisionApplied, false);
   assert.equal(finalized.responseId, draft.responseId);
-  assert.equal(finalized.provider, "funcloud");
+  assert.equal(finalized.provider, "yundu");
   assert.equal(finalized.model, "gpt-5.6-terra");
   assert.equal(finalized.usage, null);
   assert.equal(finalized.qualityReview.responseId, review.responseId);
@@ -95,7 +95,7 @@ async function main() {
     report: { ...draft.report, title: "定向修订后的测试研究报告" },
     responseId: "terra-revision-response",
     model: "gpt-5.6-terra",
-    provider: "funcloud",
+    provider: "yundu",
     promptVersion: "revision-v1",
     usage: { total_tokens: 456 },
   });

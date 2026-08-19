@@ -15,6 +15,44 @@ export type ReportEvidenceCatalogItem = {
   metadata: Record<string, unknown>;
 };
 
+export function getClaimSupportStatus(
+  claimType: "fact" | "human_observation" | "synthetic_simulation" | "model_inference",
+  evidence: ReportEvidenceCatalogItem[],
+) {
+  if (!evidence.length) return "unsupported" as const;
+  if (claimType === "fact" && evidence.every((item) => item.evidenceType === "fact" || item.evidenceType === "calculation")) {
+    return "supported" as const;
+  }
+  if (claimType === "human_observation" && evidence.every((item) => item.evidenceType === "human_observation")) {
+    return "supported" as const;
+  }
+  return "mixed" as const;
+}
+
+const INFERENCE_LANGUAGE = /适合|建议|可以|可将|可作为|应当|应该|策略|方案|机会|优先|实验框架|值得测试/u;
+const INTERNAL_REPORT_TERMS: Array<[string, string]> = [
+  ["behavioralEvidenceCount", "行为证据数量"],
+  ["attitudinalEvidenceCount", "态度证据数量"],
+  ["platformSourceCount", "平台来源数量"],
+  ["usableSourceCount", "可用来源数量"],
+  ["answerability.level", "可回答性等级"],
+  ["answerability", "证据可回答性"],
+  ["claimType", "结论类型"],
+  ["confidence", "置信度"],
+  ["evidenceRefs", "证据引用"],
+];
+
+export function hasInferentialLanguage(text: string) {
+  return INFERENCE_LANGUAGE.test(text);
+}
+
+export function toReaderFacingEvidenceText(text: string, catalog: ReportEvidenceCatalogItem[]) {
+  let value = text;
+  for (const item of catalog) value = value.replaceAll(item.ref, `《${item.title}》`);
+  for (const [internal, label] of INTERNAL_REPORT_TERMS) value = value.replaceAll(internal, label);
+  return value;
+}
+
 function cleanParts(parts: Array<string | null | undefined>) {
   return parts.map((part) => part?.trim()).filter((part): part is string => Boolean(part)).join("\n");
 }

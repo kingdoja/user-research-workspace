@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Viewer } from "@/lib/auth";
-import { getDatabase, type Queryable } from "@/lib/db";
+import { getDatabase, type Database, type Queryable } from "@/lib/db";
 import { createPublicId } from "@/lib/identifiers";
 import {
   formatContextForPrompt,
@@ -66,6 +66,23 @@ import {
   renewProviderRuntimeSlot,
   type StrategyAssignment,
 } from "@/lib/runtime-control";
+import {
+  decideResearchAgentAction,
+  resolveResearchAgentRollout,
+  validateResearchAgentAction,
+} from "@/lib/research-agent-controller";
+import { RESEARCH_AGENT_CONTROLLER_VERSION, type AgentAction } from "@/lib/research-agent-contract";
+import { assessResearchAnswerability } from "@/lib/research-report-design";
+import {
+  appendGovernedDynamicTasks,
+  dynamicTaskMutationRejectionReason,
+} from "@/lib/research-task-mutation";
+import { evaluateResearchAgentTrajectory } from "@/lib/research-agent-evaluation";
+import {
+  getAllowedResearchAgentTaskTemplates,
+  RESEARCH_AGENT_TASK_TEMPLATE_VERSION,
+  validateResearchAgentTaskTemplate,
+} from "@/lib/research-agent-templates";
 
 type TaskStatus = "pending" | "running" | "completed" | "failed" | "skipped" | "waiting_input";
 
@@ -73,6 +90,7 @@ export type ResearchTaskDefinition = {
   key: string;
   title: string;
   toolName: ResearchToolName;
+  template?: string | null;
   dependsOn: string[];
   input?: Record<string, unknown>;
 };
@@ -190,12 +208,16 @@ const webResearchSchema = z.object({
     socialSourceCount: z.number().optional(),
     socialCandidateCount: z.number().optional(),
     socialConnectorRunPublicId: z.string().optional(),
+    qualityRejectedCount: z.number().optional(),
+    qualityRejectionReasons: z.record(z.string(), z.number()).optional(),
   }),
   audit: z.custom<SourceConnectorAuditSummary>().optional(),
   audits: z.array(z.custom<SourceConnectorAuditSummary>()).optional(),
   responseId: z.string(),
   model: z.string(),
   usage: z.unknown(),
+  answerability: z.custom<ReturnType<typeof assessResearchAnswerability>>().optional(),
+  rejectedSourceCount: z.number().optional(),
 });
 
 const personaSchema = z.object({
@@ -314,6 +336,10 @@ const reportQualityReviewSchema = z.object({
       "synthetic_overstatement",
       "actionability",
       "structure",
+      "intent_mismatch",
+      "source_quality",
+      "answerability",
+      "reader_value",
     ]),
     description: z.string(),
     recommendation: z.string(),
@@ -355,7 +381,16 @@ function mergedResearchState(state: HarnessState): ProviderResearchSources {
       searchSourceCount: packets.reduce((total, packet) => total + packet.metadata.searchSourceCount, 0),
       finalSourceCount: sources.length,
       fallbackUsed: packets.some((packet) => packet.metadata.fallbackUsed),
+      qualityRejectedCount: packets.reduce((total, packet) => total + (packet.metadata.qualityRejectedCount ?? 0), 0),
+      qualityRejectionReasons: packets.reduce<Record<string, number>>((counts, packet) => {
+        for (const [reason, count] of Object.entries(packet.metadata.qualityRejectionReasons ?? {})) {
+          counts[reason] = (counts[reason] ?? 0) + count;
+        }
+        return counts;
+      }, {}),
     },
+    answerability: packets.find((packet) => packet.answerability)?.answerability,
+    rejectedSourceCount: packets.reduce((total, packet) => total + (packet.rejectedSourceCount ?? 0), 0),
   };
 }
 
@@ -419,6 +454,7 @@ const researchInputSchema = z.object({
   resumeInput: z.object({
     focus: z.string().max(600).optional(),
     sourceUrls: z.array(z.string().url()).max(8).optional(),
+    selectedOption: z.string().max(160).optional(),
   }).optional(),
 });
 
@@ -433,7 +469,7 @@ const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, Provide
   outputSchema: webResearchSchema,
   async execute({ study, task, context, signal, strategy }, input) {
     const output = await researchPublicWeb({
-      brief: [contextualBrief(study, context, strategy), input.platform ? `重点平台：${input.platform}` : "", input.focus ? `研究焦点：${input.focus}` : "", input.resumeInput?.focus ? `用户补充研究焦点：${input.resumeInput.focus}` : ""].filter(Boolean).join("\n"),
+      brief: [contextualBrief(study, context, strategy), input.platform ? `重点平台：${input.platform}` : "", input.focus ? `研究焦点：${input.focus}` : "", input.resumeInput?.focus ? `用户补充研究焦点：${input.resumeInput.focus}` : "", input.resumeInput?.selectedOption ? `用户选择：${input.resumeInput.selectedOption}` : ""].filter(Boolean).join("\n"),
       framework: study.framework,
       userPublicId: study.userPublicId,
       studyPublicId: study.publicId,
@@ -457,6 +493,8 @@ const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, Provide
         sourceCount: output.sources.length,
         sources: output.sources.map(({ title, url }) => ({ title, url })),
         provider: output.metadata.primaryProvider,
+        answerability: output.answerability,
+        rejectedSourceCount: output.rejectedSourceCount ?? output.metadata.qualityRejectedCount ?? 0,
         platform: input.platform ?? "public_web",
         focus: input.resumeInput?.focus ?? input.focus ?? "行业与用户背景",
       },
@@ -752,6 +790,11 @@ const generateReportTool: ResearchTool<Record<string, never>, z.infer<typeof rep
   outputSchema: reportSchema,
   async execute({ study, state, context, signal, strategy }) {
     const { research, panelResearch, discussion } = collectReportEvidence(state);
+    const answerability = assessResearchAnswerability({
+      brief: study.brief,
+      sources: research.sources,
+      hasSyntheticResearch: Boolean(panelResearch || discussion),
+    });
     const generated = await synthesizeProviderResearchReport({
       brief: contextualBrief(study, context, strategy),
       framework: study.framework,
@@ -763,6 +806,7 @@ const generateReportTool: ResearchTool<Record<string, never>, z.infer<typeof rep
       sources: research.sources,
       panelResearch,
       discussion,
+      answerability,
       signal,
     });
     const output = {
@@ -795,10 +839,12 @@ const judgeReportTool: ResearchTool<Record<string, never>, z.infer<typeof report
   outputSchema: reportQualityReviewSchema,
   async execute({ study, state, signal }) {
     const draft = readState(state, "report", reportSchema);
-    const { evidenceCatalog } = collectReportEvidence(state);
+    const { evidenceCatalog, research } = collectReportEvidence(state);
+    const answerability = assessResearchAnswerability({ brief: study.brief, sources: research.sources });
     const output = await judgeProviderResearchReport({
       report: draft.report,
       evidenceCatalog,
+      answerability,
       userPublicId: study.userPublicId,
       studyPublicId: study.publicId,
       signal,
@@ -919,6 +965,7 @@ const researchTools = {
 };
 
 export type ResearchToolName = keyof typeof researchTools;
+const agentDynamicToolNames: readonly ResearchToolName[] = ["deepResearch", "scoutSocialTrends"];
 
 export function listResearchSkills(): SkillSummary[] {
   return describeBuiltInSkills(Object.values(researchTools).map((tool) => ({
@@ -1286,6 +1333,205 @@ async function loadTasks(runId: string): Promise<StoredTask[]> {
   }));
 }
 
+function maxAgentDynamicTasks(strategy: StrategyAssignment) {
+  const configured = Number(strategy.config.maxDynamicTasks ?? 2);
+  return Number.isFinite(configured) ? Math.max(0, Math.min(8, configured)) : 2;
+}
+
+function allowedAgentTaskTemplates(strategy: StrategyAssignment) {
+  return getAllowedResearchAgentTaskTemplates(strategy.config);
+}
+
+export async function appendResearchAgentDynamicTasks(input: {
+  database: Database;
+  study: HarnessStudy;
+  tasks: StoredTask[];
+  action: Extract<AgentAction, { type: "replan" }>;
+  strategy: StrategyAssignment;
+  decision: { responseId: string; model: string; promptVersion: string };
+}) {
+  const existingDynamicCount = input.tasks.filter((task) => task.origin === "dynamic").length;
+  const maxDynamicTasks = maxAgentDynamicTasks(input.strategy);
+  const requested = input.action.requestedTasks;
+  if (existingDynamicCount + requested.length > maxDynamicTasks) {
+    return { accepted: false as const, reason: "dynamic_task_limit_reached" };
+  }
+  const reportGate = input.tasks.find((task) => (
+    task.status === "pending" && task.toolName === "generateReport"
+  ));
+  if (!reportGate) return { accepted: false as const, reason: "report_gate_not_open" };
+
+  const existingKeys = new Set(input.tasks.map((task) => task.key));
+  const requestedKeys = new Set<string>();
+  const definitions: ResearchTaskDefinition[] = [];
+  const allowedTemplates = allowedAgentTaskTemplates(input.strategy);
+  for (const candidate of requested) {
+    if (!/^[a-z][a-z0-9_.-]{1,159}$/.test(candidate.key)) {
+      return { accepted: false as const, reason: "task_key_invalid" };
+    }
+    if (existingKeys.has(candidate.key) || requestedKeys.has(candidate.key)) {
+      return { accepted: false as const, reason: "task_key_conflict" };
+    }
+    const toolName = candidate.toolName as ResearchToolName;
+    const tool = researchTools[toolName];
+    if (!tool || !agentDynamicToolNames.includes(toolName)) {
+      return { accepted: false as const, reason: "tool_not_allowed" };
+    }
+    const parsedInput = tool.inputSchema.safeParse(candidate.input);
+    if (!parsedInput.success) return { accepted: false as const, reason: "tool_input_invalid" };
+    const templateValidation = validateResearchAgentTaskTemplate({
+      template: candidate.template,
+      toolName,
+      taskInput: candidate.input,
+      allowedTemplates,
+    });
+    if (!templateValidation.accepted) return { accepted: false as const, reason: templateValidation.reason };
+    for (const dependency of candidate.dependsOn) {
+      if (dependency === candidate.key || (!existingKeys.has(dependency) && !requestedKeys.has(dependency))) {
+        return { accepted: false as const, reason: "dependency_unknown" };
+      }
+      const existingDependency = input.tasks.find((task) => task.key === dependency);
+      if (existingDependency && !["completed", "skipped"].includes(existingDependency.status)) {
+        return { accepted: false as const, reason: "dependency_not_completed" };
+      }
+    }
+    requestedKeys.add(candidate.key);
+    definitions.push({
+      key: candidate.key,
+      title: candidate.title,
+      toolName,
+      template: templateValidation.template.name,
+      dependsOn: candidate.dependsOn,
+      input: parsedInput.data as Record<string, unknown>,
+    });
+  }
+
+  try {
+    return await input.database.transaction(async (transaction) => {
+      await transaction.query("select id from study_runs where id = $1 for update", [input.study.runId]);
+      await lockRunBuiltInSkills({
+        queryable: transaction,
+        workspaceId: input.study.workspaceId,
+        studyId: input.study.studyId,
+        runId: input.study.runId,
+        skills: definitions.map((definition) => ({
+          slug: definition.toolName,
+          version: researchTools[definition.toolName].version,
+        })),
+      });
+      const sequence = await transaction.query<{ value: number }>(
+        "select coalesce(max(sequence), -1)::int + 1 as value from reasoning_decisions where run_id = $1",
+        [input.study.runId],
+      );
+      const recordedDecision = await transaction.query<{ id: string; public_id: string }>(
+        `insert into reasoning_decisions (
+           public_id, workspace_id, study_id, run_id, decision_key, sequence, trigger_type,
+           policy_version, input_snapshot, artifact_refs, evidence_refs, budget_snapshot,
+           metrics, chosen_action, reason
+         ) values ($1, $2, $3, $4, $5, $6, 'agent_controller', $7, $8::jsonb,
+                   '[]'::jsonb, '[]'::jsonb, $9::jsonb, '{}'::jsonb, $10::jsonb, $11)
+         returning id::text as id, public_id`,
+        [
+          createPublicId("rsn"), input.study.workspaceId, input.study.studyId, input.study.runId,
+          `agent:${input.decision.responseId}`, sequence.rows[0].value, input.decision.promptVersion,
+          JSON.stringify({ action: input.action, taskKeys: input.tasks.map((task) => task.key), model: input.decision.model }),
+          JSON.stringify({ maxDynamicTasks, existingDynamicCount }),
+          JSON.stringify({
+            type: "replan",
+            requestedTaskKeys: definitions.map((definition) => definition.key),
+            templates: definitions.map((definition) => ({ key: definition.key, template: definition.template, version: RESEARCH_AGENT_TASK_TEMPLATE_VERSION })),
+          }),
+          input.action.reason,
+        ],
+      );
+      await transaction.query(
+        `insert into reasoning_decision_candidates (
+           decision_id, position, action_type, score, allowed, selected, payload, rejection_reasons
+         ) values ($1, 0, 'replan', 1, true, true, $2::jsonb, '[]'::jsonb)`,
+        [recordedDecision.rows[0].id, JSON.stringify({
+          requestedTaskKeys: definitions.map((definition) => definition.key),
+          templates: definitions.map((definition) => ({ key: definition.key, template: definition.template, version: RESEARCH_AGENT_TASK_TEMPLATE_VERSION })),
+        })],
+      );
+      const mutation = await appendGovernedDynamicTasks({
+        queryable: transaction,
+        studyId: input.study.studyId,
+        runId: input.study.runId,
+        definitions: definitions.map((definition) => ({ ...definition, input: definition.input ?? {} })),
+        timeoutSeconds: getRuntimeLimits().taskTimeoutSeconds,
+        maxDynamicTasks,
+        gateTaskKey: reportGate.key,
+        allowedToolNames: agentDynamicToolNames,
+        reasoningDecisionId: recordedDecision.rows[0].id,
+        policyVersion: input.decision.promptVersion,
+        source: "agent_controller",
+      });
+      await transaction.query(
+        `insert into study_events (study_id, run_id, event_type, payload)
+         values ($1, $2, 'agent.replan.accepted', $3::jsonb),
+                ($1, $2, 'agent.tasks.added', $4::jsonb),
+                ($1, $2, 'reasoning.decision.recorded', $5::jsonb)`,
+        [
+          input.study.studyId, input.study.runId,
+          JSON.stringify({ reason: input.action.reason, taskKeys: mutation.taskKeys, generation: mutation.generation, decisionPublicId: recordedDecision.rows[0].public_id, templates: definitions.map((definition) => ({ key: definition.key, template: definition.template, version: RESEARCH_AGENT_TASK_TEMPLATE_VERSION })) }),
+          JSON.stringify({ taskKeys: mutation.taskKeys, origin: "dynamic", generation: mutation.generation, templates: definitions.map((definition) => ({ key: definition.key, template: definition.template, version: RESEARCH_AGENT_TASK_TEMPLATE_VERSION })) }),
+          JSON.stringify({ decisionPublicId: recordedDecision.rows[0].public_id, chosenAction: "replan", policyVersion: input.decision.promptVersion, reason: input.action.reason }),
+        ],
+      );
+      return { accepted: true as const, reason: null, taskKeys: mutation.taskKeys };
+    });
+  } catch (error) {
+    const reason = dynamicTaskMutationRejectionReason(error);
+    if (reason) return { accepted: false as const, reason };
+    throw error;
+  }
+}
+
+export async function pauseResearchAgentForInput(input: {
+  database: Database;
+  study: HarnessStudy;
+  task: StoredTask;
+  action: Extract<AgentAction, { type: "ask_user" }>;
+}) {
+  const requestPayload = {
+    title: "研究需要你的确认",
+    description: input.action.question,
+    fields: input.action.fields,
+  };
+  return input.database.transaction(async (transaction) => {
+    const paused = await transaction.query<{ id: string }>(
+      `update study_tasks set status = 'waiting_input', error_message = $2,
+              waiting_reason = 'AGENT_INPUT_REQUIRED', waiting_payload = $3::jsonb,
+              waiting_since = now(), finished_at = now(), updated_at = now()
+       where id = $1 and status = 'pending'
+       returning id::text as id`,
+      [input.task.id, input.action.question, JSON.stringify(requestPayload)],
+    );
+    if (!paused.rows[0]) throw new Error("AGENT_INPUT_TASK_NOT_READY");
+    await transaction.query(
+      `insert into study_task_inputs (public_id, workspace_id, study_id, run_id, task_id, request_payload)
+       values ($1, $2, $3, $4, $5, $6::jsonb)
+       on conflict (task_id) where (status = 'pending') do update set request_payload = excluded.request_payload,
+         requested_at = now(), response_payload = null`,
+      [createPublicId("tin"), input.study.workspaceId, input.study.studyId, input.study.runId, input.task.id, JSON.stringify(requestPayload)],
+    );
+    await transaction.query(
+      "update study_runs set status = 'waiting_input', error_message = $2 where id = $1",
+      [input.study.runId, input.action.question],
+    );
+    await transaction.query(
+      "update studies set status = 'waiting_input', current_stage = 'execution', updated_at = now() where id = $1",
+      [input.study.studyId],
+    );
+    await transaction.query(
+      `insert into study_events (study_id, run_id, event_type, payload)
+       values ($1, $2, 'agent.run.waiting_input', $3::jsonb),
+              ($1, $2, $4, $3::jsonb)`,
+      [input.study.studyId, input.study.runId, JSON.stringify({ taskKey: input.task.key, taskPublicId: input.task.publicId, question: input.action.question, fields: input.action.fields }), `task.${input.task.key}.waiting_input`],
+    );
+  });
+}
+
 async function loadCheckpoint(runId: string): Promise<HarnessState> {
   const database = await getDatabase();
   const result = await database.query<{ state: HarnessState | string }>(
@@ -1432,6 +1678,29 @@ async function executeTask(input: {
     arguments: input.task.input,
     ...(providerStatus ? { providerStage, provider: providerStatus.providerName, model: providerStatus.model } : {}),
   });
+  const progressStartedAt = Date.now();
+  let progressStopped = false;
+  let progressWrites = Promise.resolve();
+  const progressTimer = setInterval(() => {
+    progressWrites = progressWrites
+      .then(() => appendEvent(database, input.study.studyId, input.study.runId, "tool.call.progress", {
+        taskKey: input.task.key,
+        taskPublicId: input.task.publicId,
+        toolName: input.task.toolName,
+        invocationId: invocation.invocationPublicId,
+        elapsedMs: Date.now() - progressStartedAt,
+        phase: providerStage ? "model" : "tool",
+        ...(providerStatus ? { providerStage, provider: providerStatus.providerName, model: providerStatus.model } : {}),
+      }))
+      .catch(() => undefined);
+  }, 2_500);
+  progressTimer.unref?.();
+  const stopProgress = async () => {
+    if (progressStopped) return;
+    progressStopped = true;
+    clearInterval(progressTimer);
+    await progressWrites;
+  };
   try {
     if (!binding.enabledAtLock) throw new Error(`SKILL_DISABLED:${binding.slug}`);
     if (binding.version !== tool.version) {
@@ -1479,6 +1748,7 @@ async function executeTask(input: {
       ...result.eventPayload,
       ...(providerStatus ? { providerStage, provider: providerStatus.providerName, model: providerStatus.model } : {}),
     });
+    await stopProgress();
     await completeInvocation({
       study: input.study,
       task: input.task,
@@ -1491,6 +1761,7 @@ async function executeTask(input: {
     });
     return { kind: "completed" as const, key: input.task.key, output };
   } catch (error) {
+    await stopProgress();
     if (providerRoute) {
       await finishProviderRouteDecision({
         queryable: database,
@@ -1511,6 +1782,7 @@ async function executeTask(input: {
     const failure = classifyTaskError(error);
     throw new TaskTerminalFailure(failure.message, failure.code);
   } finally {
+    await stopProgress();
     clearTimeout(timer);
     input.runSignal.removeEventListener("abort", abortFromRun);
   }
@@ -1943,6 +2215,13 @@ export async function runStudyHarness(runId: string) {
     );
     return assigned;
   });
+  const agentRollout = await resolveResearchAgentRollout({
+    queryable: database,
+    workspaceId: study.workspaceId,
+    strategyKey: strategy.variantKey,
+    strategyConfig: strategy.config,
+  });
+  const agentControllerMode = agentRollout.effectiveMode;
   await database.transaction(async (transaction) => {
     await transaction.query(
       `update study_runs set status = 'running', provider = $2, provider_model = $3,
@@ -1964,6 +2243,13 @@ export async function runStudyHarness(runId: string) {
       variantKey: strategy.variantKey,
       strategyVersion: strategy.strategyVersion,
       assignmentId: strategy.assignmentPublicId,
+    },
+    agentController: {
+      mode: agentControllerMode,
+      requestedMode: agentRollout.requestedMode,
+      rolloutReason: agentRollout.reason,
+      rolloutSampleCount: agentRollout.sampleCount,
+      version: agentControllerMode === "off" ? null : RESEARCH_AGENT_CONTROLLER_VERSION,
     },
     recoveredTaskKeys: recoveredTasks.map((task) => task.task_key),
   });
@@ -2105,10 +2391,104 @@ export async function runStudyHarness(runId: string) {
         throw new Error(`HARNESS_DAG_STALLED:${blocked}`);
       }
       const configuredConcurrency = Number(strategy.config.taskConcurrency ?? getRuntimeLimits().taskConcurrency);
-      const wave = ready.slice(0, Math.max(1, Math.min(8, configuredConcurrency)));
+      let wave = ready.slice(0, Math.max(1, Math.min(8, configuredConcurrency)));
+      if (agentControllerMode !== "off") {
+        const controllerInput = {
+          study: {
+            studyId: study.studyId,
+            runId: study.runId,
+            publicId: study.publicId,
+            userPublicId: study.userPublicId,
+            brief: study.brief,
+            studyType: study.studyType,
+            framework: study.framework,
+            methods: study.methods,
+            audience: study.audience,
+          },
+          tasks: tasks.map((task) => ({
+            key: task.key,
+            title: task.title,
+            toolName: task.toolName,
+            status: task.status,
+            dependsOn: task.dependsOn,
+            input: task.input,
+          })),
+          completedStateKeys: Object.keys(state),
+          contextSummary: context.citations.slice(0, 6).map((citation) => citation.title).join("；"),
+          availableToolNames: agentDynamicToolNames,
+          allowedTaskTemplates: allowedAgentTaskTemplates(strategy),
+          maxDynamicTasks: Math.max(
+            0,
+            maxAgentDynamicTasks(strategy) - tasks.filter((task) => task.origin === "dynamic").length,
+          ),
+        };
+        try {
+          const decision = await decideResearchAgentAction(controllerInput, { queryable: database });
+          const validation = validateResearchAgentAction({
+            action: decision.action,
+            tasks: controllerInput.tasks,
+            completedStateKeys: controllerInput.completedStateKeys,
+            availableToolNames: controllerInput.availableToolNames,
+            maxDynamicTasks: controllerInput.maxDynamicTasks,
+          });
+          if (agentControllerMode === "active" && validation.accepted) {
+            if (decision.action.type === "replan") {
+              const applied = await appendResearchAgentDynamicTasks({
+                database,
+                study,
+                tasks,
+                action: decision.action,
+                strategy,
+                decision: {
+                  responseId: decision.responseId,
+                  model: decision.model,
+                  promptVersion: decision.promptVersion,
+                },
+              });
+              if (!applied.accepted) {
+                await appendEvent(database, study.studyId, study.runId, "agent.action.rejected", {
+                  reason: applied.reason,
+                  action: decision.action,
+                });
+              } else {
+                continue;
+              }
+            } else if (decision.action.type === "ask_user" && validation.task) {
+              const inputTask = ready.find((task) => task.key === validation.task?.key);
+              if (!inputTask || !["deepResearch", "scoutSocialTrends"].includes(inputTask.toolName)) {
+                await appendEvent(database, study.studyId, study.runId, "agent.action.rejected", {
+                  reason: "task_input_not_supported",
+                  taskKey: validation.task.key,
+                  action: decision.action,
+                });
+              } else {
+                await pauseResearchAgentForInput({ database, study, task: inputTask, action: decision.action });
+                await recordBatchTaskMetrics(database, strategy.assignmentId, runId);
+                return "waiting_input" as const;
+              }
+            } else if (decision.action.type === "finish") {
+              break;
+            } else if (validation.task) {
+              wave = [ready.find((task) => task.key === validation.task?.key) ?? wave[0]];
+            }
+          } else if (agentControllerMode === "shadow" && validation.accepted && decision.action.type !== "call_tool") {
+            await appendEvent(database, study.studyId, study.runId, "agent.action.shadow_ignored", {
+              action: decision.action,
+              reason: "shadow_mode",
+            });
+          }
+        } catch (error) {
+          await appendEvent(database, study.studyId, study.runId, "agent.controller.failed", {
+            controllerVersion: RESEARCH_AGENT_CONTROLLER_VERSION,
+            message: error instanceof Error ? error.message.slice(0, 500) : "unknown",
+            fallback: "deterministic_dag",
+          });
+        }
+      }
       await appendEvent(database, study.studyId, study.runId, "dag.wave.started", {
         taskKeys: wave.map((task) => task.key),
         concurrency: wave.length,
+        controllerMode: agentControllerMode,
       });
       const settled = await Promise.allSettled(wave.map((task) => executeTask({
         study,
@@ -2151,6 +2531,12 @@ export async function runStudyHarness(runId: string) {
       }
     }
     await materializeStudy(study, state);
+    await evaluateResearchAgentTrajectory(database, {
+      workspaceId: study.workspaceId,
+      studyId: study.studyId,
+      runId: study.runId,
+      controllerMode: agentControllerMode,
+    });
     const runTokens = Object.values(state).reduce<number>((sum, item) => {
       if (!item || typeof item !== "object" || !("usage" in item)) return sum;
       return sum + totalTokens(item.usage);

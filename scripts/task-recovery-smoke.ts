@@ -113,10 +113,16 @@ async function main() {
       await transaction.query("update studies set status = 'waiting_input' where id = $1", [seeded.studyId]);
       await transaction.query(
         `insert into study_task_inputs (public_id, workspace_id, study_id, run_id, task_id, request_payload)
-         values ($1, $2, $3, $4, $5, '{"title":"补充范围"}'::jsonb)`,
+         values ($1, $2, $3, $4, $5, '{"title":"补充范围","description":"补充研究焦点或公开 URL","fields":[{"key":"focus","label":"补充研究焦点","type":"text","required":false,"maxLength":600},{"key":"sourceUrls","label":"可信公开 URL","type":"url_list","required":false,"maxItems":8}]}'::jsonb)`,
         [`tin_${suffix}`, workspaceId, seeded.studyId, seeded.runId, waitingTask.id],
       );
       await transaction.query("insert into study_job_queue (run_id, status) values ($1, 'waiting_input')", [seeded.runId]);
+      const rejected = await submitTaskInput(transaction, {
+        workspaceId: workspaceId!, viewerId: seeded.userId, studyPublicId: `std_${suffix}`,
+        taskPublicId: waitingTask.public_id, response: { focus: "补充通勤场景", selectedOption: "未请求的字段" },
+      });
+      if (typeof rejected !== "object") throw new Error("Expected invalid task input to be rejected");
+      assert("validationError" in rejected);
       const resumed = await submitTaskInput(transaction, {
         workspaceId: workspaceId!, viewerId: seeded.userId, studyPublicId: `std_${suffix}`,
         taskPublicId: waitingTask.public_id, response: { focus: "补充通勤场景", sourceUrls: ["https://example.com/source"] },

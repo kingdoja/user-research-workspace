@@ -15,8 +15,8 @@ async function main() {
   } = await import("../src/lib/openai-provider");
   const reportStatus = getProviderStageStatus("report");
   const judgeStatus = getProviderStageStatus("judge");
-  assert.equal(reportStatus.providerName, "funcloud");
-  assert.equal(reportStatus.model, "gpt-5.6-terra");
+  assert.equal(reportStatus.providerName, "yundu");
+  assert.equal(reportStatus.model, "gpt-4o-mini");
   assert.equal(reportStatus.configured, true);
   assert.equal(judgeStatus.providerName, "deepseek");
   assert.equal(judgeStatus.model, "deepseek-v4-pro");
@@ -54,7 +54,7 @@ async function main() {
     queries: ["AI 研究工具证据治理", "AI 研究工具试点评估"],
     sources,
   });
-  assert.equal(reportResult.provider, "funcloud");
+  assert.equal(reportResult.provider, "yundu");
   assert.equal(reportResult.model, reportStatus.model);
   assert.ok(reportResult.responseId);
   assert.ok(reportResult.report.findings.length >= 3);

@@ -218,6 +218,26 @@ async function main() {
     assert.match(workspace.messages.at(-1)?.content ?? "", /已完成/);
     assert.equal(workspace.files[0]?.path, "deliverables/result.json");
     assert.equal(workspace.recentRuns[0]?.status, "completed");
+    const sseSteps = await database.query<{ id: string; run_public_id: string; sequence: number }>(
+      `select step.id::text as id, run.public_id as run_public_id, step.sequence
+       from agent_steps step join agent_runs run on run.id = step.run_id
+       join agent_threads thread on thread.id = run.thread_id
+       where thread.public_id = $1 and thread.workspace_id = $2 and run.public_id = $3
+       order by step.id`,
+      [thread.publicId, viewer.workspaceId, result.runPublicId],
+    );
+    assert.ok(sseSteps.rows.length >= 3);
+    assert.ok(sseSteps.rows.every((step) => step.run_public_id === result.runPublicId));
+    assert.ok(sseSteps.rows.every((step, index) => index === 0 || BigInt(step.id) > BigInt(sseSteps.rows[index - 1].id)));
+    assert.deepEqual(sseSteps.rows.map((step) => step.sequence), [...sseSteps.rows].map((step) => step.sequence).sort((a, b) => a - b));
+    const outsiderSseSteps = await database.query<{ id: string }>(
+      `select step.id::text as id
+       from agent_steps step join agent_runs run on run.id = step.run_id
+       join agent_threads thread on thread.id = run.thread_id
+       where thread.public_id = $1 and thread.workspace_id = $2 and run.public_id = $3`,
+      [thread.publicId, outsider.workspaceId, result.runPublicId],
+    );
+    assert.equal(outsiderSseSteps.rows.length, 0);
     const file = await getAgentWorkspaceFile(viewer, workspace.files[0].publicId);
     assert.equal(typeof file, "object");
     assert.equal(await getAgentWorkspaceFile(outsider, workspace.files[0].publicId), "not_found");
@@ -284,6 +304,7 @@ async function main() {
       sandboxRunnerProtocol: "atypica.sandbox/v1", persistentWorkspace: workspace.files[0].path,
       providerRoutingLedger: true, crossWorkspaceIsolation: true, privateSkillIsolation: true,
       idempotentQueue: true, oneActiveRunPerThread: true, claimedSetupFailureRecovered: true,
+      sseRunCursorOrdering: true, sseRunFilter: true, sseWorkspaceIsolation: true,
     }, null, 2));
   } finally {
     for (const workspaceId of workspaceIds) await database.query("delete from workspaces where id = $1", [workspaceId]);

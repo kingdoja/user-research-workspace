@@ -537,6 +537,7 @@ export async function prepareSourceConnectorAuditRawStorage(input: {
   inlineLimitBytes?: number;
 }): Promise<PreparedSourceConnectorAudit> {
   const storage = input.storage === undefined ? createConfiguredSourceRawStorage() : input.storage;
+  if (storage) await storage.healthCheck();
   const inlineLimitBytes = input.inlineLimitBytes ?? getSourceRawInlineLimitBytes();
   const createdObjects: SourceRawStorageLocator[] = [];
   const candidates: CollectedSourceCandidate[] = [];

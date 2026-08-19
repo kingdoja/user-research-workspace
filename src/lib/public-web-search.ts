@@ -36,6 +36,8 @@ export type PublicWebSearchMetadata = {
   socialSourceCount?: number;
   socialCandidateCount?: number;
   socialConnectorRunPublicId?: string;
+  qualityRejectedCount?: number;
+  qualityRejectionReasons?: Record<string, number>;
 };
 
 export type PublicWebCollectionResult = {

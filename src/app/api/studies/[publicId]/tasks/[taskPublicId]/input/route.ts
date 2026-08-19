@@ -8,11 +8,11 @@ import { submitStudyTaskInput } from "@/lib/studies";
 export const maxDuration = 180;
 
 const responseSchema = z.object({
-  focus: z.string().trim().max(600).optional(),
-  sourceUrls: z.array(z.string().url()).max(8).optional(),
-}).refine((value) => Boolean(value.focus || value.sourceUrls?.length), {
-  message: "请补充研究焦点或至少一个公开 URL",
-});
+  response: z.record(z.string().max(80), z.union([
+    z.string().max(2000),
+    z.array(z.string().max(2048)).max(8),
+  ])).refine((value) => Object.keys(value).length <= 8, "提交字段过多"),
+}).strict();
 
 export async function POST(
   request: Request,
@@ -28,9 +28,10 @@ export async function POST(
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "输入格式无效" }, { status: 400 });
 
   const { publicId, taskPublicId } = await context.params;
-  const result = await submitStudyTaskInput(viewer, publicId, taskPublicId, parsed.data);
+  const result = await submitStudyTaskInput(viewer, publicId, taskPublicId, parsed.data.response);
   if (result === "forbidden") return NextResponse.json({ error: "当前角色不能继续研究" }, { status: 403 });
   if (result === "not_found") return NextResponse.json({ error: "待补充输入的任务不存在或已处理" }, { status: 404 });
+  if ("validationError" in result) return NextResponse.json({ error: result.validationError }, { status: 400 });
 
   after(() => processStudyJobQueue({ maxJobs: 1 }));
   return NextResponse.json({ status: "queued", runId: result.runId, taskKey: result.taskKey });

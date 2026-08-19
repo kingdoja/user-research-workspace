@@ -30,6 +30,10 @@ export default async function SharedStudyPage({ params }: SharedPageProps) {
         <section className="shared-report-hero">
           <span>RESEARCH INTELLIGENCE REPORT · {new Date(study.generatedAt).getFullYear()}</span>
           <h1>{study.report.title}</h1>
+          <div className={`report-answerability report-answerability-${study.report.content.answerability?.level ?? "decision_ready"}`}>
+            <strong>{study.report.content.answerability?.reportLabel ?? "研究报告"}</strong>
+            <span>{study.report.content.answerability?.basisLabel ?? "结论、业务含义与行动建议"}</span>
+          </div>
           <p>{study.report.content.executiveSummary}</p>
           <dl>
             <div><dt>{study.report.content.findings.length}</dt><dd>核心洞察</dd></div>

@@ -1,5 +1,6 @@
 import { createPublicId } from "@/lib/identifiers";
 import type { Queryable } from "@/lib/db";
+import { appendGovernedDynamicTasks } from "@/lib/research-task-mutation";
 
 export const REASONING_POLICY_VERSION = "deterministic-research-v2";
 
@@ -293,44 +294,30 @@ export async function evaluateReasoningCheckpoint(queryable: Queryable, input: {
   let appendedTaskKey: string | null = null;
   if (chosenAction === "append_task" && gate) {
     appendedTaskKey = `research_dynamic_${dynamicTaskCount + 1}`;
-    const generation = Math.max(0, ...tasks.map((task) => task.generation)) + 1;
-    await queryable.query(
-      "update study_tasks set position = position + 10000 where run_id = $1 and position >= $2",
-      [input.runId, gate.position],
-    );
-    await queryable.query(
-      "update study_tasks set position = position - 9999 where run_id = $1 and position >= $2",
-      [input.runId, gate.position + 10000],
-    );
-    await queryable.query(
-      `insert into study_tasks (
-         public_id, study_id, run_id, position, task_key, title, tool_name, depends_on,
-         input, timeout_seconds, origin, generation, reasoning_decision_id
-       ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, 300, 'dynamic', $10, $11)`,
-      [
-        createPublicId("tsk"), input.studyId, input.runId, gate.position, appendedTaskKey,
-        "补充研究：扩大来源与约束覆盖", appendPayload.toolName,
-        JSON.stringify(completedResearch.map((task) => task.key)),
-        JSON.stringify({ focus: `补足公开证据覆盖：新增至少 ${appendPayload.gaps.sources} 个来源和 ${appendPayload.gaps.domains} 个独立域名，优先寻找反例、限制条件和一手资料。` }),
-        generation, decision.rows[0].id,
-      ],
-    );
-    await queryable.query(
-      `update study_tasks
-       set depends_on = case when depends_on ? $3 then depends_on else depends_on || to_jsonb($3::text) end,
-           updated_at = now()
-       where run_id = $1 and task_key = $2`,
-      [input.runId, gate.key, appendedTaskKey],
-    );
+    await appendGovernedDynamicTasks({
+      queryable,
+      studyId: input.studyId,
+      runId: input.runId,
+      definitions: [{
+        key: appendedTaskKey,
+        title: "补充研究：扩大来源与约束覆盖",
+        toolName: appendPayload.toolName,
+        dependsOn: completedResearch.map((task) => task.key),
+        input: {
+          focus: `补足公开证据覆盖：新增至少 ${appendPayload.gaps.sources} 个来源和 ${appendPayload.gaps.domains} 个独立域名，优先寻找反例、限制条件和一手资料。`,
+        },
+      }],
+      timeoutSeconds: 300,
+      maxDynamicTasks,
+      gateTaskKey: gate.key,
+      allowedToolNames: ["deepResearch", "scoutSocialTrends"],
+      reasoningDecisionId: decision.rows[0].id,
+      policyVersion: REASONING_POLICY_VERSION,
+      source: "deterministic_reasoning",
+    });
     await queryable.query(
       `update reasoning_decisions set chosen_action = $2::jsonb where id = $1`,
       [decision.rows[0].id, JSON.stringify({ type: chosenAction, taskKey: appendedTaskKey, template: appendPayload.template })],
-    );
-    await queryable.query(
-      `update study_runs set dynamic_task_count = dynamic_task_count + 1,
-              reasoning_policy_version = $2, expansion_stop_reason = null
-       where id = $1`,
-      [input.runId, REASONING_POLICY_VERSION],
     );
   } else if (chosenAction === "stop_expansion") {
     await queryable.query(

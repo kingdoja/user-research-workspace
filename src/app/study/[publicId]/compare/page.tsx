@@ -60,6 +60,20 @@ function RunReplayPane({ run, side }: { run: StudyRunReplaySnapshot; side: "A" |
         <div><span>产物</span><strong>{run.counts.artifacts}</strong></div>
       </section>
 
+      {run.trajectoryEvaluation ? (
+        <section className="study-run-replay-section" aria-label="Agent 轨迹评估">
+          <header><GitCompareArrows size={15} /><h3>Agent 轨迹评估</h3><span>{run.trajectoryEvaluation.controllerMode}</span></header>
+          <dl className="study-run-version-list">
+            <div><dt>策略拒绝率</dt><dd>{Math.round(Number(run.trajectoryEvaluation.metrics.policyRejectRate ?? 0) * 100)}%</dd></div>
+            <div><dt>工具选择匹配率</dt><dd>{Math.round(Number(run.trajectoryEvaluation.metrics.callToolMatchRate ?? 0) * 100)}%</dd></div>
+            <div><dt>来源 / 域名增益</dt><dd>{String(run.trajectoryEvaluation.metrics.sourceCount ?? 0)} / {String(run.trajectoryEvaluation.metrics.distinctDomainCount ?? 0)}</dd></div>
+            <div><dt>决策延迟</dt><dd>{run.trajectoryEvaluation.metrics.decisionLatencyMs === null ? "—" : `${Math.round(Number(run.trajectoryEvaluation.metrics.decisionLatencyMs))}ms`}</dd></div>
+            <div><dt>恢复 / 人工介入</dt><dd>{String(run.trajectoryEvaluation.metrics.recoveryEventCount ?? 0)} / {String(run.trajectoryEvaluation.metrics.humanInterventionCount ?? 0)}</dd></div>
+            <div><dt>报告 gate</dt><dd>{run.trajectoryEvaluation.metrics.reportGatePassed ? "通过" : "未通过"}</dd></div>
+          </dl>
+        </section>
+      ) : null}
+
       <section className="study-run-replay-section">
         <header><Workflow size={15} /><h3>锁定版本</h3></header>
         <dl className="study-run-version-list">

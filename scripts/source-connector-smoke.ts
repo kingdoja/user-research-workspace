@@ -133,6 +133,7 @@ async function main() {
     assert.equal("providerExcerpt" in auditSummary.candidates[0], false);
     const storedBodies = new Map<string, string>();
     const testStorage: SourceRawStorage = {
+      async healthCheck() {},
       async putImmutable(input) {
         const created = !storedBodies.has(input.key);
         if (created) storedBodies.set(input.key, input.body);

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
+import { loadEnvConfig } from "@next/env";
 import {
   CreateBucketCommand,
   DeleteBucketCommand,
+  HeadBucketCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
 import {
@@ -10,6 +12,8 @@ import {
   createSourceRawObjectKey,
   type SourceRawStorageLocator,
 } from "../src/lib/source-raw-storage";
+
+loadEnvConfig(process.cwd());
 
 if (process.env.SOURCE_OBJECT_STORAGE_SMOKE_CONFIRM !== "1") {
   throw new Error("Set SOURCE_OBJECT_STORAGE_SMOKE_CONFIRM=1 to run the local object-storage smoke test.");
@@ -32,7 +36,13 @@ const client = new S3Client({
 });
 
 async function main() {
-  await client.send(new CreateBucketCommand({ Bucket: bucket }));
+  let createdBucket = false;
+  try {
+    await client.send(new HeadBucketCommand({ Bucket: bucket }));
+  } catch {
+    await client.send(new CreateBucketCommand({ Bucket: bucket }));
+    createdBucket = true;
+  }
   const storage = createConfiguredSourceRawStorage();
   assert(storage);
   const body = "Large immutable source body. ".repeat(4_000);
@@ -55,7 +65,7 @@ async function main() {
     }, null, 2));
   } finally {
     if (locator) await storage.delete(locator);
-    await client.send(new DeleteBucketCommand({ Bucket: bucket }));
+    if (createdBucket) await client.send(new DeleteBucketCommand({ Bucket: bucket }));
   }
 }
 

@@ -6,6 +6,9 @@ nextEnv.loadEnvConfig(process.cwd());
 const workerId = process.env.RESEARCH_WORKER_ID?.trim() || `research-${randomUUID()}`;
 const pollInterval = Number(process.env.RESEARCH_WORKER_POLL_MS ?? 2000);
 const once = process.argv.includes("--once");
+const targetedAgentRunPublicId = process.env.AGENT_RUN_PUBLIC_ID?.trim() || undefined;
+const agentOnly = process.env.AGENT_WORKER_AGENT_ONLY === "1" || process.argv.includes("--agent-only");
+const versionOnly = process.argv.includes("--version");
 
 async function loadHarness() {
   return import("../src/lib/research-harness.ts");
@@ -19,6 +22,10 @@ async function loadAgent() {
   return import("../src/lib/universal-agent.ts");
 }
 
+async function loadAgentProvider() {
+  return import("../src/lib/openai-provider.ts");
+}
+
 async function runQueue(processQueue) {
   do {
     const processed = await processQueue();
@@ -27,20 +34,53 @@ async function runQueue(processQueue) {
   } while (true);
 }
 
-const [{ processStudyJobQueue }, { processInterviewJobQueue }, { processAgentRunQueue }] = await Promise.all([
+const [{ processStudyJobQueue }, { processInterviewJobQueue }, { processAgentRunQueue }, { UNIVERSAL_AGENT_PROMPT_VERSION }] = await Promise.all([
   loadHarness(),
   loadInterviews(),
   loadAgent(),
+  loadAgentProvider(),
 ]);
 const maxJobs = once ? 1 : 5;
 
-await Promise.all([
-  runQueue(() => processStudyJobQueue({ workerId: `${workerId}:study`, maxJobs })),
-  runQueue(() => processInterviewJobQueue({ workerId: `${workerId}:interview`, maxJobs })),
-  runQueue(() => processAgentRunQueue({ workerId: `${workerId}:agent`, maxRuns: maxJobs })),
-]);
+console.log(JSON.stringify({
+  event: "research_worker_started",
+  workerId,
+  agentPromptVersion: UNIVERSAL_AGENT_PROMPT_VERSION,
+  targetedAgentRunPublicId: targetedAgentRunPublicId ?? null,
+  agentOnly,
+  versionOnly,
+  once,
+}));
 
-if (once) {
+if (!versionOnly && !agentOnly) {
+  const { assertConfiguredSourceRawStorageReady } = await import("../src/lib/source-raw-storage.ts");
+  try {
+    const storageStatus = await assertConfiguredSourceRawStorageReady();
+    console.log(JSON.stringify({ event: "research_worker_source_storage_ready", ...storageStatus }));
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "research_worker_dependency_unavailable",
+      dependency: "source_object_storage",
+      message: error instanceof Error ? error.message : "SOURCE_OBJECT_STORAGE_UNAVAILABLE",
+    }));
+    process.exitCode = 1;
+    process.exit();
+  }
+}
+
+if (!versionOnly) {
+  const queues = agentOnly
+    ? [runQueue(() => processAgentRunQueue({ workerId: `${workerId}:agent`, maxRuns: maxJobs, runPublicId: targetedAgentRunPublicId }))]
+    : [
+        runQueue(() => processStudyJobQueue({ workerId: `${workerId}:study`, maxJobs })),
+        runQueue(() => processInterviewJobQueue({ workerId: `${workerId}:interview`, maxJobs })),
+        runQueue(() => processAgentRunQueue({ workerId: `${workerId}:agent`, maxRuns: maxJobs, runPublicId: targetedAgentRunPublicId })),
+      ];
+
+  await Promise.all(queues);
+}
+
+if (once && !versionOnly) {
   const { closeDatabase } = await import("../src/lib/db.ts");
   await closeDatabase();
 }

@@ -2433,6 +2433,9 @@ function rankContextRetrievalCandidates(input: {
   semanticReason: string;
   limit: number;
 }): RankedContextCandidate[] {
+  // A positive score only means a token or weak embedding matched. Keep the
+  // prompt clean by requiring a calibrated minimum relevance score.
+  const minimumRelevanceScore = 0.12;
   const terms = queryTerms(input.query);
   return input.candidates
     .map((row) => {
@@ -2446,7 +2449,7 @@ function rankContextRetrievalCandidates(input: {
       if (effectiveSemanticScore > 0) reasons.push(input.semanticReason);
       return { row, score: lexicalScore * 0.7 + effectiveSemanticScore * 0.3, reasons };
     })
-    .filter((item) => item.score > 0)
+    .filter((item) => item.score >= minimumRelevanceScore)
     .sort((left, right) => right.score - left.score)
     .slice(0, input.limit);
 }

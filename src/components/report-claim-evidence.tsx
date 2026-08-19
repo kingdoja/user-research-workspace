@@ -26,14 +26,16 @@ function EvidenceIcon({ type }: { type: string }) {
   return <Lightbulb size={13} />;
 }
 
-export function ReportClaimEvidence({ claim }: { claim: ReportClaim | null }) {
+export function ReportClaimEvidence({ claim, visible = false }: { claim: ReportClaim | null; visible?: boolean }) {
+  if (!visible) return null;
   if (!claim) return <div className="claim-evidence-legacy"><CircleAlert size={13} /><span>历史报告：尚未建立逐条证据映射。</span></div>;
-  const supported = claim.supportStatus === "supported" && claim.evidence.length > 0;
+  const direct = claim.supportStatus === "supported" && claim.evidence.length > 0;
+  const mixed = claim.supportStatus === "mixed" && claim.evidence.length > 0;
   return <div className="claim-evidence-block">
     <div className="claim-evidence-status">
       <span data-claim-type={claim.claimType}>{claimLabels[claim.claimType] ?? claim.claimType}</span>
       <span>{confidenceLabels[claim.confidence] ?? claim.confidence}</span>
-      <span className={supported ? "supported" : "unsupported"}>{supported ? <ShieldCheck size={12} /> : <CircleAlert size={12} />}{supported ? `${claim.evidence.length} 条直接证据` : "未绑定直接证据"}</span>
+      <span className={direct ? "supported" : mixed ? "mixed" : "unsupported"}>{direct || mixed ? <ShieldCheck size={12} /> : <CircleAlert size={12} />}{direct ? `${claim.evidence.length} 条直接证据` : mixed ? `${claim.evidence.length} 条参考资料` : "未绑定直接证据"}</span>
     </div>
     {claim.evidence.length ? <details className="claim-evidence-details">
       <summary>查看逐条证据</summary>

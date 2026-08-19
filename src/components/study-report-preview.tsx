@@ -1,12 +1,13 @@
 "use client";
 
-import { ChevronDown, Download, ExternalLink, Eye, FileText, Hash, Printer, X } from "lucide-react";
+import { ChevronDown, ClipboardCheck, Download, ExternalLink, Eye, FileText, Hash, Printer, X } from "lucide-react";
 import { useState } from "react";
 import { ReportClaimEvidence } from "@/components/report-claim-evidence";
 import type { StudyDetail } from "@/lib/studies";
 
 export function StudyReportPreview({ study }: { study: StudyDetail }) {
   const [open, setOpen] = useState(false);
+  const [auditOpen, setAuditOpen] = useState(false);
   const report = study.report;
   const findingCount = report?.content.findings.length ?? 0;
   const recommendationCount = report?.content.recommendations.length ?? 0;
@@ -34,6 +35,8 @@ export function StudyReportPreview({ study }: { study: StudyDetail }) {
     const sources = report.citations.map((citation) => `- [${citation.title}](${citation.url})`).join("\n");
     const markdown = [
       `# ${report.title}`,
+      `**结论性质**：${report.content.answerability?.reportLabel ?? "研究报告"}`,
+      report.content.answerability?.basisLabel ?? "",
       report.content.executiveSummary,
       findings,
       `## 行动建议\n\n${recommendations}`,
@@ -80,6 +83,7 @@ export function StudyReportPreview({ study }: { study: StudyDetail }) {
             <nav aria-label="报告工具">
               <button type="button" onClick={downloadMarkdown} aria-label="下载 Markdown 报告" title="下载 Markdown"><Download size={18} /></button>
               <button type="button" onClick={() => window.print()} aria-label="打印或另存为 PDF" title="打印或另存为 PDF"><Printer size={18} /></button>
+              <button type="button" onClick={() => setAuditOpen((value) => !value)} aria-label="切换证据审计" aria-pressed={auditOpen} title="证据审计"><ClipboardCheck size={18} /></button>
               <button type="button" onClick={() => setOpen(false)} aria-label="关闭报告"><X size={20} /></button>
             </nav>
           </header>
@@ -93,6 +97,10 @@ export function StudyReportPreview({ study }: { study: StudyDetail }) {
             <section className="report-reader-summary" id="report-summary">
               <span>EXECUTIVE SUMMARY</span>
               <h2>{report.title}</h2>
+              <div className={`report-answerability report-answerability-${report.content.answerability?.level ?? "decision_ready"}`}>
+                <strong>{report.content.answerability?.reportLabel ?? "研究报告"}</strong>
+                <span>{report.content.answerability?.basisLabel ?? "结论、业务含义与行动建议"}</span>
+              </div>
               <p>{report.content.executiveSummary}</p>
               <dl className="report-reader-metrics">
                 <div><dt>洞察</dt><dd>{findingCount}</dd></div>
@@ -107,7 +115,7 @@ export function StudyReportPreview({ study }: { study: StudyDetail }) {
                 <span>{String(index + 1).padStart(2, "0")}</span>
                 <div>
                   <h3>{finding.title}</h3>
-                  <ReportClaimEvidence claim={findingNodes[index]?.claim ?? null} />
+                  <ReportClaimEvidence claim={findingNodes[index]?.claim ?? null} visible={auditOpen} />
                   <p>{finding.insight}</p>
                   <dl><div><dt>证据</dt><dd>{finding.evidence}</dd></div><div><dt>业务含义</dt><dd>{finding.implication}</dd></div></dl>
                 </div>

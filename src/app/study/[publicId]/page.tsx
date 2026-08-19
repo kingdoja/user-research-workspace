@@ -1,6 +1,5 @@
 import { notFound, redirect } from "next/navigation";
 import { StudyAgentWorkspace } from "@/components/study-agent-workspace";
-import { StudyAutoRefresh } from "@/components/study-auto-refresh";
 import { getViewer } from "@/lib/auth";
 import { getOpenAIProviderStatus } from "@/lib/openai-provider";
 import { getStudy } from "@/lib/studies";
@@ -19,16 +18,11 @@ export default async function StudyDetailPage({ params }: PageProps<"/study/[pub
     notFound();
   }
 
-  const executionActive = (study.runStatus === "queued" || study.runStatus === "running") && !study.runRecoverable;
-
   return (
-    <>
-      {executionActive ? <StudyAutoRefresh publicId={study.publicId} after={study.events.at(-1)?.id ?? "0"} /> : null}
-      <StudyAgentWorkspace
-        study={study}
-        viewer={viewer}
-        provider={getOpenAIProviderStatus()}
-      />
-    </>
+    <StudyAgentWorkspace
+      study={study}
+      viewer={viewer}
+      provider={getOpenAIProviderStatus()}
+    />
   );
 }

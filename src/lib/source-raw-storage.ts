@@ -2,6 +2,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  HeadBucketCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -22,6 +23,7 @@ export type SourceRawStorageWrite = SourceRawStorageLocator & {
 };
 
 export type SourceRawStorage = {
+  healthCheck(): Promise<void>;
   putImmutable(input: {
     key: string;
     body: string;
@@ -65,6 +67,13 @@ export function getSourceRawStorageStatus() {
   } as const;
 }
 
+export async function assertConfiguredSourceRawStorageReady() {
+  const storage = createConfiguredSourceRawStorage();
+  if (!storage) return { configured: false as const };
+  await storage.healthCheck();
+  return { configured: true as const };
+}
+
 export function createConfiguredSourceRawStorage(): SourceRawStorage | null {
   const bucket = process.env.SOURCE_OBJECT_STORAGE_BUCKET?.trim();
   if (!bucket) return null;
@@ -74,9 +83,19 @@ export function createConfiguredSourceRawStorage(): SourceRawStorage | null {
     endpoint: endpoint || undefined,
     forcePathStyle: booleanEnvironment(process.env.SOURCE_OBJECT_STORAGE_FORCE_PATH_STYLE, Boolean(endpoint)),
     credentials: optionalCredentials(),
+    maxAttempts: 4,
   });
 
   return {
+    async healthCheck() {
+      try {
+        await client.send(new HeadBucketCommand({ Bucket: bucket }));
+      } catch (error) {
+        const wrapped = new Error("SOURCE_OBJECT_STORAGE_UNAVAILABLE", { cause: error });
+        wrapped.name = "SourceObjectStorageUnavailableError";
+        throw wrapped;
+      }
+    },
     async putImmutable(input) {
       const body = Buffer.from(input.body, "utf8");
       const byteLength = body.byteLength;
@@ -87,7 +106,11 @@ export function createConfiguredSourceRawStorage(): SourceRawStorage | null {
         const statusCode = typeof error === "object" && error && "$metadata" in error
           ? (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode
           : undefined;
-        if (statusCode !== 404) throw error;
+        if (statusCode !== 404) {
+          const wrapped = new Error("SOURCE_OBJECT_STORAGE_UNAVAILABLE", { cause: error });
+          wrapped.name = "SourceObjectStorageUnavailableError";
+          throw wrapped;
+        }
       }
       if (existing) {
         if (existing.Metadata?.sha256 !== input.contentHash || existing.ContentLength !== byteLength) {
@@ -103,13 +126,20 @@ export function createConfiguredSourceRawStorage(): SourceRawStorage | null {
           created: false,
         };
       }
-      const result = await client.send(new PutObjectCommand({
-        Bucket: bucket,
-        Key: input.key,
-        Body: body,
-        ContentType: input.contentType,
-        Metadata: { sha256: input.contentHash },
-      }));
+      let result;
+      try {
+        result = await client.send(new PutObjectCommand({
+          Bucket: bucket,
+          Key: input.key,
+          Body: body,
+          ContentType: input.contentType,
+          Metadata: { sha256: input.contentHash },
+        }));
+      } catch (error) {
+        const wrapped = new Error("SOURCE_OBJECT_STORAGE_UNAVAILABLE", { cause: error });
+        wrapped.name = "SourceObjectStorageUnavailableError";
+        throw wrapped;
+      }
       return {
         provider: "s3",
         bucket,
@@ -121,20 +151,33 @@ export function createConfiguredSourceRawStorage(): SourceRawStorage | null {
       };
     },
     async get(locator) {
-      const result = await client.send(new GetObjectCommand({
-        Bucket: locator.bucket,
-        Key: locator.key,
-        VersionId: locator.versionId ?? undefined,
-      }));
+      let result;
+      try {
+        result = await client.send(new GetObjectCommand({
+          Bucket: locator.bucket,
+          Key: locator.key,
+          VersionId: locator.versionId ?? undefined,
+        }));
+      } catch (error) {
+        const wrapped = new Error("SOURCE_OBJECT_STORAGE_UNAVAILABLE", { cause: error });
+        wrapped.name = "SourceObjectStorageUnavailableError";
+        throw wrapped;
+      }
       if (!result.Body) throw new Error("SOURCE_OBJECT_STORAGE_BODY_MISSING");
       return result.Body.transformToString("utf8");
     },
     async delete(locator) {
-      await client.send(new DeleteObjectCommand({
-        Bucket: locator.bucket,
-        Key: locator.key,
-        VersionId: locator.versionId ?? undefined,
-      }));
+      try {
+        await client.send(new DeleteObjectCommand({
+          Bucket: locator.bucket,
+          Key: locator.key,
+          VersionId: locator.versionId ?? undefined,
+        }));
+      } catch (error) {
+        const wrapped = new Error("SOURCE_OBJECT_STORAGE_UNAVAILABLE", { cause: error });
+        wrapped.name = "SourceObjectStorageUnavailableError";
+        throw wrapped;
+      }
     },
   };
 }

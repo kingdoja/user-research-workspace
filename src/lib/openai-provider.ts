@@ -21,15 +21,32 @@ import {
   collectBlueskyPublicSources,
   getBlueskyPublicConnectorStatus,
 } from "@/lib/bluesky-social-connector";
-import { buildReportEvidenceCatalog, formatReportEvidenceCatalog } from "@/lib/report-evidence";
+import {
+  buildReportEvidenceCatalog,
+  formatReportEvidenceCatalog,
+  hasInferentialLanguage,
+  toReaderFacingEvidenceText,
+  type ReportEvidenceCatalogItem,
+} from "@/lib/report-evidence";
+import {
+  parseResearchAgentAction,
+  researchAgentActionJsonSchema,
+  type AgentAction,
+  RESEARCH_AGENT_CONTROLLER_VERSION,
+} from "@/lib/research-agent-contract";
+import {
+  assessResearchAnswerability,
+  curatePublicWebSources,
+  formatResearchAnswerabilityForPrompt,
+} from "@/lib/research-report-design";
 
 const DEFAULT_MODEL = "gpt-5.6-terra";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
 const DEFAULT_DEEPSEEK_REASONING_MODEL = "deepseek-v4-pro";
 const PLAN_PROMPT_VERSION = "study-plan-v1";
 const CLARIFICATION_PROMPT_VERSION = "study-clarification-v1";
-export const REPORT_PROMPT_VERSION = "synthetic-panel-research-v2-evidence-graph";
-export const REPORT_JUDGE_PROMPT_VERSION = "research-report-judge-v1";
+export const REPORT_PROMPT_VERSION = "synthetic-panel-research-v3-answerability";
+export const REPORT_JUDGE_PROMPT_VERSION = "research-report-judge-v2-answerability-reader-value";
 export const REPORT_REVISION_PROMPT_VERSION = "research-report-revision-v1";
 const FOLLOWUP_PROMPT_VERSION = "report-followup-v3";
 const INTERVIEW_PROMPT_VERSION = "synthetic-interview-v1";
@@ -37,30 +54,32 @@ export const REALTIME_INTERVIEW_PROMPT_VERSION = "realtime-interview-v1";
 const HARNESS_INTERVIEW_PROMPT_VERSION = "research-harness-interview-v2";
 const AUDIENCE_CALL_PROMPT_VERSION = "research-harness-audience-call-v2";
 const DISCUSSION_PROMPT_VERSION = "research-harness-discussion-v2";
-export const UNIVERSAL_AGENT_PROMPT_VERSION = "universal-agent-v1";
+export const UNIVERSAL_AGENT_PROMPT_VERSION = "universal-agent-v2-product-tools";
 
 const universalAgentTurnSchema = z.object({
   decisionSummary: z.string().min(2).max(600),
-  action: z.enum(["list_files", "read_file", "write_file", "execute_skill", "finish"]),
+  action: z.enum(["list_files", "read_file", "write_file", "execute_skill", "execute_product_tool", "finish"]),
   message: z.string().max(12_000),
   path: z.string().max(240).nullable(),
   content: z.string().max(120_000).nullable(),
   skillPublicId: z.string().max(160).nullable(),
   argumentsJson: z.string().max(32_000).nullable(),
+  productToolName: z.string().max(80).nullable(),
 });
 
 const universalAgentTurnJsonSchema = {
   type: "object",
   properties: {
     decisionSummary: { type: "string", minLength: 2, maxLength: 600 },
-    action: { type: "string", enum: ["list_files", "read_file", "write_file", "execute_skill", "finish"] },
+    action: { type: "string", enum: ["list_files", "read_file", "write_file", "execute_skill", "execute_product_tool", "finish"] },
     message: { type: "string", maxLength: 12_000 },
     path: { type: ["string", "null"], maxLength: 240 },
     content: { type: ["string", "null"], maxLength: 120_000 },
     skillPublicId: { type: ["string", "null"], maxLength: 160 },
     argumentsJson: { type: ["string", "null"], maxLength: 32_000 },
+    productToolName: { type: ["string", "null"], maxLength: 80 },
   },
-  required: ["decisionSummary", "action", "message", "path", "content", "skillPublicId", "argumentsJson"],
+  required: ["decisionSummary", "action", "message", "path", "content", "skillPublicId", "argumentsJson", "productToolName"],
   additionalProperties: false,
 } as const;
 
@@ -72,18 +91,11 @@ const searchSourcePlanSchema = z.object({
 const searchSourcePlanJsonSchema = {
   type: "object",
   properties: {
-    queries: {
-      type: "array",
-      minItems: 3,
-      maxItems: 5,
-      items: { type: "string", minLength: 3, maxLength: 120 },
-    },
-    seedUrls: {
-      type: "array",
-      minItems: 4,
-      maxItems: 16,
-      items: { type: "string", minLength: 10, maxLength: 500 },
-    },
+    // DeepSeek's Responses-compatible schema currently rejects array-valued
+    // properties in some deployments. Keep the provider wire contract scalar
+    // and restore the internal arrays only after JSON parsing and validation.
+    queries: { type: "string", maxLength: 12000 },
+    seedUrls: { type: "string", maxLength: 16000 },
   },
   required: ["queries", "seedUrls"],
   additionalProperties: false,
@@ -135,6 +147,7 @@ const reportSchema = z.object({
   })).min(3),
   limitations: z.array(z.string().min(10)).min(1),
   nextQuestions: z.array(z.string().min(10)).min(2),
+  answerability: z.custom<ReturnType<typeof assessResearchAnswerability>>().optional(),
 });
 
 const reportQualityReviewSchema = z.object({
@@ -150,6 +163,10 @@ const reportQualityReviewSchema = z.object({
       "synthetic_overstatement",
       "actionability",
       "structure",
+      "intent_mismatch",
+      "source_quality",
+      "answerability",
+      "reader_value",
     ]),
     description: z.string().min(20).max(800),
     recommendation: z.string().min(20).max(800),
@@ -628,6 +645,10 @@ const reportQualityReviewJsonSchema = {
               "synthetic_overstatement",
               "actionability",
               "structure",
+              "intent_mismatch",
+              "source_quality",
+              "answerability",
+              "reader_value",
             ],
           },
           description: { type: "string", minLength: 20, maxLength: 800 },
@@ -790,6 +811,8 @@ export type ProviderResearchSources = {
   responseId: string;
   model: string;
   usage: unknown;
+  answerability?: ReturnType<typeof assessResearchAnswerability>;
+  rejectedSourceCount?: number;
 };
 
 export type ProviderPersonaPanel = z.infer<typeof personaPanelSchema> & {
@@ -856,6 +879,19 @@ export type ProviderUniversalAgentTurn = z.infer<typeof universalAgentTurnSchema
   promptVersion: string;
   usage: unknown;
 };
+
+export type ProviderResearchAgentDecision = {
+  action: AgentAction;
+  responseId: string;
+  model: string;
+  promptVersion: string;
+  usage: unknown;
+};
+
+export type ProviderResearchAgentStreamEvent =
+  | { type: "decision.summary.delta"; delta: string }
+  | { type: "decision.completed"; responseId: string; model: string }
+  | { type: "provider.non_streaming" };
 
 let client: OpenAI | null = null;
 let deepSeekClient: OpenAI | null = null;
@@ -1192,6 +1228,33 @@ function isInvalidStructuredOutput(error: unknown) {
     && (error.message.startsWith("OPENAI_INVALID_JSON") || error.message.startsWith("OPENAI_INVALID_SCHEMA"));
 }
 
+export function parseProviderSearchSourcePlan(value: unknown): z.infer<typeof searchSourcePlanSchema> {
+  const record: Record<string, unknown> | null = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+  let normalized = record;
+  try {
+    normalized = record && typeof record === "object" && !Array.isArray(record)
+      ? {
+          ...record,
+          queries: typeof record.queries === "string" ? JSON.parse(record.queries || "[]") : record.queries,
+          seedUrls: typeof record.seedUrls === "string" ? JSON.parse(record.seedUrls || "[]") : record.seedUrls,
+        }
+      : record;
+  } catch {
+    throw new Error("OPENAI_INVALID_SCHEMA:queries_or_seedUrls:invalid_json");
+  }
+  const parsed = searchSourcePlanSchema.safeParse(normalized);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .slice(0, 4)
+      .map((issue) => `${issue.path.join(".") || "root"}:${issue.code}`)
+      .join(",");
+    throw new Error(`OPENAI_INVALID_SCHEMA:${issues}`);
+  }
+  return parsed.data;
+}
+
 function isRetryableProviderError(error: unknown) {
   if (
     error instanceof OpenAI.APIConnectionError
@@ -1404,6 +1467,7 @@ export async function generateProviderUniversalAgentTurn(input: {
   skills: Array<{ publicId: string; slug: string; name: string; description: string; version: number; executorType: string }>;
   files: Array<{ path: string; byteSize: number; version: number }>;
   externalExecutionAllowed: boolean;
+  productToolCatalog?: string;
 }): Promise<ProviderUniversalAgentTurn> {
   const model = getStageModel("reasoning");
   const skillCatalog = input.skills.length
@@ -1413,9 +1477,9 @@ export async function generateProviderUniversalAgentTurn(input: {
     ? input.files.map((file) => `${file.path} (${file.byteSize} bytes, v${file.version})`).join("\n")
     : "Workspace 为空";
   const allowedActions = input.externalExecutionAllowed
-    ? "list_files, read_file, write_file, execute_skill, finish"
-    : "list_files, read_file, write_file, finish（本轮未获外部执行确认，禁止 execute_skill）";
-  const response = await createStructuredResponse("reasoning", {
+    ? "list_files, read_file, write_file, execute_skill, execute_product_tool, finish"
+    : "list_files, read_file, write_file, execute_product_tool（仅只读产品工具）, finish（本轮未获执行确认，禁止有副作用操作）";
+  const request: StructuredResponseRequest = {
     model,
     reasoning: { effort: "medium" },
     safety_identifier: safetyIdentifier(input.userPublicId),
@@ -1427,9 +1491,11 @@ export async function generateProviderUniversalAgentTurn(input: {
       "skills/ 是只读的版本化能力目录；工作文件只能写入普通相对路径，不得使用绝对路径、.. 或 skills/ 前缀。",
       "需要读取现有文件时先 read_file；需要了解目录时用 list_files；完成目标后使用 finish 并在 message 中给出结果。",
       "execute_skill 时必须使用目录中精确的 skillPublicId，并把参数编码为 JSON object 字符串放入 argumentsJson。",
+      "execute_product_tool 时必须使用产品能力目录中的精确 productToolName，并把参数编码为 JSON object 字符串放入 argumentsJson。只读工具可以直接调用；有副作用的产品工具必须在本轮执行确认后调用。",
       "不得声称工具已经执行，除非对话中已经出现对应 tool 结果。所有面向用户的文本使用简体中文。",
       `本轮允许动作：${allowedActions}`,
       `\n已绑定 Skills：\n${skillCatalog}`,
+      input.productToolCatalog ? `\n内置产品能力：\n${input.productToolCatalog}` : "",
       `\n持久化 Workspace：\n${fileCatalog}`,
     ].join("\n"),
     input: [
@@ -1444,13 +1510,153 @@ export async function generateProviderUniversalAgentTurn(input: {
         schema: universalAgentTurnJsonSchema,
       },
     },
-  }, { timeout: 90_000, maxRetries: 1 });
+  };
+  let response = await createStructuredResponse("reasoning", request, { timeout: 90_000, maxRetries: 1 });
+  let parsed: z.infer<typeof universalAgentTurnSchema>;
+  try {
+    parsed = parseOutput(response.output_text, universalAgentTurnSchema);
+  } catch (error) {
+    if (!isInvalidStructuredOutput(error)) throw error;
+    // Some OpenAI-compatible gateways ignore json_schema and return prose or
+    // fenced JSON. Give the same model one constrained repair attempt before
+    // failing the run; the repaired value still goes through the schema.
+    const repairRequest: StructuredResponseRequest = {
+      ...request,
+      instructions: [
+        request.instructions,
+        "上一响应未通过协议校验。请只返回符合 universal_agent_turn JSON Schema 的单个 JSON 对象，不要 Markdown、解释或额外字段。",
+        `上一响应（仅作修复输入）：${response.output_text.slice(0, 40_000)}`,
+      ].join("\n\n"),
+      input: "请修复并重新输出结构化动作。",
+    };
+    response = await createStructuredResponse("reasoning", repairRequest, { timeout: 90_000, maxRetries: 1 });
+    parsed = parseOutput(response.output_text, universalAgentTurnSchema);
+  }
   return {
-    ...parseOutput(response.output_text, universalAgentTurnSchema),
+    ...parsed,
     responseId: response.id,
     model: response.model,
     promptVersion: UNIVERSAL_AGENT_PROMPT_VERSION,
     usage: response.usage,
+  };
+}
+
+/**
+ * Stream the auditable agent decision summary while keeping the final action
+ * behind the same strict JSON schema used by the non-streaming provider.
+ */
+export async function streamProviderResearchAgentDecision(input: {
+  brief: string;
+  studyType: string;
+  framework: string;
+  methods: string[];
+  audience: string;
+  tasks: Array<{
+    key: string;
+    title: string;
+    toolName: string;
+    status: string;
+    dependsOn: string[];
+    input: Record<string, unknown>;
+  }>;
+  completedStateKeys: string[];
+  contextSummary?: string;
+  availableToolNames?: readonly string[];
+  allowedTaskTemplates?: readonly string[];
+  maxDynamicTasks?: number;
+  userPublicId: string;
+  onEvent?: (event: ProviderResearchAgentStreamEvent) => void | Promise<void>;
+}): Promise<ProviderResearchAgentDecision> {
+  const model = getStageModel("reasoning");
+  const taskCatalog = input.tasks.length
+    ? input.tasks.map((task) => `${task.key} | ${task.toolName} | ${task.status} | dependsOn=${task.dependsOn.join(",") || "-"} | ${task.title}`).join("\n")
+    : "暂无任务";
+  const instructions = [
+    "你是研究 Agent Controller，只负责选择下一步可审计动作，不要输出隐藏思维链。",
+    "优先从当前 pending 且依赖已满足的任务中选择一个 call_tool；taskKey 必须精确匹配任务目录。",
+    "如果现有任务无法补足明确证据缺口，可以提出 replan；新任务只能使用目录中的工具，只能依赖已完成任务或同一 replan 中更早的新任务，并且会由 Harness 再次校验预算、输入 schema 和报告 gate。",
+    `允许的 capability templates：${input.allowedTaskTemplates?.join(", ") || "不可追加"}。replan 的每个任务必须填写 template；targeted_research 只能绑定 deepResearch，social_signal_scan 只能绑定 scoutSocialTrends。旧模板缺省会由服务端按工具名推断，但新输出请始终填写。`,
+    "只有当前 ready 任务确实缺少用户提供的研究范围或公开来源时才提出 ask_user，并用 taskKey 指明目标任务；fields 只能使用 focus(text)、sourceUrls(url_list)、selectedOption(choice)，choice 必须提供 options；不要用 ask_user 代替正常研究判断。",
+    "只有所有必需任务和报告契约已经满足时才提出 finish；不确定时继续选择一个可执行任务。",
+    "所有 summary 使用简体中文，说明选择依据即可，不要复述长篇内部推理。",
+    `研究目标：${input.brief}`,
+    `研究类型：${input.studyType}；框架：${input.framework}；方法：${input.methods.join(", ") || "-"}；受众：${input.audience}`,
+    `已完成状态键：${input.completedStateKeys.join(", ") || "-"}`,
+    `动态任务工具白名单：${input.availableToolNames?.join(", ") || "不可追加"}；本轮剩余额度：${input.maxDynamicTasks ?? 0}`,
+    `当前任务目录：\n${taskCatalog}`,
+    input.contextSummary ? `当前 Context 摘要：\n${input.contextSummary}` : "",
+  ].filter(Boolean).join("\n\n");
+  const request: StructuredResponseRequest = {
+    model,
+    reasoning: { effort: "medium" },
+    safety_identifier: safetyIdentifier(input.userPublicId),
+    store: true,
+    metadata: { surface: "research_agent_controller", prompt_version: RESEARCH_AGENT_CONTROLLER_VERSION },
+    instructions,
+    input: "请输出一个结构化动作。arguments 和 requestedTasks[].input 都必须是“JSON 对象的字符串”（例如 {\"focus\":\"证据\"} 在字段中编码为字符串），不得直接输出对象；未使用的 arguments 使用 \"{}\"。未使用的 taskKey、toolName、reason、question 使用空字符串，未使用的数组使用 []，fields 中不适用的 maxLength/maxItems 使用 0。",
+    text: {
+      format: {
+        type: "json_schema",
+        name: "research_agent_action",
+        strict: true,
+        schema: researchAgentActionJsonSchema,
+      },
+    },
+  };
+  const providerClient = getProviderClient("reasoning");
+  if (getApiProtocol("reasoning") === "chat_completions") {
+    await input.onEvent?.({ type: "provider.non_streaming" });
+    const response = await createStructuredResponse("reasoning", request, { timeout: 90_000, maxRetries: 1 });
+    const action = parseResearchAgentAction(parseOutput(response.output_text, z.unknown()));
+    await input.onEvent?.({ type: "decision.summary.delta", delta: action.summary });
+    await input.onEvent?.({ type: "decision.completed", responseId: response.id, model: response.model });
+    return {
+      action,
+      responseId: response.id,
+      model: response.model,
+      promptVersion: RESEARCH_AGENT_CONTROLLER_VERSION,
+      usage: response.usage,
+    };
+  }
+
+  const stream = await providerClient.responses.create({
+    ...request,
+    stream: true,
+  } as never, { timeout: 90_000, maxRetries: 1 });
+  let outputText = "";
+  let responseId = "";
+  let responseModel = model;
+  for await (const event of stream as unknown as AsyncIterable<unknown>) {
+    if (!event || typeof event !== "object") continue;
+    const record = event as Record<string, unknown>;
+    if (record.type === "response.output_text.delta" && typeof record.delta === "string") {
+      outputText += record.delta;
+    }
+    if (record.type === "response.completed") {
+      const response = record.response && typeof record.response === "object"
+        ? record.response as Record<string, unknown>
+        : null;
+      if (typeof response?.id === "string") responseId = response.id;
+      if (typeof response?.model === "string") responseModel = response.model;
+      if (!outputText && typeof response?.output_text === "string") outputText = response.output_text;
+    }
+    if (record.type === "response.failed") {
+      throw new Error("OPENAI_STREAM_RESPONSE_FAILED");
+    }
+  }
+  if (!responseId) responseId = `stream_${Date.now()}`;
+  const action = parseResearchAgentAction(parseOutput(outputText, z.unknown()));
+  // Structured-output deltas contain the whole JSON envelope, not just the
+  // user-safe summary. Emit the summary only after schema validation so the UI
+  // never renders partial arguments or untrusted action fields.
+  await input.onEvent?.({ type: "decision.summary.delta", delta: action.summary });
+  await input.onEvent?.({ type: "decision.completed", responseId, model: responseModel });
+  return {
+    action,
+    responseId,
+    model: responseModel,
+    promptVersion: RESEARCH_AGENT_CONTROLLER_VERSION,
+    usage: null,
   };
 }
 
@@ -1902,6 +2108,7 @@ export async function generateProviderResearchReport(input: {
     queries,
     sources,
     panelResearch,
+    answerability: sourceResult.answerability,
   });
 
   return {
@@ -1960,7 +2167,7 @@ export async function researchPublicWeb(input: {
       },
     },
   }, { signal: input.signal });
-  const sourcePlan = parseOutput(queryResponse.output_text, searchSourcePlanSchema);
+  const sourcePlan = parseProviderSearchSourcePlan(parseOutput(queryResponse.output_text, z.unknown()));
   const queries = sourcePlan.queries.slice(0, 5);
   const seedUrls = [...new Set([...(input.additionalSeedUrls ?? []), ...sourcePlan.seedUrls])].slice(0, 24);
   const collected = await collectPublicWebSources(queries, seedUrls, input.signal);
@@ -1970,7 +2177,14 @@ export async function researchPublicWeb(input: {
     : null;
   const sources = [...collected.sources, ...(social?.sources ?? [])];
 
-  if (sources.length < 3) {
+  const curated = curatePublicWebSources(input.brief, sources);
+  const answerability = assessResearchAnswerability({ brief: input.brief, sources: curated.sources });
+  const qualityRejectionReasons = curated.rejected.reduce<Record<string, number>>((counts, item) => {
+    for (const reason of item.assessment.reasons) counts[reason] = (counts[reason] ?? 0) + 1;
+    return counts;
+  }, {});
+
+  if (curated.sources.length < 3) {
     throw new Error("PUBLIC_WEB_SOURCES_INSUFFICIENT");
   }
 
@@ -1999,10 +2213,13 @@ export async function researchPublicWeb(input: {
 
   return {
     queries,
-    sources,
+    sources: curated.sources,
     metadata: {
       ...collected.metadata,
-      finalSourceCount: sources.length,
+      finalSourceCount: curated.sources.length,
+      rejectedCount: curated.rejected.length,
+      qualityRejectedCount: curated.rejected.length,
+      qualityRejectionReasons,
       socialConnectorEnabled: socialStatus.enabled,
       socialSourceCount: social?.sources.length ?? 0,
       socialCandidateCount: social?.audit.candidateCount ?? 0,
@@ -2013,6 +2230,8 @@ export async function researchPublicWeb(input: {
     responseId: queryResponse.id,
     model: queryResponse.model,
     usage: queryResponse.usage,
+    answerability,
+    rejectedSourceCount: curated.rejected.length,
   };
 }
 
@@ -2295,6 +2514,7 @@ export async function synthesizeProviderResearchReport(input: {
   sources: PublicWebSource[];
   panelResearch?: SyntheticPanelResearch;
   discussion?: ProviderResearchDiscussion;
+  answerability?: ReturnType<typeof assessResearchAnswerability>;
   signal?: AbortSignal;
 }): Promise<{
   report: ResearchReport;
@@ -2306,6 +2526,11 @@ export async function synthesizeProviderResearchReport(input: {
 }> {
   const model = getStageModel("report");
   const evidenceCatalog = buildReportEvidenceCatalog(input);
+  const answerability = input.answerability ?? assessResearchAnswerability({
+    brief: input.brief,
+    sources: input.sources,
+    hasSyntheticResearch: Boolean(input.panelResearch || input.discussion),
+  });
   const evidencePacket = formatReportEvidenceCatalog(evidenceCatalog);
   const allowedEvidenceRefs = new Set(evidenceCatalog.map((item) => item.ref));
   const response = await createStructuredResponse("report", {
@@ -2326,6 +2551,8 @@ export async function synthesizeProviderResearchReport(input: {
       "没有买方侧直接证据时，不得在标题、洞察或总结中使用“最关注、首要、普遍、主要偏好”等排序断言；规范性建议应使用“应当、可作为、建议”措辞，并明确它不是已验证的市场事实。",
       "搜索摘要可能不完整，涉及采购或合规决策时应建议复核原始页面。优先采用近期、权威且彼此独立的来源。",
       "报告应直接服务业务决策，避免泛泛而谈。",
+      "先判断研究是否可回答。若 answerability.level 为 directional，标题必须明确写成方向性分析或行动方案，不得写成受众偏好、用户研究或已验证规律；正文应给出可执行的策略假设与验证方案。若为 insufficient，必须明确证据缺口和下一步研究设计。",
+      "用户报告正文先给结论、业务含义和行动建议；claimType、confidence、evidenceRefs 等审计字段只用于证据边界，不要把它们写成报告主叙事。",
     ].join("\n"),
     input: [
       `研究 Brief：${input.brief}`,
@@ -2334,6 +2561,7 @@ export async function synthesizeProviderResearchReport(input: {
       `目标受众：${input.audience}`,
       `实际检索词：${input.queries.join("；")}`,
       `公开网页证据包：\n${evidencePacket}`,
+      `证据可回答性评估：\n${formatResearchAnswerabilityForPrompt(answerability)}`,
       `AI 合成 Panel 模拟：\n${input.panelResearch
         ? JSON.stringify(input.panelResearch)
         : "本次未执行 Persona 或模拟访谈，不得补造相关证据。"}`,
@@ -2352,14 +2580,11 @@ export async function synthesizeProviderResearchReport(input: {
     },
   }, { timeout: 180_000, signal: input.signal });
 
-  const report = parseOutput(response.output_text, reportSchema);
-  for (const finding of report.findings) {
-    finding.evidenceRefs = finding.evidenceRefs.filter((ref) => allowedEvidenceRefs.has(ref));
-    if (!finding.evidenceRefs.length) {
-      finding.claimType = "model_inference";
-      finding.confidence = "low";
-    }
-  }
+  const report = normalizeReportForReader(
+    applyAnswerabilityBoundary(parseOutput(response.output_text, reportSchema), answerability),
+    evidenceCatalog,
+    allowedEvidenceRefs,
+  );
   return {
     report,
     responseId: response.id,
@@ -2370,9 +2595,90 @@ export async function synthesizeProviderResearchReport(input: {
   };
 }
 
+function applyAnswerabilityBoundary(
+  report: ResearchReport,
+  answerability: ReturnType<typeof assessResearchAnswerability>,
+): ResearchReport {
+  const boundary = answerability.level === "directional"
+    ? "本报告基于公开资料形成方向性判断与策略假设，不代表已验证的受众行为或态度规律；上线前应按后续研究方案补充真人或平台行为证据。"
+    : answerability.level === "insufficient"
+      ? "当前公开资料不足以回答核心研究问题，以下内容仅用于明确证据缺口和下一步研究设计，不应作为用户事实或市场结论使用。"
+      : "";
+  const titleNeedsBoundary = answerability.level !== "decision_ready"
+    && !/(方向性|证据缺口|研究方案|验证方案|策略假设)/u.test(report.title);
+  const summary = boundary && !report.executiveSummary.includes(boundary)
+    ? `${report.executiveSummary} ${boundary}`
+    : report.executiveSummary;
+  const limitations = answerability.level === "insufficient"
+    ? [...new Set([...answerability.gaps, ...report.limitations])]
+    : answerability.level === "directional"
+      ? [...new Set([...answerability.gaps, ...report.limitations])]
+      : report.limitations;
+  const nextQuestions = answerability.requiredEvidence.length
+    ? [...new Set([...report.nextQuestions, ...answerability.requiredEvidence.map((item) => `补充${item}，再验证当前策略假设。`)])].slice(0, 6)
+    : report.nextQuestions;
+  return {
+    ...report,
+    title: titleNeedsBoundary ? `${answerability.reportLabel}：${report.title}` : report.title,
+    executiveSummary: summary,
+    limitations,
+    nextQuestions,
+    answerability,
+  };
+}
+
+function normalizeReportForReader(
+  report: ResearchReport,
+  evidenceCatalog: ReportEvidenceCatalogItem[],
+  allowedEvidenceRefs: Set<string>,
+): ResearchReport {
+  const clean = (value: string) => toReaderFacingEvidenceText(value, evidenceCatalog);
+  return {
+    ...report,
+    title: clean(report.title),
+    executiveSummary: clean(report.executiveSummary),
+    findings: report.findings.map((finding) => {
+      const evidenceRefs = finding.evidenceRefs.filter((ref) => allowedEvidenceRefs.has(ref));
+      const referencedEvidence = evidenceRefs.flatMap((ref) => {
+        const item = evidenceCatalog.find((candidate) => candidate.ref === ref);
+        return item ? [item] : [];
+      });
+      const incompatibleEvidence = finding.claimType === "fact"
+        ? referencedEvidence.some((item) => item.evidenceType !== "fact" && item.evidenceType !== "calculation")
+        : finding.claimType === "human_observation"
+          ? referencedEvidence.some((item) => item.evidenceType !== "human_observation")
+          : finding.claimType === "synthetic_simulation"
+            ? referencedEvidence.some((item) => item.evidenceType !== "synthetic_simulation")
+            : false;
+      const inferentialFact = finding.claimType === "fact"
+        && hasInferentialLanguage(`${finding.title}\n${finding.insight}`);
+      const mustDowngrade = !evidenceRefs.length || incompatibleEvidence || inferentialFact;
+      return {
+        ...finding,
+        title: clean(finding.title),
+        insight: clean(finding.insight),
+        evidence: clean(finding.evidence),
+        implication: clean(finding.implication),
+        evidenceRefs,
+        claimType: mustDowngrade ? "model_inference" as const : finding.claimType,
+        confidence: mustDowngrade ? "low" as const : finding.confidence,
+      };
+    }),
+    recommendations: report.recommendations.map((recommendation) => ({
+      ...recommendation,
+      title: clean(recommendation.title),
+      action: clean(recommendation.action),
+      rationale: clean(recommendation.rationale),
+    })),
+    limitations: report.limitations.map(clean),
+    nextQuestions: report.nextQuestions.map(clean),
+  };
+}
+
 export async function judgeProviderResearchReport(input: {
   report: ResearchReport;
   evidenceCatalog: ReturnType<typeof buildReportEvidenceCatalog>;
+  answerability?: ReturnType<typeof assessResearchAnswerability>;
   userPublicId: string;
   studyPublicId: string;
   signal?: AbortSignal;
@@ -2393,10 +2699,13 @@ export async function judgeProviderResearchReport(input: {
       "score 为 0 到 100 的整数。存在任何 high severity 问题，或存在两项及以上 medium severity 问题时，verdict 必须为 revise。",
       "issues 只记录具体、可修订的问题。verdict 为 revise 时至少提供一项 issue；verdict 为 approved 时允许 issues 为空。",
       "不得补充证据目录之外的新事实，也不得因为文风偏好要求无意义改写。",
+      "如果研究问题属于行为、态度或因果问题，但 answerability 显示 directional 或 insufficient，报告必须明确降级范围；把方向性推断包装成已验证偏好、行为规律或因果结论属于 high severity 的 evidence_mismatch。",
+      "同时检查报告是否真正回答原始 Brief、来源质量和覆盖是否足够、是否把不存在的平台扫描写成已完成，以及读者能否直接拿到结论和方案。对应问题分别使用 intent_mismatch、source_quality、answerability、reader_value。",
     ].join("\n"),
     input: [
       `待评审报告：\n${JSON.stringify(input.report)}`,
       `允许使用的证据目录：\n${formatReportEvidenceCatalog(input.evidenceCatalog)}`,
+      `证据可回答性评估：\n${input.answerability ? formatResearchAnswerabilityForPrompt(input.answerability) : "未提供，请依据证据目录谨慎判断"}`,
     ].join("\n\n"),
     text: {
       format: {
@@ -2408,6 +2717,17 @@ export async function judgeProviderResearchReport(input: {
     },
   }, { timeout: 180_000, signal: input.signal });
   const review = parseOutput(response.output_text, reportQualityReviewSchema);
+  const requiresBoundary = input.answerability && input.answerability.level !== "decision_ready"
+    && !/(方向性|证据缺口|研究方案|验证方案|策略假设|不代表已验证)/u.test(`${input.report.title}\n${input.report.executiveSummary}`);
+  if (requiresBoundary && review.verdict === "approved") {
+    review.verdict = "revise";
+    review.issues.unshift({
+      severity: "high",
+      category: "answerability",
+      description: "报告没有明确说明当前证据只能支持方向性判断或证据缺口，读者可能将推断误解为已验证的用户事实。",
+      recommendation: "在标题和执行摘要中标注结论性质，并补充证据边界及下一步真人或平台行为验证方案。",
+    });
+  }
   if (review.verdict === "revise" && review.issues.length === 0) {
     throw new Error("OPENAI_INVALID_SCHEMA:issues:too_small");
   }
@@ -2453,6 +2773,7 @@ export async function reviseProviderResearchReport(input: {
       "严格区分公开来源事实、AI 合成模拟、分析推断与建议。没有直接证据的判断必须使用 model_inference、low confidence 和空 evidenceRefs。",
       "不得把 AI 合成 Persona、模拟访谈或模拟讨论表述为真人研究或统计证据。",
       "修订后每条 finding 的 evidenceRefs 必须来自允许证据目录，并与 claimType 和 confidence 一致。",
+      "如果原报告 answerability 不是 decision_ready，修订版必须保留方向性分析、证据缺口或验证方案的边界，不得恢复成已验证用户偏好或行为规律的标题。",
     ].join("\n"),
     input: [
       `原报告：\n${JSON.stringify(input.report)}`,
@@ -2468,14 +2789,22 @@ export async function reviseProviderResearchReport(input: {
       },
     },
   }, { timeout: 180_000, signal: input.signal });
-  const report = parseOutput(response.output_text, reportSchema);
-  for (const finding of report.findings) {
-    finding.evidenceRefs = finding.evidenceRefs.filter((ref) => allowedEvidenceRefs.has(ref));
-    if (!finding.evidenceRefs.length) {
-      finding.claimType = "model_inference";
-      finding.confidence = "low";
-    }
-  }
+  const revised = parseOutput(response.output_text, reportSchema);
+  const report = normalizeReportForReader(
+    applyAnswerabilityBoundary(
+      revised,
+      input.report.answerability ?? assessResearchAnswerability({
+        brief: "",
+        sources: input.evidenceCatalog.filter((item) => item.sourceType === "public_web").map((item) => ({
+          title: item.title,
+          url: item.sourceUri ?? "https://invalid.local/source",
+          excerpt: item.content,
+        })),
+      }),
+    ),
+    input.evidenceCatalog,
+    allowedEvidenceRefs,
+  );
   return {
     report,
     responseId: response.id,

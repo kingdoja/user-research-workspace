@@ -3,6 +3,7 @@
 import { LoaderCircle, Send } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { parseTaskInputRequest, validateTaskInputResponse } from "@/lib/task-input-contract";
 
 export function StudyTaskInputForm({
   studyPublicId,
@@ -14,22 +15,40 @@ export function StudyTaskInputForm({
   request: Record<string, unknown>;
 }) {
   const router = useRouter();
-  const [focus, setFocus] = useState("");
-  const [sourceUrls, setSourceUrls] = useState("");
+  const [values, setValues] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [pending, startTransition] = useTransition();
-  const title = typeof request.title === "string" ? request.title : "需要补充输入";
-  const description = typeof request.description === "string" ? request.description : "补充信息后将从当前 checkpoint 继续。";
+  const inputRequest = parseTaskInputRequest(request);
+  const title = inputRequest?.title ?? "需要补充输入";
+  const description = inputRequest?.description ?? "补充信息后将从当前 checkpoint 继续。";
+
+  function update(key: string, value: string) {
+    setValues((current) => ({ ...current, [key]: value }));
+  }
 
   function submit() {
     setError("");
-    const urls = sourceUrls.split(/\n|,/).map((url) => url.trim()).filter(Boolean);
+    if (!inputRequest) {
+      setError("输入字段定义无效，请刷新后重试");
+      return;
+    }
+    const candidate = Object.fromEntries(inputRequest.fields.map((field) => [
+      field.key,
+      field.type === "url_list"
+        ? (values[field.key] ?? "").split(/\n|,/).map((item) => item.trim()).filter(Boolean)
+        : values[field.key] ?? "",
+    ]));
+    const validated = validateTaskInputResponse(inputRequest, candidate);
+    if (!validated.success) {
+      setError(validated.error);
+      return;
+    }
     startTransition(async () => {
       try {
         const response = await fetch(`/api/studies/${studyPublicId}/tasks/${taskPublicId}/input`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ focus: focus.trim() || undefined, sourceUrls: urls.length ? urls : undefined }),
+          body: JSON.stringify({ response: validated.data }),
         });
         const result = (await response.json()) as { error?: string };
         if (!response.ok) {
@@ -47,9 +66,28 @@ export function StudyTaskInputForm({
     <section className="agent-task-input" aria-label={title}>
       <header><strong>{title}</strong><span>checkpoint 已保留</span></header>
       <p>{description}</p>
-      <label>补充研究焦点<textarea value={focus} maxLength={600} onChange={(event) => setFocus(event.target.value)} placeholder="例如：聚焦北京 2025 年家庭通勤场景" /></label>
-      <label>可信公开 URL<textarea value={sourceUrls} onChange={(event) => setSourceUrls(event.target.value)} placeholder="每行一个 https:// URL" /></label>
-      <button type="button" onClick={submit} disabled={pending}>
+      {inputRequest?.fields.map((field) => field.type === "choice" ? (
+        <fieldset key={field.key}>
+          <legend>{field.label}{field.required ? <span>必填</span> : null}</legend>
+          <div className="agent-task-input-options">{field.options?.map((option) => (
+            <label key={option} className={values[field.key] === option ? "selected" : ""}>
+              <input type="radio" name={field.key} value={option} checked={values[field.key] === option} onChange={() => update(field.key, option)} />
+              <span>{option}</span>
+            </label>
+          ))}</div>
+        </fieldset>
+      ) : (
+        <label key={field.key}>
+          <span>{field.label}{field.required ? "（必填）" : ""}</span>
+          <textarea
+            value={values[field.key] ?? ""}
+            maxLength={field.type === "text" ? field.maxLength ?? 600 : undefined}
+            onChange={(event) => update(field.key, event.target.value)}
+            placeholder={field.type === "url_list" ? "每行一个 https:// URL" : "填写补充信息"}
+          />
+        </label>
+      ))}
+      <button type="button" onClick={submit} disabled={pending || !inputRequest}>
         {pending ? <LoaderCircle className="spin" size={14} /> : <Send size={14} />}
         {pending ? "正在继续" : "提交并继续"}
       </button>

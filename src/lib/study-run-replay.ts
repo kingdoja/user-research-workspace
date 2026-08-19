@@ -127,6 +127,13 @@ export type StudyRunReplaySnapshot = StudyRunReplayOption & {
     type: string;
     createdAt: string;
   }>;
+  trajectoryEvaluation: {
+    publicId: string;
+    evaluatorVersion: string;
+    controllerMode: "off" | "shadow" | "active";
+    metrics: JsonObject;
+    createdAt: string;
+  } | null;
 };
 
 export type StudyRunComparison = {
@@ -373,7 +380,7 @@ export async function getStudyRunComparison(
   }
   const selectedIds = [...new Set([leftRun.id, rightRun.id])];
 
-  const [tasksResult, decisionsResult, artifactsResult, eventsResult, skillsResult] = await Promise.all([
+  const [tasksResult, decisionsResult, artifactsResult, eventsResult, skillsResult, trajectoryResult] = await Promise.all([
     database.query<{
       run_id: string; task_key: string; title: string; tool_name: string; status: string;
       origin: string; generation: number; attempt: number; output_hash: string;
@@ -411,6 +418,17 @@ export async function getStudyRunComparison(
        from study_tool_invocations
        where run_id = any($1::bigint[]) and skill_slug is not null and skill_version is not null
        order by run_id, skill_slug, skill_version`,
+      [selectedIds],
+    ),
+    database.query<{
+      run_id: string; public_id: string; evaluator_version: string; controller_mode: "off" | "shadow" | "active";
+      metrics: JsonObject | string; created_at: string;
+    }>(
+      `select run_id::text as run_id, public_id, evaluator_version, controller_mode, metrics,
+              created_at::text as created_at
+       from research_agent_trajectory_evaluations
+       where run_id = any($1::bigint[])
+       order by run_id, created_at desc, id desc`,
       [selectedIds],
     ),
   ]);
@@ -519,6 +537,16 @@ export async function getStudyRunComparison(
       timeline: eventsResult.rows.filter((row) => row.run_id === run.id).map((event) => ({
         id: event.id, type: event.event_type, createdAt: event.created_at,
       })),
+      trajectoryEvaluation: (() => {
+        const evaluation = trajectoryResult.rows.find((row) => row.run_id === run.id);
+        return evaluation ? {
+          publicId: evaluation.public_id,
+          evaluatorVersion: evaluation.evaluator_version,
+          controllerMode: evaluation.controller_mode,
+          metrics: parseJson(evaluation.metrics),
+          createdAt: evaluation.created_at,
+        } : null;
+      })(),
     };
   };
 
