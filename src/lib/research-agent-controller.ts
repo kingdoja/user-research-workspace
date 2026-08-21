@@ -108,6 +108,7 @@ export async function resolveResearchAgentRollout(input: {
      join study_runs run on run.id = evaluation.run_id
      where evaluation.workspace_id = $1 and run.strategy_key = $2
        and evaluation.evaluator_version = 'research-agent-trajectory-v1'
+       and evaluation.metrics->>'executionSource' = 'worker'
      order by evaluation.created_at desc, evaluation.id desc
      limit $3`,
     [input.workspaceId, input.strategyKey, minRuns],

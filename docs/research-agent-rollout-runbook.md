@@ -55,6 +55,10 @@ GET /api/experiments/{experimentPublicId}/status
 响应会返回每个 variant 的样本数、原始 trajectory 指标、允许模板和当前 quality gate
 判断，便于在切换 `active` 前留下可复核记录。
 
+其中 `sampleCount` / `productionWorkerSampleCount` 只统计正式 `study_job_queue` worker
+写入的 trajectory（`executionSource=worker`）；`localProbeCount` 单独报告本地
+Harness 直连 probe，不能用于 active 晋级。
+
 命令行也可以从部署环境直接检查同一状态：
 
 ```bash

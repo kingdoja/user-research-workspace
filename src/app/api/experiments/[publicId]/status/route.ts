@@ -57,9 +57,21 @@ export async function GET(
          and run.strategy_key = $2
          and run.strategy_version = $3
          and evaluation.evaluator_version = 'research-agent-trajectory-v1'
+         and evaluation.metrics->>'executionSource' = 'worker'
        order by evaluation.created_at desc, evaluation.id desc
        limit $4`,
       [viewer.workspaceId, variant.variant_key, variant.strategy_version, limit],
+    );
+    const localProbe = await database.query<{ count: number }>(
+      `select count(*)::int as count
+       from research_agent_trajectory_evaluations evaluation
+       join study_runs run on run.id = evaluation.run_id
+       where evaluation.workspace_id = $1
+         and run.strategy_key = $2
+         and run.strategy_version = $3
+         and evaluation.evaluator_version = 'research-agent-trajectory-v1'
+         and evaluation.metrics->>'executionSource' = 'local_harness_probe'`,
+      [viewer.workspaceId, variant.variant_key, variant.strategy_version],
     );
     const metrics = trajectory.rows.map((item) => typeof item.metrics === "string" ? JSON.parse(item.metrics) as Record<string, unknown> : item.metrics);
     const quality = assessResearchAgentRolloutQuality({ metrics, strategyConfig: config });
@@ -71,6 +83,8 @@ export async function GET(
       controllerMode: typeof config.agentControllerMode === "string" ? config.agentControllerMode : "off",
       allowedTemplates: Array.isArray(config.agentControllerAllowedTemplates) ? config.agentControllerAllowedTemplates : null,
       sampleCount: metrics.length,
+      productionWorkerSampleCount: metrics.length,
+      localProbeCount: localProbe.rows[0]?.count ?? 0,
       quality,
       metrics,
     };

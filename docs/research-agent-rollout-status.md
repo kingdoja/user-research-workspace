@@ -1,6 +1,6 @@
 # Research Agent Rollout Status
 
-更新时间：2026-08-19
+更新时间：2026-08-21
 
 ## 当前状态
 
@@ -12,7 +12,18 @@
 - Controller mode：`shadow`
 - 允许模板：`targeted_research`
 - 动态任务额度：`2`
+- 生产 worker rollout 样本：`0`（run `37` 是 `local_harness_probe`，不计入晋级样本）
+- 本地 Harness probe：`1`（run `37`，`completed`，13 次 Controller 决策全部匹配，Controller failure `0`，policy reject `0`，report gate 通过）
+- 最终报告：评审 `revise`，已执行修订并定稿（评分 `68`）
 - `active` 质量门槛：failure `<= 10%`、policy reject `<= 60%`、tool match `>= 80%`、template match `>= 80%`、report gate 必须通过
+
+## Provider 验证
+
+- 报告阶段已切换为 `deepseek/deepseek-v4-pro`，report + judge smoke 已通过。
+- yundu 兼容性探针已覆盖 `sol`、`sol-3.0`、`sol-3`、`gpt-5.6-terra` 和 `gpt-4o-mini`。
+- 2026-08-21 从当前环境访问 `https://yundu.lat/v1` 时，`/models` 与全部 chat-completions
+  请求均在网络层超时/不可达，没有返回 HTTP 状态；因此当前证据不足以判断 yundu 是否只支持
+  `sol`，端点恢复后运行 `pnpm probe:yundu-models` 再确认。
 
 ## 影响范围
 
@@ -22,7 +33,7 @@
 
 ## 下一步观察
 
-收集至少 3 个完整运行后检查 trajectory summary：
+还需通过正式 `study_job_queue` worker 收集至少 3 个同条件下的完整运行后检查 trajectory summary。CLI 和管理接口只统计 `executionSource=worker` 的记录；本地 Harness probe 仅用于开发验证：
 
 1. Controller failure、policy reject、tool match、template match。
 2. 动态任务提议是否触及额度，是否出现重复或无效证据检索。

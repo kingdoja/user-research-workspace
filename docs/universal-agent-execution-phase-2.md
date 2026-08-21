@@ -15,6 +15,8 @@
 - 执行确认文案从“Skill”调整为“能力”，覆盖外部 Skill 和原生产品工具。
 - 新增 `universal-agent-product-tools-smoke`，覆盖产品能力目录、输入校验和副作用授权门槛。
 - 扩展隔离 Universal Agent smoke，校验 SSE 所需的步骤 ID 单调性、Run 过滤和工作区隔离查询；已在本机 Docker PostgreSQL 临时库通过。
+- 新增默认关闭的 `/qa-agent-console` 运行态 fixture；仅在 `ENABLE_QA_ROUTES=1` 时开放，供真实组件做浏览器验收，生产与普通开发启动均返回 404。
+- 浏览器验收已覆盖桌面端能力目录、执行确认交互，以及 390x844 移动端布局；六个原生工具均可见，移动端无横向溢出或控件重叠。
 
 ## 事件边界
 

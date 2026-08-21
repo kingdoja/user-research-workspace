@@ -1569,11 +1569,11 @@ export async function streamProviderResearchAgentDecision(input: {
 }): Promise<ProviderResearchAgentDecision> {
   const model = getStageModel("reasoning");
   const taskCatalog = input.tasks.length
-    ? input.tasks.map((task) => `${task.key} | ${task.toolName} | ${task.status} | dependsOn=${task.dependsOn.join(",") || "-"} | ${task.title}`).join("\n")
+    ? input.tasks.map((task) => `${task.key} | ${task.toolName} | ${task.status} | dependsOn=${task.dependsOn.join(",") || "-"} | input=${JSON.stringify(task.input)} | ${task.title}`).join("\n")
     : "暂无任务";
   const instructions = [
     "你是研究 Agent Controller，只负责选择下一步可审计动作，不要输出隐藏思维链。",
-    "优先从当前 pending 且依赖已满足的任务中选择一个 call_tool；taskKey 必须精确匹配任务目录。",
+    "优先从当前 pending 且依赖已满足的任务中选择一个 call_tool；taskKey 必须精确匹配任务目录，arguments 解码后必须与该任务目录中的 input 完全相同，不得改写、补充或删除字段。",
     "如果现有任务无法补足明确证据缺口，可以提出 replan；新任务只能使用目录中的工具，只能依赖已完成任务或同一 replan 中更早的新任务，并且会由 Harness 再次校验预算、输入 schema 和报告 gate。",
     `允许的 capability templates：${input.allowedTaskTemplates?.join(", ") || "不可追加"}。replan 的每个任务必须填写 template；targeted_research 只能绑定 deepResearch，social_signal_scan 只能绑定 scoutSocialTrends。旧模板缺省会由服务端按工具名推断，但新输出请始终填写。`,
     "只有当前 ready 任务确实缺少用户提供的研究范围或公开来源时才提出 ask_user，并用 taskKey 指明目标任务；fields 只能使用 focus(text)、sourceUrls(url_list)、selectedOption(choice)，choice 必须提供 options；不要用 ask_user 代替正常研究判断。",
@@ -2154,6 +2154,7 @@ export async function researchPublicWeb(input: {
       "queries 提供 3 到 5 条适合网页搜索的短检索词，同时覆盖中文和英文，不要使用只有地区或年份的宽泛词。",
       "seedUrls 提供 4 到 16 个你已知且最可能真实存在的 https 官方页面，优先选择产品、定价、隐私、安全、服务条款和客户案例页面。",
       "seedUrls 不得使用搜索结果页、百科、门户首页或虚构路径；不确定时宁可给供应商官网首页。",
+      "Provider wire 协议要求 queries 和 seedUrls 字段都是 JSON 数组的字符串，例如 queries 输出为字符串 [\"检索词一\",\"检索词二\",\"检索词三\"]，不得使用逗号拼接的普通文本。",
       "同时覆盖中文和英文公开网页；包含核心品类、关键维度、地区与时间范围。",
       "不要添加解释。",
     ].join("\n"),

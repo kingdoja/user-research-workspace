@@ -18,6 +18,7 @@
     "smoke:report-routing": "tsx scripts/report-routing-smoke.ts",
     "smoke:research-report-v2": "tsx scripts/research-report-v2-smoke.ts",
     "smoke:report-provider": "tsx scripts/report-provider-smoke.ts",
+    "probe:yundu-models": "tsx scripts/yundu-model-probe.ts",
     "smoke:api-access": "tsx scripts/api-access-smoke.ts",
     "smoke:platform-control": "tsx scripts/platform-control-smoke.ts",
     "smoke:universal-agent": "tsx scripts/universal-agent-smoke.ts",

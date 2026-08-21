@@ -7,6 +7,7 @@ type JsonValue = Record<string, unknown> | string | null;
 type EventRow = { id: string; event_type: string; payload: JsonValue; created_at: string };
 
 export type ResearchAgentTrajectoryMetrics = {
+  executionSource: "worker" | "local_harness_probe";
   runStatus: string;
   decisionCount: number;
   controllerTurnCount: number;
@@ -100,6 +101,7 @@ export async function evaluateResearchAgentTrajectory(queryable: Queryable, inpu
   studyId: string;
   runId: string;
   controllerMode?: "off" | "shadow" | "active";
+  executionSource?: "worker" | "local_harness_probe";
   evaluatorVersion?: string;
 }): Promise<ResearchAgentTrajectoryEvaluation> {
   const evaluatorVersion = input.evaluatorVersion ?? RESEARCH_AGENT_TRAJECTORY_EVALUATOR_VERSION;
@@ -144,6 +146,7 @@ export async function evaluateResearchAgentTrajectory(queryable: Queryable, inpu
   const finished = run.finished_at ? new Date(run.finished_at).getTime() : null;
   const durationMs = started !== null && finished !== null ? Math.max(0, finished - started) : null;
   const metrics: ResearchAgentTrajectoryMetrics = {
+    executionSource: input.executionSource ?? "local_harness_probe",
     runStatus: run.status,
     decisionCount: proposals.length,
     controllerTurnCount: turns.length,

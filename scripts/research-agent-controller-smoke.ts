@@ -77,6 +77,10 @@ assert.deepEqual(wireCallToolParsed, {
   toolName: "deepResearch",
   arguments: { focus: "证据" },
 });
+assert.equal(
+  validateResearchAgentAction({ action: wireCallToolParsed, tasks, completedStateKeys: ["design"] }).accepted,
+  true,
+);
 
 const mismatch: AgentAction = { ...accepted, toolName: "searchPersonas" };
 const mismatchResult = validateResearchAgentAction({ action: mismatch, tasks, completedStateKeys: ["design"] });

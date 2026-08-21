@@ -26,7 +26,13 @@ async function main() {
       await transaction.query(`insert into study_events (study_id, run_id, event_type, payload, created_at) values ($1, $2, 'agent.turn.started', '{"turnId":"turn_1"}', now() - interval '3 seconds'), ($1, $2, 'agent.action.proposed', '{"action":{"type":"call_tool","taskKey":"research","toolName":"deepResearch"}}', now() - interval '2 seconds'), ($1, $2, 'dag.wave.started', '{"taskKeys":["research"]}', now() - interval '1 seconds'), ($1, $2, 'agent.turn.completed', '{"turnId":"turn_1"}', now() - interval '500 milliseconds'), ($1, $2, 'agent.action.rejected', '{"reason":"tool_not_allowed"}', now() - interval '400 milliseconds'), ($1, $2, 'run.tasks.recovered', '{}', now() - interval '300 milliseconds'), ($1, $2, 'agent.run.waiting_input', '{}', now() - interval '200 milliseconds')`, [study.rows[0].id, run.rows[0].id]);
       return { studyId: study.rows[0].id, runId: run.rows[0].id };
     });
-    const evaluation = await evaluateResearchAgentTrajectory(database, { ...seeded, workspaceId: workspaceId!, controllerMode: "shadow" });
+    const evaluation = await evaluateResearchAgentTrajectory(database, {
+      ...seeded,
+      workspaceId: workspaceId!,
+      controllerMode: "shadow",
+      executionSource: "worker",
+    });
+    assert.equal(evaluation.metrics.executionSource, "worker");
     assert.equal(evaluation.metrics.decisionCount, 1);
     assert.equal(evaluation.metrics.policyRejectRate, 1);
     assert.equal(evaluation.metrics.callToolMatchRate, 1);

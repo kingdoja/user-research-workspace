@@ -54,9 +54,21 @@ async function main() {
            and run.strategy_key = $2
            and run.strategy_version = $3
            and evaluation.evaluator_version = 'research-agent-trajectory-v1'
+           and evaluation.metrics->>'executionSource' = 'worker'
          order by evaluation.created_at desc, evaluation.id desc
          limit $4`,
         [workspaceId, variant.variant_key, variant.strategy_version, limit],
+      );
+      const localProbe = await database.query<{ count: number }>(
+        `select count(*)::int as count
+         from research_agent_trajectory_evaluations evaluation
+         join study_runs run on run.id = evaluation.run_id
+         where evaluation.workspace_id = $1
+           and run.strategy_key = $2
+           and run.strategy_version = $3
+           and evaluation.evaluator_version = 'research-agent-trajectory-v1'
+           and evaluation.metrics->>'executionSource' = 'local_harness_probe'`,
+        [workspaceId, variant.variant_key, variant.strategy_version],
       );
       const metrics = trajectory.rows.map((row) => typeof row.metrics === "string" ? JSON.parse(row.metrics) as Record<string, unknown> : row.metrics);
       return {
@@ -67,6 +79,8 @@ async function main() {
         controllerMode: config.agentControllerMode ?? "off",
         allowedTemplates: config.agentControllerAllowedTemplates ?? null,
         sampleCount: metrics.length,
+        productionWorkerSampleCount: metrics.length,
+        localProbeCount: localProbe.rows[0]?.count ?? 0,
         quality: assessResearchAgentRolloutQuality({ metrics, strategyConfig: config }),
         metrics,
       };

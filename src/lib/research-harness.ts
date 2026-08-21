@@ -2184,7 +2184,9 @@ async function materializeStudy(study: HarnessStudy, state: HarnessState) {
   });
 }
 
-export async function runStudyHarness(runId: string) {
+export async function runStudyHarness(runId: string, options: {
+  executionSource?: "worker" | "local_harness_probe";
+} = {}) {
   const study = await loadHarnessStudy(runId);
   if (!study) return "not_found" as const;
   if (study.runStatus === "completed") return "completed" as const;
@@ -2536,6 +2538,7 @@ export async function runStudyHarness(runId: string) {
       studyId: study.studyId,
       runId: study.runId,
       controllerMode: agentControllerMode,
+      executionSource: options.executionSource ?? "local_harness_probe",
     });
     const runTokens = Object.values(state).reduce<number>((sum, item) => {
       if (!item || typeof item !== "object" || !("usage" in item)) return sum;
@@ -2748,7 +2751,7 @@ export async function processStudyJobQueue(options: {
       ).then(() => renewProviderRuntimeSlot(job.run_id, workerId)).catch(() => undefined);
     }, 60_000);
     try {
-      const result = await runStudyHarness(job.run_id);
+      const result = await runStudyHarness(job.run_id, { executionSource: "worker" });
       if (result === "cancelled") {
         await database.query(
           `update study_job_queue set status = 'cancelled', lease_owner = null,

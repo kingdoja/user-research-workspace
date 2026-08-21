@@ -22,6 +22,9 @@ function isProtectedRoute(pathname: string) {
 }
 
 export async function proxy(request: NextRequest) {
+  if (request.nextUrl.pathname === "/qa-agent-console" && process.env.ENABLE_QA_ROUTES !== "1") {
+    return new NextResponse(null, { status: 404 });
+  }
   let response = NextResponse.next({ request });
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -76,6 +79,7 @@ export const config = {
     "/panel/:path*",
     "/persona/:path*",
     "/platform/:path*",
+    "/qa-agent-console",
     "/skills/:path*",
     "/studies/:path*",
     "/study/:path*",
