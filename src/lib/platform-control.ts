@@ -676,6 +676,10 @@ export async function resolveProviderRoute(input: {
   decisionPublicId: string;
   override: ProviderRouteOverride;
   selectionReason: string;
+  estimatedInputTokens: number;
+  estimatedOutputTokens: number;
+  inputPriceMicrosPerMillion: number;
+  outputPriceMicrosPerMillion: number;
 }> {
   const runtimeKind = input.runtimeKind ?? "study";
   const runColumn = runtimeKind === "agent" ? "agent_run_id" : "run_id";
@@ -776,6 +780,10 @@ export async function resolveProviderRoute(input: {
     decisionId: decision.rows[0].id,
     decisionPublicId: decision.rows[0].public_id,
     selectionReason,
+    estimatedInputTokens: policy.estimated_input_tokens,
+    estimatedOutputTokens: policy.estimated_output_tokens,
+    inputPriceMicrosPerMillion: Number(selected.input_price_micros_per_million),
+    outputPriceMicrosPerMillion: Number(selected.output_price_micros_per_million),
     override: {
       stage: input.stage, providerName: selected.provider_name, model: selected.model,
       protocol: selected.protocol,

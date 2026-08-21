@@ -9,12 +9,16 @@
 - 实验 public id：`exp_6a5746146c9c4c2bbccd5112fe4f58d4`
 - workflow：`batch_research`
 - variant：`shadow`，权重 `100`
-- Controller mode：`shadow`
+- Controller mode：`active`（受控 canary）
 - 允许模板：`targeted_research`
 - 动态任务额度：`2`
-- 生产 worker rollout 样本：`1`（run `38`，`completed`，由 `study_job_queue` worker 执行）
+- 生产 worker rollout 样本：`3`（run `38`、`40`、`41`，均 `completed`，由 `study_job_queue` worker 执行）
 - 本地 Harness probe：历史 run `37` 已完成，但创建时未写入 `executionSource` 字段，因此当前 CLI 不将其计入 probe 统计；它不计入正式晋级样本。
 - run `38` trajectory：5 次 Controller 决策，Controller failure `0`，policy reject `0`，tool match `100%`，template match `100%`，report gate 通过，动态任务 `0`。
+- run `40` trajectory：10 次 Controller 决策，Controller failure `0`，policy reject `0`，tool match `100%`，template match `100%`，report gate 通过，动态任务 `0`。
+- run `41` trajectory：11 次 Controller 决策，Controller failure `0`，policy reject `0`，tool match `100%`，template match `100%`，report gate 通过，动态任务 `0`。
+- active canary run `42`：`completed`，`controller_mode=active`，13 次 Controller 决策，Controller failure `0`，policy reject `0`，tool match `100%`，template match `100%`，report gate 通过，动态任务 `0`。权重仍为 `100`，未扩大模板或动态任务范围。
+- run `39` 曾因同一 connector audit 返回重复 canonical URL 触发唯一约束失败；已在 source connector audit 物化前增加确定性去重，并由 run `40` 验证修复。该失败 run 不计入成功质量样本，但保留作为稳定性事件。
 - 最终报告：评审 `revise`，已执行修订并定稿（评分 `68`）
 - `active` 质量门槛：failure `<= 10%`、policy reject `<= 60%`、tool match `>= 80%`、template match `>= 80%`、report gate 必须通过
 
@@ -34,7 +38,7 @@
 
 ## 下一步观察
 
-还需通过正式 `study_job_queue` worker 再收集至少 2 个同条件下的完整运行后检查 trajectory summary（当前 `1/3`）。CLI 和管理接口只统计 `executionSource=worker` 的记录；本地 Harness probe 仅用于开发验证：
+正式 shadow 样本门槛已满足（`3/3`），首个 active canary 也已通过。当前保持受控 active：权重 `100`、模板白名单 `targeted_research`、动态任务额度 `2` 均不变。后续每个 active worker run 继续复核 trajectory；出现 controller failure、policy reject、tool/template mismatch、report gate 或恢复异常时，立即回滚到 `shadow`。CLI 和管理接口只统计 `executionSource=worker` 的记录；本地 Harness probe 仅用于开发验证：
 
 1. Controller failure、policy reject、tool match、template match。
 2. 动态任务提议是否触及额度，是否出现重复或无效证据检索。

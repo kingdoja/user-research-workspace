@@ -18,8 +18,22 @@ type AgentStepEvent = {
   finished_at: string | null;
 };
 
+const MAX_SSE_OUTPUT_BYTES = 16_384;
+
+function summarizeOutput(output: Record<string, unknown> | null) {
+  if (!output) return output;
+  const bytes = Buffer.byteLength(JSON.stringify(output), "utf8");
+  if (bytes <= MAX_SSE_OUTPUT_BYTES) return output;
+  const summaryKeys = ["status", "resourceType", "resourcePublicId", "href", "summary", "nextAction", "error"];
+  return {
+    ...Object.fromEntries(summaryKeys.flatMap((key) => key in output ? [[key, output[key]]] : [])),
+    truncated: true,
+    originalByteSize: bytes,
+  };
+}
+
 function toSse(event: AgentStepEvent) {
-  const output = typeof event.output === "string" ? JSON.parse(event.output) : event.output;
+  const parsedOutput = typeof event.output === "string" ? JSON.parse(event.output) as Record<string, unknown> : event.output;
   return `id: ${event.id}\nevent: agent-step\ndata: ${JSON.stringify({
     id: event.id,
     runPublicId: event.run_public_id,
@@ -28,7 +42,7 @@ function toSse(event: AgentStepEvent) {
     sequence: event.sequence,
     summary: event.decision_summary,
     toolName: event.tool_name,
-    output,
+    output: summarizeOutput(parsedOutput),
     errorCode: event.error_code,
     createdAt: event.created_at,
     finishedAt: event.finished_at,
@@ -85,7 +99,7 @@ export async function GET(request: Request, context: { params: Promise<{ publicI
               "select status from agent_runs where public_id = $1 and thread_id = $2 limit 1",
               [runPublicId, thread.id],
             );
-            if (["completed", "failed", "cancelled"].includes(runStatus.rows[0]?.status ?? "")) break;
+            if (["completed", "failed", "blocked", "cancelled"].includes(runStatus.rows[0]?.status ?? "")) break;
           }
           await new Promise((resolve) => setTimeout(resolve, 700));
         }

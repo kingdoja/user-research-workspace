@@ -299,12 +299,77 @@ async function main() {
       database.query("update agent_run_skill_bindings set skill_version = 2 where id = $1", [audit.rows[0].binding_id]),
       /AGENT_RUN_SKILL_BINDING_IMMUTABLE/,
     );
+
+    const limitedThread = await createAgentThread(viewer, { title: "Tool limit governance" });
+    assert.equal(typeof limitedThread, "object");
+    if (typeof limitedThread !== "object") throw new Error(`Limited thread failed: ${limitedThread}`);
+    const limitedRun = await sendAgentMessage(viewer, limitedThread.publicId, {
+      content: "Attempt a Skill call after the per-run tool quota is exhausted.",
+      skillPublicIds: [imported.publicId],
+      externalExecutionAllowed: true,
+      requestId: `smoke:${suffix}:tool-limit`,
+    }, { maxSteps: 2, maxToolCalls: 0, maxExternalToolCalls: 0 });
+    assert.equal(typeof limitedRun, "object");
+    if (typeof limitedRun !== "object" || "error" in limitedRun) throw new Error(`Limited run failed: ${JSON.stringify(limitedRun)}`);
+    assert.equal(await processAgentRunQueue({
+      workerId: `universal-agent-smoke:${suffix}:tool-limit`,
+      maxRuns: 1,
+      runPublicId: limitedRun.runPublicId,
+      decide: async () => ({
+        decisionSummary: "Try the bound Skill.", action: "execute_skill" as const,
+        message: "Executing.", path: null, content: null, skillPublicId: imported.publicId,
+        argumentsJson: JSON.stringify({ value: "must-not-run" }),
+        usage: { input_tokens: 50, output_tokens: 20 }, model: "gpt-agent-smoke",
+        promptVersion: "smoke", responseId: "resp-tool-limit",
+      }),
+    }), 1);
+    const limitedAudit = await database.query<{
+      status: string; error_code: string; tool_calls_used: number; external_tool_calls_used: number;
+    }>(
+      `select status, error_code, tool_calls_used, external_tool_calls_used
+       from agent_runs where public_id = $1`,
+      [limitedRun.runPublicId],
+    );
+    assert.deepEqual(limitedAudit.rows[0], {
+      status: "blocked", error_code: "AGENT_TOOL_CALL_LIMIT_EXCEEDED",
+      tool_calls_used: 0, external_tool_calls_used: 0,
+    });
+    assert.equal(requests.length, 1, "blocked Skill call must not reach the sandbox runner");
+
+    const budgetThread = await createAgentThread(viewer, { title: "Token budget governance" });
+    assert.equal(typeof budgetThread, "object");
+    if (typeof budgetThread !== "object") throw new Error(`Budget thread failed: ${budgetThread}`);
+    const budgetRun = await sendAgentMessage(viewer, budgetThread.publicId, {
+      content: "Do not start a model turn that cannot fit inside the token budget.",
+      skillPublicIds: [], externalExecutionAllowed: false, requestId: `smoke:${suffix}:token-budget`,
+    }, { maxSteps: 2, tokenBudget: 100 });
+    assert.equal(typeof budgetRun, "object");
+    if (typeof budgetRun !== "object" || "error" in budgetRun) throw new Error(`Budget run failed: ${JSON.stringify(budgetRun)}`);
+    let budgetDecisionCalls = 0;
+    assert.equal(await processAgentRunQueue({
+      workerId: `universal-agent-smoke:${suffix}:token-budget`, maxRuns: 1, runPublicId: budgetRun.runPublicId,
+      decide: async () => {
+        budgetDecisionCalls += 1;
+        throw new Error("Token preflight should block before provider invocation");
+      },
+    }), 1);
+    assert.equal(budgetDecisionCalls, 0);
+    const budgetAudit = await database.query<{ status: string; error_code: string; input_tokens_used: string; output_tokens_used: string }>(
+      `select status, error_code, input_tokens_used::text as input_tokens_used,
+              output_tokens_used::text as output_tokens_used from agent_runs where public_id = $1`,
+      [budgetRun.runPublicId],
+    );
+    assert.deepEqual(budgetAudit.rows[0], {
+      status: "blocked", error_code: "AGENT_TOKEN_BUDGET_EXCEEDED",
+      input_tokens_used: "0", output_tokens_used: "0",
+    });
     console.log(JSON.stringify({
       sandboxPackageV2: true, explicitCodeGrant: true, exactSkillBinding: true,
       sandboxRunnerProtocol: "atypica.sandbox/v1", persistentWorkspace: workspace.files[0].path,
       providerRoutingLedger: true, crossWorkspaceIsolation: true, privateSkillIsolation: true,
       idempotentQueue: true, oneActiveRunPerThread: true, claimedSetupFailureRecovered: true,
       sseRunCursorOrdering: true, sseRunFilter: true, sseWorkspaceIsolation: true,
+      toolCallGovernance: true, tokenBudgetPreflight: true, blockedRunAudit: true,
     }, null, 2));
   } finally {
     for (const workspaceId of workspaceIds) await database.query("delete from workspaces where id = $1", [workspaceId]);

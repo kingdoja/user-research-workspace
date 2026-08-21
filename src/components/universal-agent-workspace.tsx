@@ -56,6 +56,7 @@ function runStatusLabel(status: AgentWorkspaceData["recentRuns"][number]["status
   if (status === "running") return "运行中";
   if (status === "completed") return "完成";
   if (status === "failed") return "失败";
+  if (status === "blocked") return "已阻断";
   if (status === "cancelled") return "取消";
   return "待运行";
 }
@@ -324,7 +325,8 @@ export function UniversalAgentWorkspace({
             <article className="agent-run-row" key={run.publicId}>
               <span className={run.status}>{runStatusLabel(run.status)}</span>
               <strong>{run.publicId}</strong>
-              <small>{run.stepsUsed}/{run.maxSteps} steps · {run.externalExecutionAllowed ? "Skill confirmed" : "files only"}</small>
+              <small>{run.stepsUsed}/{run.maxSteps} steps · {run.toolCallsUsed}/{run.maxToolCalls} tools</small>
+              <small>{run.tokensUsed}/{run.tokenBudget} tokens · {run.costMicrosUsed}/{run.maxCostMicros} μ$</small>
             </article>
           )) : null}
           {rightTab === "runs" && !initialWorkspace.recentRuns.length ? <div className="agent-resource-empty"><Play size={21} /><span>暂无 Run</span></div> : null}

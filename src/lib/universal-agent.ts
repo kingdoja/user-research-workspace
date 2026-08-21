@@ -47,7 +47,7 @@ export type UniversalAgentWorkspace = {
     status: "active" | "archived";
     updatedAt: string;
     lastMessage: string | null;
-    lastRunStatus: "queued" | "running" | "completed" | "failed" | "cancelled" | null;
+    lastRunStatus: "queued" | "running" | "completed" | "failed" | "blocked" | "cancelled" | null;
   }>;
   selectedThreadPublicId: string | null;
   messages: Array<{
@@ -76,9 +76,19 @@ export type UniversalAgentWorkspace = {
   recentRuns: Array<{
     publicId: string;
     threadPublicId: string;
-    status: "queued" | "running" | "completed" | "failed" | "cancelled";
+    status: "queued" | "running" | "completed" | "failed" | "blocked" | "cancelled";
     stepsUsed: number;
     maxSteps: number;
+    toolCallsUsed: number;
+    maxToolCalls: number;
+    productToolCallsUsed: number;
+    maxProductToolCalls: number;
+    externalToolCallsUsed: number;
+    maxExternalToolCalls: number;
+    tokensUsed: number;
+    tokenBudget: number;
+    costMicrosUsed: number;
+    maxCostMicros: number;
     externalExecutionAllowed: boolean;
     startedAt: string;
   }>;
@@ -115,6 +125,17 @@ type BoundAgentSkill = {
 
 const AGENT_RUN_LEASE_MS = 5 * 60_000;
 const AGENT_RUN_HEARTBEAT_MS = 60_000;
+
+class AgentRunBlockedError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly sequence: number,
+  ) {
+    super(message);
+    this.name = "AgentRunBlockedError";
+  }
+}
 
 function jsonValue<T>(value: T | string): T {
   return typeof value === "string" ? JSON.parse(value) as T : value;
@@ -160,10 +181,25 @@ function executionPolicy(config: z.infer<typeof skillExecutorConfigSchema>, gran
 function tokenUsage(usage: unknown) {
   if (!usage || typeof usage !== "object") return { input_tokens: 0, output_tokens: 0 };
   const value = usage as Record<string, unknown>;
-  return {
-    input_tokens: Number(value.input_tokens ?? value.prompt_tokens ?? 0) || 0,
-    output_tokens: Number(value.output_tokens ?? value.completion_tokens ?? 0) || 0,
+  const normalize = (candidate: unknown) => {
+    const parsed = Number(candidate);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 0;
   };
+  return {
+    input_tokens: normalize(value.input_tokens ?? value.prompt_tokens),
+    output_tokens: normalize(value.output_tokens ?? value.completion_tokens),
+  };
+}
+
+function providerCostMicros(inputTokens: number, outputTokens: number, route: {
+  inputPriceMicrosPerMillion: number;
+  outputPriceMicrosPerMillion: number;
+} | null) {
+  if (!route) return 0;
+  return Math.max(0, Math.round((
+    route.inputPriceMicrosPerMillion * inputTokens
+    + route.outputPriceMicrosPerMillion * outputTokens
+  ) / 1_000_000));
 }
 
 export async function listUniversalAgentWorkspace(
@@ -217,10 +253,21 @@ export async function listUniversalAgentWorkspace(
     ),
     database.query<{
       public_id: string; thread_public_id: string; status: UniversalAgentWorkspace["recentRuns"][number]["status"];
-      steps_used: number; max_steps: number; external_execution_allowed: boolean; started_at: string;
+      steps_used: number; max_steps: number; tool_calls_used: number; max_tool_calls: number;
+      product_tool_calls_used: number; max_product_tool_calls: number;
+      external_tool_calls_used: number; max_external_tool_calls: number;
+      input_tokens_used: string; output_tokens_used: string; token_budget: string;
+      cost_micros_used: string; max_cost_micros: string;
+      external_execution_allowed: boolean; started_at: string;
     }>(
       `select run.public_id, thread.public_id as thread_public_id, run.status, run.steps_used,
-              run.max_steps, run.external_execution_allowed, run.started_at::text as started_at
+              run.max_steps, run.tool_calls_used, run.max_tool_calls,
+              run.product_tool_calls_used, run.max_product_tool_calls,
+              run.external_tool_calls_used, run.max_external_tool_calls,
+              run.input_tokens_used::text as input_tokens_used, run.output_tokens_used::text as output_tokens_used,
+              run.token_budget::text as token_budget, run.cost_micros_used::text as cost_micros_used,
+              run.max_cost_micros::text as max_cost_micros,
+              run.external_execution_allowed, run.started_at::text as started_at
        from agent_runs run join agent_threads thread on thread.id = run.thread_id
        where run.workspace_id = $1 order by run.started_at desc, run.id desc limit 30`,
       [viewer.workspaceId],
@@ -263,6 +310,11 @@ export async function listUniversalAgentWorkspace(
     recentRuns: runsResult.rows.map((row) => ({
       publicId: row.public_id, threadPublicId: row.thread_public_id, status: row.status,
       stepsUsed: row.steps_used, maxSteps: row.max_steps,
+      toolCallsUsed: row.tool_calls_used, maxToolCalls: row.max_tool_calls,
+      productToolCallsUsed: row.product_tool_calls_used, maxProductToolCalls: row.max_product_tool_calls,
+      externalToolCallsUsed: row.external_tool_calls_used, maxExternalToolCalls: row.max_external_tool_calls,
+      tokensUsed: Number(row.input_tokens_used) + Number(row.output_tokens_used), tokenBudget: Number(row.token_budget),
+      costMicrosUsed: Number(row.cost_micros_used), maxCostMicros: Number(row.max_cost_micros),
       externalExecutionAllowed: row.external_execution_allowed, startedAt: row.started_at,
     })),
   };
@@ -570,11 +622,23 @@ export async function sendAgentMessage(
   viewer: Viewer,
   threadPublicId: string,
   input: z.infer<typeof sendAgentMessageInputSchema>,
-  options?: { maxSteps?: number },
+  options?: {
+    maxSteps?: number;
+    maxToolCalls?: number;
+    maxProductToolCalls?: number;
+    maxExternalToolCalls?: number;
+    tokenBudget?: number;
+    maxCostMicros?: number;
+  },
 ) {
   if (viewer.role === "viewer") return "forbidden" as const;
   const database = await getDatabase();
   const maxSteps = Math.min(12, Math.max(1, options?.maxSteps ?? 6));
+  const maxToolCalls = Math.min(24, Math.max(0, options?.maxToolCalls ?? maxSteps));
+  const maxProductToolCalls = Math.min(24, Math.max(0, options?.maxProductToolCalls ?? Math.min(4, maxToolCalls)));
+  const maxExternalToolCalls = Math.min(24, Math.max(0, options?.maxExternalToolCalls ?? Math.min(2, maxToolCalls)));
+  const tokenBudget = Math.min(1_000_000, Math.max(1, options?.tokenBudget ?? 100_000));
+  const maxCostMicros = Math.min(1_000_000_000, Math.max(1, options?.maxCostMicros ?? 1_000_000));
   const requestId = input.requestId ?? createPublicId("req");
   return database.transaction(async (transaction) => {
     const thread = await transaction.query<{ id: string }>(
@@ -605,12 +669,14 @@ export async function sendAgentMessage(
     const run = await transaction.query<{ id: string; public_id: string }>(
       `insert into agent_runs (
          public_id, workspace_id, thread_id, initiated_by, user_message_id, objective,
-         status, max_steps, external_execution_allowed, idempotency_key
-       ) values ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, $9)
+         status, max_steps, max_tool_calls, max_product_tool_calls, max_external_tool_calls,
+         token_budget, max_cost_micros, external_execution_allowed, idempotency_key
+       ) values ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, $9, $10, $11, $12, $13, $14)
        returning id::text as id, public_id`,
       [
         createPublicId("agr"), viewer.workspaceId, thread.rows[0].id, viewer.userId,
-        message.rows[0].id, input.content, maxSteps, input.externalExecutionAllowed, requestId,
+        message.rows[0].id, input.content, maxSteps, maxToolCalls, maxProductToolCalls,
+        maxExternalToolCalls, tokenBudget, maxCostMicros, input.externalExecutionAllowed, requestId,
       ],
     );
     await bindAgentSkills(transaction, viewer, run.rows[0].id, input.skillPublicIds);
@@ -751,6 +817,58 @@ async function failClaimedAgentRun(input: {
   return true;
 }
 
+async function blockClaimedAgentRun(input: {
+  queryable: Queryable;
+  runId: string;
+  workerId: string;
+  threadId: string;
+  runPublicId: string;
+  route: Awaited<ReturnType<typeof resolveProviderRoute>>;
+  routeUsage: { input_tokens: number; output_tokens: number };
+  routeStartedAt: number;
+  error: AgentRunBlockedError;
+}) {
+  const blocked = await input.queryable.query<{ id: string }>(
+    `update agent_runs set status = 'blocked', error_code = $3, error_message = $4,
+       steps_used = least(max_steps, greatest(steps_used, $5)), finished_at = now(),
+       lease_owner = null, lease_expires_at = null, heartbeat_at = null
+     where id = $1 and status = 'running' and lease_owner = $2 returning id::text as id`,
+    [input.runId, input.workerId, input.error.code, input.error.message.slice(0, 1000), Math.ceil(input.error.sequence / 2)],
+  );
+  if (!blocked.rows[0]) return false;
+  await input.queryable.query(
+    `insert into agent_steps (
+       public_id, run_id, sequence, kind, status, decision_summary, tool_name, input,
+       request_hash, error_code, error_message, finished_at
+     ) values ($1, $2, $3, 'tool', 'blocked', $4, 'governance', $5::jsonb, $6, $7, $8, now())
+     on conflict (run_id, sequence) do update set
+       status = 'blocked', error_code = excluded.error_code,
+       error_message = excluded.error_message, finished_at = now()`,
+    [
+      createPublicId("ags"), input.runId, input.error.sequence, input.error.message,
+      JSON.stringify({ runPublicId: input.runPublicId, governanceCode: input.error.code }),
+      hashJson({ runPublicId: input.runPublicId, governanceCode: input.error.code }),
+      input.error.code, input.error.message.slice(0, 1000),
+    ],
+  );
+  if (input.route) {
+    await finishProviderRouteDecision({
+      queryable: input.queryable, decisionId: input.route.decisionId, usage: input.routeUsage,
+      latencyMs: performance.now() - input.routeStartedAt, errorCode: input.error.code,
+    });
+  }
+  await input.queryable.query(
+    `insert into agent_messages (public_id, thread_id, role, content, metadata)
+     values ($1, $2, 'assistant', $3, $4::jsonb)`,
+    [
+      createPublicId("agm"), input.threadId, `本轮已停止：${input.error.message}`,
+      JSON.stringify({ runPublicId: input.runPublicId, errorCode: input.error.code, status: "blocked" }),
+    ],
+  );
+  await input.queryable.query("update agent_threads set updated_at = now() where id = $1", [input.threadId]);
+  return true;
+}
+
 async function executeClaimedAgentRun(input: {
   runId: string;
   workerId: string;
@@ -770,11 +888,20 @@ async function executeClaimedAgentRun(input: {
     const runResult = await database.query<{
       id: string; public_id: string; thread_id: string; workspace_id: string; objective: string;
       max_steps: number; external_execution_allowed: boolean; user_public_id: string;
+      max_tool_calls: number; tool_calls_used: number;
+      max_product_tool_calls: number; product_tool_calls_used: number;
+      max_external_tool_calls: number; external_tool_calls_used: number;
+      token_budget: string; input_tokens_used: string; output_tokens_used: string;
+      max_cost_micros: string; cost_micros_used: string;
       display_name: string; email: string; workspace_public_id: string; workspace_name: string;
       role: Viewer["role"]; token_balance: string; user_id: string;
     }>(
       `select run.id::text as id, run.public_id, run.thread_id::text as thread_id,
               run.workspace_id::text as workspace_id, run.objective, run.max_steps,
+              run.max_tool_calls, run.tool_calls_used, run.max_product_tool_calls, run.product_tool_calls_used,
+              run.max_external_tool_calls, run.external_tool_calls_used, run.token_budget::text as token_budget,
+              run.input_tokens_used::text as input_tokens_used, run.output_tokens_used::text as output_tokens_used,
+              run.max_cost_micros::text as max_cost_micros, run.cost_micros_used::text as cost_micros_used,
               run.external_execution_allowed, actor.id::text as user_id, actor.public_id as user_public_id,
               actor.display_name, actor.email, workspace.public_id as workspace_public_id,
               workspace.name as workspace_name, member.role, workspace.token_balance::text as token_balance
@@ -813,7 +940,22 @@ async function executeClaimedAgentRun(input: {
       runtimeKind: "agent",
     }));
     routeStartedAt = performance.now();
+    let inputTokensUsed = Number(run.input_tokens_used);
+    let outputTokensUsed = Number(run.output_tokens_used);
+    let costMicrosUsed = Number(run.cost_micros_used);
+    let toolCallsUsed = run.tool_calls_used;
+    let productToolCallsUsed = run.product_tool_calls_used;
+    let externalToolCallsUsed = run.external_tool_calls_used;
     for (let sequence = 1; sequence <= run.max_steps; sequence += 1) {
+      const estimatedInputTokens = route?.estimatedInputTokens ?? 0;
+      const estimatedOutputTokens = route?.estimatedOutputTokens ?? 0;
+      const estimatedCost = providerCostMicros(estimatedInputTokens, estimatedOutputTokens, route);
+      if (inputTokensUsed + outputTokensUsed + estimatedInputTokens + estimatedOutputTokens > Number(run.token_budget)) {
+        throw new AgentRunBlockedError("AGENT_TOKEN_BUDGET_EXCEEDED", "Agent Run 的 token 预算不足以开始下一轮模型决策。", sequence * 2 - 1);
+      }
+      if (costMicrosUsed + estimatedCost > Number(run.max_cost_micros)) {
+        throw new AgentRunBlockedError("AGENT_COST_BUDGET_EXCEEDED", "Agent Run 的费用预算不足以开始下一轮模型决策。", sequence * 2 - 1);
+      }
       const decisionInput = {
         objective: run.objective, userPublicId: viewer.userPublicId, messages,
         skills: bindings.map((binding) => ({
@@ -837,6 +979,19 @@ async function executeClaimedAgentRun(input: {
         input_tokens: routeUsage.input_tokens + currentUsage.input_tokens,
         output_tokens: routeUsage.output_tokens + currentUsage.output_tokens,
       };
+      inputTokensUsed += currentUsage.input_tokens;
+      outputTokensUsed += currentUsage.output_tokens;
+      const cumulativeCostMicros = Math.max(costMicrosUsed, providerCostMicros(inputTokensUsed, outputTokensUsed, route));
+      const currentCostMicros = Math.max(0, cumulativeCostMicros - costMicrosUsed);
+      costMicrosUsed = cumulativeCostMicros;
+      const usageRecorded = await database.query<{ id: string }>(
+        `update agent_runs set input_tokens_used = input_tokens_used + $3,
+           output_tokens_used = output_tokens_used + $4, cost_micros_used = cost_micros_used + $5,
+           heartbeat_at = now(), lease_expires_at = now() + ($6::double precision * interval '1 millisecond')
+         where id = $1 and status = 'running' and lease_owner = $2 returning id::text as id`,
+        [run.id, input.workerId, currentUsage.input_tokens, currentUsage.output_tokens, currentCostMicros, AGENT_RUN_LEASE_MS],
+      );
+      if (!usageRecorded.rows[0]) throw new Error("AGENT_RUN_LEASE_LOST");
       const decisionPayload = {
         action: decision.action, message: decision.message, path: decision.path,
         skillPublicId: decision.skillPublicId, productToolName: decision.productToolName ?? null,
@@ -856,6 +1011,12 @@ async function executeClaimedAgentRun(input: {
           hashJson(decisionPayload),
         ],
       );
+      if (inputTokensUsed + outputTokensUsed > Number(run.token_budget)) {
+        throw new AgentRunBlockedError("AGENT_TOKEN_BUDGET_EXCEEDED", "Agent Run 已达到 token 预算上限，未执行模型请求的后续动作。", sequence * 2);
+      }
+      if (costMicrosUsed > Number(run.max_cost_micros)) {
+        throw new AgentRunBlockedError("AGENT_COST_BUDGET_EXCEEDED", "Agent Run 已达到费用预算上限，未执行模型请求的后续动作。", sequence * 2);
+      }
       if (decision.action === "finish") {
         const content = decision.message.trim() || "任务已完成。";
         return database.transaction(async (transaction) => {
@@ -880,6 +1041,34 @@ async function executeClaimedAgentRun(input: {
           await transaction.query("update agent_threads set updated_at = now() where id = $1", [run.thread_id]);
           return { runPublicId: run.public_id, messagePublicId: assistant.rows[0].public_id, status: "completed" as const };
         });
+      }
+      const productToolCall = decision.action === "execute_product_tool";
+      const externalToolCall = decision.action === "execute_skill";
+      if (toolCallsUsed >= run.max_tool_calls) {
+        throw new AgentRunBlockedError("AGENT_TOOL_CALL_LIMIT_EXCEEDED", "Agent Run 已达到总工具调用上限。", sequence * 2);
+      }
+      if (productToolCall && productToolCallsUsed >= run.max_product_tool_calls) {
+        throw new AgentRunBlockedError("AGENT_PRODUCT_TOOL_CALL_LIMIT_EXCEEDED", "Agent Run 已达到原生产品工具调用上限。", sequence * 2);
+      }
+      if (externalToolCall && externalToolCallsUsed >= run.max_external_tool_calls) {
+        throw new AgentRunBlockedError("AGENT_EXTERNAL_TOOL_CALL_LIMIT_EXCEEDED", "Agent Run 已达到外部 Skill 调用上限。", sequence * 2);
+      }
+      toolCallsUsed += 1;
+      if (productToolCall) productToolCallsUsed += 1;
+      if (externalToolCall) externalToolCallsUsed += 1;
+      const toolCallRecorded = await database.query<{ id: string }>(
+        `update agent_runs set tool_calls_used = tool_calls_used + 1,
+           product_tool_calls_used = product_tool_calls_used + $3,
+           external_tool_calls_used = external_tool_calls_used + $4
+         where id = $1 and status = 'running' and lease_owner = $2
+           and tool_calls_used < max_tool_calls
+           and ($3 = 0 or product_tool_calls_used < max_product_tool_calls)
+           and ($4 = 0 or external_tool_calls_used < max_external_tool_calls)
+         returning id::text as id`,
+        [run.id, input.workerId, productToolCall ? 1 : 0, externalToolCall ? 1 : 0],
+      );
+      if (!toolCallRecorded.rows[0]) {
+        throw new AgentRunBlockedError("AGENT_TOOL_CALL_LIMIT_EXCEEDED", "Agent Run 的工具调用配额已用尽。", sequence * 2);
       }
       const toolStep = await database.query<{ id: string }>(
         `insert into agent_steps (
@@ -926,6 +1115,14 @@ async function executeClaimedAgentRun(input: {
     }
     throw new Error("AGENT_MAX_STEPS_EXCEEDED");
   } catch (error) {
+    if (error instanceof AgentRunBlockedError) {
+      await database.transaction((transaction) => blockClaimedAgentRun({
+        queryable: transaction, runId: input.runId, workerId: input.workerId,
+        threadId: claimed.rows[0].thread_id, runPublicId: claimed.rows[0].public_id,
+        route, routeUsage, routeStartedAt, error,
+      }));
+      return { runPublicId: claimed.rows[0].public_id, status: "blocked" as const };
+    }
     await database.transaction((transaction) => failClaimedAgentRun({
       queryable: transaction, runId: input.runId, workerId: input.workerId,
       threadId: claimed.rows[0].thread_id, runPublicId: claimed.rows[0].public_id,

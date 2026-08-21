@@ -503,9 +503,29 @@ export function buildSourceConnectorAudit(input: {
   candidates: CollectedSourceCandidate[];
   metadata?: Record<string, unknown>;
 }): SourceConnectorAudit {
-  const collectedCount = input.candidates.filter((candidate) => candidate.status === "collected").length;
-  const rejectedCount = input.candidates.filter((candidate) => candidate.status === "rejected").length;
-  const unavailableCount = input.candidates.filter((candidate) => candidate.status === "unavailable").length;
+  const statusPriority: Record<CollectedSourceCandidate["status"], number> = {
+    collected: 3,
+    unavailable: 2,
+    rejected: 1,
+  };
+  const candidatesByUrl = new Map<string, CollectedSourceCandidate>();
+  for (const candidate of input.candidates) {
+    const existing = candidatesByUrl.get(candidate.canonicalUrl);
+    const candidateScore = candidate.score ?? Number.NEGATIVE_INFINITY;
+    const existingScore = existing?.score ?? Number.NEGATIVE_INFINITY;
+    const candidateRank = candidate.rank ?? Number.POSITIVE_INFINITY;
+    const existingRank = existing?.rank ?? Number.POSITIVE_INFINITY;
+    if (!existing
+      || statusPriority[candidate.status] > statusPriority[existing.status]
+      || (candidate.status === existing.status && candidateScore > existingScore)
+      || (candidate.status === existing.status && candidateScore === existingScore && candidateRank < existingRank)) {
+      candidatesByUrl.set(candidate.canonicalUrl, candidate);
+    }
+  }
+  const candidates = [...candidatesByUrl.values()];
+  const collectedCount = candidates.filter((candidate) => candidate.status === "collected").length;
+  const rejectedCount = candidates.filter((candidate) => candidate.status === "rejected").length;
+  const unavailableCount = candidates.filter((candidate) => candidate.status === "unavailable").length;
   return {
     publicId: input.publicId ?? createPublicId("scr"),
     connectorKey: input.connectorKey ?? "public-web",
@@ -515,12 +535,15 @@ export function buildSourceConnectorAudit(input: {
     queries: input.queries,
     startedAt: input.startedAt,
     finishedAt: new Date().toISOString(),
-    candidateCount: input.candidates.length,
+    candidateCount: candidates.length,
     collectedCount,
     rejectedCount,
     unavailableCount,
-    candidates: input.candidates,
-    metadata: input.metadata ?? {},
+    candidates,
+    metadata: {
+      ...input.metadata,
+      duplicateCandidateCount: input.candidates.length - candidates.length,
+    },
   };
 }
 

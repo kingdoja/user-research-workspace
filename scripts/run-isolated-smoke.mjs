@@ -27,6 +27,7 @@ const allowedSmokes = new Map([
   ["api-access", { command: "pnpm", args: ["smoke:api-access"], confirmation: "API_ACCESS_SMOKE_CONFIRM" }],
   ["platform-control", { command: "pnpm", args: ["smoke:platform-control"], confirmation: "PLATFORM_CONTROL_SMOKE_CONFIRM" }],
   ["universal-agent", { command: "pnpm", args: ["smoke:universal-agent"], confirmation: "UNIVERSAL_AGENT_SMOKE_CONFIRM" }],
+  ["universal-agent-product-tools", { command: "pnpm", args: ["smoke:universal-agent-product-tools-db"], confirmation: "UNIVERSAL_AGENT_PRODUCT_TOOLS_DB_SMOKE_CONFIRM" }],
 ]);
 const smoke = allowedSmokes.get(smokeName);
 if (!smoke) throw new Error(`Unsupported isolated smoke: ${smokeName}`);

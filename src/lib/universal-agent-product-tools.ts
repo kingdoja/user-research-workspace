@@ -22,6 +22,17 @@ export type UniversalAgentProductTool = {
   inputHint: string;
 };
 
+export type UniversalAgentProductToolResult = {
+  status: "ok" | "created" | "queued" | "clarification_required" | "blocked" | "not_found" | "invalid";
+  resourceType: "persona_collection" | "persona" | "interview" | "study" | "report" | "product_tool";
+  resourcePublicId: string | null;
+  href: string | null;
+  summary: string;
+  nextAction: string | null;
+  data?: Record<string, unknown>;
+  error?: string;
+};
+
 export const UNIVERSAL_AGENT_PRODUCT_TOOLS: readonly UniversalAgentProductTool[] = [
   {
     name: "persona.list",
@@ -95,21 +106,29 @@ export async function executeUniversalAgentProductTool(input: {
   toolName: UniversalAgentProductToolName;
   arguments: Record<string, unknown>;
   executionAllowed: boolean;
-}) {
+}): Promise<UniversalAgentProductToolResult> {
   const tool = UNIVERSAL_AGENT_PRODUCT_TOOLS.find((candidate) => candidate.name === input.toolName);
-  if (!tool) return { error: "product_tool_not_found", toolName: input.toolName };
+  if (!tool) return {
+    status: "not_found", resourceType: "product_tool", resourcePublicId: null, href: null,
+    summary: `产品工具 ${input.toolName} 不存在。`, nextAction: null, error: "product_tool_not_found",
+  };
   if (tool.mutates && !input.executionAllowed) {
-    return { error: "product_execution_not_confirmed", toolName: input.toolName };
+    return {
+      status: "blocked", resourceType: "product_tool", resourcePublicId: null, href: null,
+      summary: `未执行 ${input.toolName}：本轮未获得副作用执行确认。`,
+      nextAction: "请用户确认本轮允许执行已选能力。", error: "product_execution_not_confirmed",
+    };
   }
   const parsed = productToolSchemas[input.toolName].safeParse(input.arguments);
   if (!parsed.success) {
     return {
+      status: "invalid", resourceType: "product_tool", resourcePublicId: null, href: null,
+      summary: `${input.toolName} 的输入未通过校验。`, nextAction: "根据 issues 修正参数后重试。",
       error: "product_tool_input_invalid",
-      toolName: input.toolName,
-      issues: parsed.error.issues.slice(0, 8).map((issue) => ({
+      data: { toolName: input.toolName, issues: parsed.error.issues.slice(0, 8).map((issue) => ({
         path: issue.path.join("."),
         message: issue.message,
-      })),
+      })) },
     };
   }
 
@@ -118,29 +137,36 @@ export async function executeUniversalAgentProductTool(input: {
     const args = parsed.data as { limit: number };
     const library = await listPersonas(input.viewer);
     return {
-      personas: library.personas.slice(0, args.limit).map((persona) => ({
+      status: "ok", resourceType: "persona_collection", resourcePublicId: null, href: "/persona",
+      summary: `已读取 ${Math.min(library.personas.length, args.limit)} 个 Persona，工作区共 ${library.personas.length} 个。`,
+      nextAction: null,
+      data: { personas: library.personas.slice(0, args.limit).map((persona) => ({
         publicId: persona.publicId,
         name: persona.name,
         archetype: persona.archetype,
         occupation: persona.profile.occupation,
         city: persona.profile.city,
         tags: persona.profile.tags,
-      })),
-      total: library.personas.length,
+      })), total: library.personas.length },
     };
   }
   if (input.toolName === "persona.create") {
     const { createPersona } = await import("@/lib/studies");
     const publicId = await createPersona(input.viewer, parsed.data as z.infer<typeof personaInputSchema>);
-    return { status: "created", publicId, href: `/persona?persona=${encodeURIComponent(publicId)}` };
+    return {
+      status: "created", resourceType: "persona", resourcePublicId: publicId,
+      href: `/persona?persona=${encodeURIComponent(publicId)}`, summary: `已创建 Persona ${publicId}。`, nextAction: null,
+    };
   }
   if (input.toolName === "interview.create") {
     const { createInterviewProject } = await import("@/lib/interviews");
     const result = await createInterviewProject(input.viewer, parsed.data as z.infer<typeof createInterviewProjectSchema>);
     return {
       status: result.queued ? "queued" : "created",
-      publicId: result.publicId,
+      resourceType: "interview", resourcePublicId: result.publicId,
       href: `/interview/projects/${encodeURIComponent(result.publicId)}`,
+      summary: result.queued ? `已创建访谈 ${result.publicId} 并排队执行。` : `已创建访谈 ${result.publicId}。`,
+      nextAction: null,
     };
   }
   if (input.toolName === "research.create") {
@@ -149,8 +175,9 @@ export async function executeUniversalAgentProductTool(input: {
     const publicId = await createStudy(input.viewer, args.brief, args.productLine, args.sourcePanelPublicId);
     return {
       status: "clarification_required",
-      publicId,
+      resourceType: "study", resourcePublicId: publicId,
       href: `/study/${encodeURIComponent(publicId)}`,
+      summary: `已创建研究 ${publicId}，当前需要澄清和计划确认。`,
       nextAction: "请在研究页面完成澄清并确认计划；确认后可调用 research.run_confirmed。",
     };
   }
@@ -162,29 +189,79 @@ export async function executeUniversalAgentProductTool(input: {
     const { studyPublicId } = parsed.data as { studyPublicId: string };
     const status = await queueStudyRun(input.viewer, studyPublicId);
     if (status === "queued") await enqueueLatestStudyRun(studyPublicId, input.viewer.workspaceId);
+    const state = {
+      queued: {
+        status: "queued" as const,
+        summary: `研究 ${studyPublicId} 已排队执行。`,
+        nextAction: null,
+        error: undefined,
+      },
+      already_running: {
+        status: "ok" as const,
+        summary: `研究 ${studyPublicId} 已在执行或排队中，未重复创建任务。`,
+        nextAction: "等待当前研究运行完成。",
+        error: undefined,
+      },
+      completed: {
+        status: "ok" as const,
+        summary: `研究 ${studyPublicId} 已完成。`,
+        nextAction: "调用 report.read 读取报告。",
+        error: undefined,
+      },
+      waiting_input: {
+        status: "blocked" as const,
+        summary: `研究 ${studyPublicId} 正在等待用户补充输入。`,
+        nextAction: "请用户在研究页完成待补充任务。",
+        error: "research_waiting_input",
+      },
+      plan_not_confirmed: {
+        status: "blocked" as const,
+        summary: `研究 ${studyPublicId} 未执行：计划尚未由用户确认。`,
+        nextAction: "请用户在研究页确认并锁定计划后重试。",
+        error: "research_plan_not_confirmed",
+      },
+      provider_missing: {
+        status: "blocked" as const,
+        summary: `研究 ${studyPublicId} 未执行：研究模型 Provider 尚未配置。`,
+        nextAction: "配置研究阶段 Provider 后重试。",
+        error: "research_provider_missing",
+      },
+      not_found: {
+        status: "not_found" as const,
+        summary: `当前工作区中不存在研究 ${studyPublicId}。`,
+        nextAction: null,
+        error: "study_not_found",
+      },
+    }[status];
     return {
-      status,
-      studyPublicId,
-      href: `/study/${encodeURIComponent(studyPublicId)}`,
-      note: status === "plan_not_confirmed" ? "研究计划尚未由用户确认，Agent 不会绕过该门槛。" : undefined,
+      status: state.status,
+      resourceType: "study", resourcePublicId: studyPublicId,
+      href: status === "not_found" ? null : `/study/${encodeURIComponent(studyPublicId)}`,
+      summary: state.summary,
+      nextAction: state.nextAction,
+      data: { queueStatus: status },
+      error: state.error,
     };
   }
 
   const { studyPublicId } = parsed.data as { studyPublicId: string };
   const { getStudy } = await import("@/lib/studies");
   const study = await getStudy(input.viewer, studyPublicId);
-  if (!study) return { error: "study_not_found", studyPublicId };
+  if (!study) return {
+    status: "not_found", resourceType: "study", resourcePublicId: studyPublicId, href: null,
+    summary: `当前工作区中不存在研究 ${studyPublicId}。`, nextAction: null, error: "study_not_found",
+  };
   return {
-    studyPublicId,
-    title: study.title,
-    status: study.status,
-    runStatus: study.runStatus,
+    status: "ok", resourceType: study.report ? "report" : "study",
+    resourcePublicId: study.report?.publicId ?? studyPublicId,
     href: `/study/${encodeURIComponent(studyPublicId)}`,
-    report: study.report ? {
+    summary: study.report ? `已读取研究“${study.title}”的报告。` : `研究“${study.title}”尚未生成报告。`,
+    nextAction: study.report ? null : "等待研究运行完成后重试 report.read。",
+    data: { studyPublicId, title: study.title, studyStatus: study.status, runStatus: study.runStatus, report: study.report ? {
       publicId: study.report.publicId,
       title: study.report.title,
       generatedAt: study.report.generatedAt,
       content: study.report.content,
-    } : null,
+    } : null },
   };
 }
