@@ -12,8 +12,9 @@
 - Controller mode：`shadow`
 - 允许模板：`targeted_research`
 - 动态任务额度：`2`
-- 生产 worker rollout 样本：`0`（run `37` 是 `local_harness_probe`，不计入晋级样本）
-- 本地 Harness probe：`1`（run `37`，`completed`，13 次 Controller 决策全部匹配，Controller failure `0`，policy reject `0`，report gate 通过）
+- 生产 worker rollout 样本：`1`（run `38`，`completed`，由 `study_job_queue` worker 执行）
+- 本地 Harness probe：历史 run `37` 已完成，但创建时未写入 `executionSource` 字段，因此当前 CLI 不将其计入 probe 统计；它不计入正式晋级样本。
+- run `38` trajectory：5 次 Controller 决策，Controller failure `0`，policy reject `0`，tool match `100%`，template match `100%`，report gate 通过，动态任务 `0`。
 - 最终报告：评审 `revise`，已执行修订并定稿（评分 `68`）
 - `active` 质量门槛：failure `<= 10%`、policy reject `<= 60%`、tool match `>= 80%`、template match `>= 80%`、report gate 必须通过
 
@@ -33,7 +34,7 @@
 
 ## 下一步观察
 
-还需通过正式 `study_job_queue` worker 收集至少 3 个同条件下的完整运行后检查 trajectory summary。CLI 和管理接口只统计 `executionSource=worker` 的记录；本地 Harness probe 仅用于开发验证：
+还需通过正式 `study_job_queue` worker 再收集至少 2 个同条件下的完整运行后检查 trajectory summary（当前 `1/3`）。CLI 和管理接口只统计 `executionSource=worker` 的记录；本地 Harness probe 仅用于开发验证：
 
 1. Controller failure、policy reject、tool match、template match。
 2. 动态任务提议是否触及额度，是否出现重复或无效证据检索。

@@ -31,6 +31,7 @@
     "smoke:research-agent-ledger": "tsx scripts/research-agent-ledger-smoke.ts",
     "smoke:research-agent-trajectory": "tsx scripts/research-agent-trajectory-smoke.ts",
     "research-agent:rollout-status": "tsx scripts/research-agent-rollout-status.ts",
+    "research-agent:rollout-sample": "tsx scripts/research-agent-rollout-sample.ts",
     "smoke:source-connector": "tsx scripts/source-connector-smoke.ts",
     "smoke:social-connector": "tsx scripts/social-connector-smoke.ts",
     "smoke:source-object-storage": "tsx scripts/source-object-storage-smoke.ts",
