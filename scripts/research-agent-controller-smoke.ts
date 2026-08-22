@@ -105,18 +105,29 @@ const replan: AgentAction = {
     input: { focus: "寻找反例与限制条件" },
   }],
 };
+const replanTasks = [...tasks, { key: "report", title: "Report", toolName: "generateReport", status: "pending", dependsOn: ["research"], input: {} }];
 const replanResult = validateResearchAgentAction({
   action: replan,
-  tasks,
+  tasks: replanTasks,
   completedStateKeys: ["design"],
   availableToolNames: ["deepResearch", "searchPersonas"],
   maxDynamicTasks: 2,
 });
 assert.equal(replanResult.accepted, true);
 
+const closedGateReplanResult = validateResearchAgentAction({
+  action: replan,
+  tasks: [...tasks, { key: "report", title: "Report", toolName: "generateReport", status: "completed", dependsOn: ["research"], input: {} }],
+  completedStateKeys: ["design", "research", "report"],
+  availableToolNames: ["deepResearch", "searchPersonas"],
+  maxDynamicTasks: 2,
+});
+assert.equal(closedGateReplanResult.accepted, false);
+assert.equal(closedGateReplanResult.reason, "report_gate_not_open");
+
 const disallowedTemplateResult = validateResearchAgentAction({
   action: { ...replan, requestedTasks: [{ ...replan.requestedTasks[0], template: "social_signal_scan" }] },
-  tasks,
+  tasks: replanTasks,
   completedStateKeys: ["design"],
   availableToolNames: ["deepResearch", "scoutSocialTrends"],
   allowedTaskTemplates: ["targeted_research", "social_signal_scan"],
@@ -127,7 +138,7 @@ assert.equal(disallowedTemplateResult.reason, "template_tool_mismatch");
 
 const invalidTemplateInputResult = validateResearchAgentAction({
   action: { ...replan, requestedTasks: [{ ...replan.requestedTasks[0], template: "social_signal_scan", toolName: "scoutSocialTrends", input: {} }] },
-  tasks,
+  tasks: replanTasks,
   completedStateKeys: ["design"],
   availableToolNames: ["deepResearch", "scoutSocialTrends"],
   allowedTaskTemplates: ["targeted_research", "social_signal_scan"],
@@ -138,7 +149,7 @@ assert.equal(invalidTemplateInputResult.reason, "template_input_invalid");
 
 const policyTemplateResult = validateResearchAgentAction({
   action: replan,
-  tasks,
+  tasks: replanTasks,
   completedStateKeys: ["design"],
   availableToolNames: ["deepResearch"],
   allowedTaskTemplates: ["social_signal_scan"],
@@ -208,7 +219,7 @@ assert.deepEqual(parseProviderSearchSourcePlan({
 
 const rejectedReplan = validateResearchAgentAction({
   action: { ...replan, requestedTasks: [{ ...replan.requestedTasks[0], toolName: "shell" }] },
-  tasks,
+  tasks: replanTasks,
   completedStateKeys: ["design"],
   availableToolNames: ["deepResearch"],
   maxDynamicTasks: 2,
@@ -230,7 +241,7 @@ const forwardDependencyReplan = validateResearchAgentAction({
       },
     ],
   },
-  tasks,
+  tasks: replanTasks,
   completedStateKeys: ["design"],
   availableToolNames: ["deepResearch"],
   maxDynamicTasks: 2,

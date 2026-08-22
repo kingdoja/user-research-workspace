@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getViewer } from "@/lib/auth";
+import { isSameOriginRequest } from "@/lib/request-security";
 import { updateCollaborationPublicationStatus } from "@/lib/platform-control";
 
 const inputSchema = z.object({ status: z.enum(["submitted", "accepted", "rejected", "revoked"]) });
 
 export async function PATCH(request: Request, context: RouteContext<"/api/platform/collaboration/publications/[publicId]/status">) {
+  if (!isSameOriginRequest(request)) return NextResponse.json({ error: "请求来源无效" }, { status: 403 });
   const viewer = await getViewer();
   if (!viewer) return NextResponse.json({ error: "未登录" }, { status: 401 });
   const parsed = inputSchema.safeParse(await request.json().catch(() => null));

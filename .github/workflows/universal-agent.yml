@@ -1,0 +1,60 @@
+name: Universal Agent
+
+on:
+  push:
+    paths:
+      - "src/lib/universal-agent.ts"
+      - "src/lib/universal-agent-product-tools.ts"
+      - "src/components/universal-agent-workspace.tsx"
+      - "src/app/api/agent/**"
+      - "scripts/universal-agent*.ts"
+      - "supabase/migrations/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  pull_request:
+    paths:
+      - "src/lib/universal-agent.ts"
+      - "src/lib/universal-agent-product-tools.ts"
+      - "src/components/universal-agent-workspace.tsx"
+      - "src/app/api/agent/**"
+      - "scripts/universal-agent*.ts"
+      - "supabase/migrations/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      DATABASE_SSL_MODE: disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.16.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm lint
+      - run: pnpm smoke:isolated universal-agent-product-tools
+        env:
+          LOCAL_SMOKE_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      - run: pnpm exec next build --webpack

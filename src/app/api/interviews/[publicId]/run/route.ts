@@ -2,7 +2,7 @@ import { after } from "next/server";
 import { NextResponse } from "next/server";
 import { getViewer } from "@/lib/auth";
 import { processInterviewJobQueue, queueInterviewRun } from "@/lib/interviews";
-import { isSameOriginRequest } from "@/lib/request-security";
+import { checkRateLimit, isSameOriginRequest, rateLimitResponse } from "@/lib/request-security";
 
 export const maxDuration = 300;
 
@@ -12,6 +12,8 @@ export async function POST(request: Request, context: RouteContext) {
   if (!isSameOriginRequest(request)) return NextResponse.json({ error: "请求来源无效" }, { status: 403 });
   const viewer = await getViewer();
   if (!viewer) return NextResponse.json({ error: "请先登录" }, { status: 401 });
+  const rateLimit = checkRateLimit(request, "interview-run", { limit: 10, windowMs: 15 * 60_000 }, `${viewer.workspaceId}:${viewer.userId}`);
+  if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfterSeconds);
   const { publicId } = await context.params;
   const result = await queueInterviewRun(viewer, publicId);
   if (result === "forbidden") return NextResponse.json({ error: "没有权限重新执行该项目" }, { status: 403 });

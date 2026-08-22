@@ -66,6 +66,26 @@ const RESEARCH_DIMENSIONS = [
   "续航", "价格", "功能", "智能", "安全", "售后", "通勤", "场景", "内容", "信任", "收藏", "分享", "比较", "评测", "体验",
 ];
 
+const GENERIC_RELEVANCE_TERMS = new Set([
+  "研究", "报告", "分析", "资料", "公开", "网页", "信息", "用户", "市场", "产品", "功能", "体验", "需求", "目标",
+  "内容", "场景", "问题", "了解", "希望", "需要", "可以", "是否", "如何", "哪些", "什么", "以及", "关于", "通过",
+  "建议", "方案", "方法", "行业", "公司", "企业", "客户", "服务", "使用", "相关", "主要", "不同", "当前", "中国",
+]);
+
+function extractRelevanceTerms(value: string) {
+  const latinTerms = value.toLowerCase().match(/[a-z][a-z0-9-]{2,24}/g) ?? [];
+  const hanRuns = value.match(/[\u4e00-\u9fff]+/gu) ?? [];
+  const hanTerms = hanRuns.flatMap((run) => {
+    if (run.length <= 8) return [run];
+    const grams: string[] = [];
+    for (let index = 0; index < run.length - 1; index += 1) grams.push(run.slice(index, index + 2));
+    return grams;
+  });
+  return [...new Set([...latinTerms, ...hanTerms])]
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 2 && !GENERIC_RELEVANCE_TERMS.has(term));
+}
+
 function sourceHost(source: PublicWebSource) {
   try {
     return new URL(source.url).hostname.toLowerCase();
@@ -91,7 +111,7 @@ export function isPlatformSource(source: PublicWebSource) {
   return PLATFORM_HOSTS.some((domain) => host === domain || host.endsWith(`.${domain}`));
 }
 
-export function assessPublicWebSourceQuality(source: PublicWebSource, brief: string): SourceQualityAssessment {
+export function assessPublicWebSourceQuality(source: PublicWebSource, brief: string, searchTerms: string[] = []): SourceQualityAssessment {
   const text = `${source.title}\n${source.excerpt}`;
   const reasons: string[] = [];
   const signals: string[] = [];
@@ -104,6 +124,12 @@ export function assessPublicWebSourceQuality(source: PublicWebSource, brief: str
   if (reasons.length) return { accepted: false, score: -10, reasons, signals };
 
   let score = 0;
+  const relevanceTerms = extractRelevanceTerms([brief, ...searchTerms].join("\n"));
+  const matchedRelevanceTerms = relevanceTerms.filter((term) => text.toLowerCase().includes(term.toLowerCase()));
+  if (matchedRelevanceTerms.length) {
+    score += Math.min(4, matchedRelevanceTerms.length);
+    signals.push(`brief_term_match:${matchedRelevanceTerms.slice(0, 4).join(",")}`);
+  }
   const entities = requestedEntities(brief);
   for (const entity of entities) {
     if (entity.aliases.test(text)) {
@@ -146,8 +172,8 @@ export function assessPublicWebSourceQuality(source: PublicWebSource, brief: str
   return { accepted, score, reasons, signals };
 }
 
-export function curatePublicWebSources(brief: string, sources: PublicWebSource[], limit = 24): CuratedPublicWebSources {
-  const assessments = sources.map((source) => ({ source, assessment: assessPublicWebSourceQuality(source, brief) }));
+export function curatePublicWebSources(brief: string, sources: PublicWebSource[], limit = 24, searchTerms: string[] = []): CuratedPublicWebSources {
+  const assessments = sources.map((source) => ({ source, assessment: assessPublicWebSourceQuality(source, brief, searchTerms) }));
   const accepted = assessments
     .filter((item) => item.assessment.accepted)
     .toSorted((left, right) => right.assessment.score - left.assessment.score)

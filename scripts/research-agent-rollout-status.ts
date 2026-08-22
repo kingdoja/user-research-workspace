@@ -1,6 +1,6 @@
 import { loadEnvConfig } from "@next/env";
 import { Client } from "pg";
-import { assessResearchAgentRolloutQuality } from "../src/lib/research-agent-controller";
+import { getResearchAgentVariantRolloutReport } from "../src/lib/research-agent-rollout-report";
 
 loadEnvConfig(process.cwd());
 
@@ -44,33 +44,14 @@ async function main() {
     );
     const variants = await Promise.all(variantsResult.rows.map(async (variant) => {
       const config = typeof variant.config === "string" ? JSON.parse(variant.config) as Record<string, unknown> : variant.config;
-      const configuredLimit = Number(config.agentControllerShadowMinRuns ?? 3);
-      const limit = Number.isFinite(configuredLimit) ? Math.max(1, Math.min(20, Math.round(configuredLimit))) : 3;
-      const trajectory = await database.query<{ metrics: Record<string, unknown> | string }>(
-        `select evaluation.metrics
-         from research_agent_trajectory_evaluations evaluation
-         join study_runs run on run.id = evaluation.run_id
-         where evaluation.workspace_id = $1
-           and run.strategy_key = $2
-           and run.strategy_version = $3
-           and evaluation.evaluator_version = 'research-agent-trajectory-v1'
-           and evaluation.metrics->>'executionSource' = 'worker'
-         order by evaluation.created_at desc, evaluation.id desc
-         limit $4`,
-        [workspaceId, variant.variant_key, variant.strategy_version, limit],
-      );
-      const localProbe = await database.query<{ count: number }>(
-        `select count(*)::int as count
-         from research_agent_trajectory_evaluations evaluation
-         join study_runs run on run.id = evaluation.run_id
-         where evaluation.workspace_id = $1
-           and run.strategy_key = $2
-           and run.strategy_version = $3
-           and evaluation.evaluator_version = 'research-agent-trajectory-v1'
-           and evaluation.metrics->>'executionSource' = 'local_harness_probe'`,
-        [workspaceId, variant.variant_key, variant.strategy_version],
-      );
-      const metrics = trajectory.rows.map((row) => typeof row.metrics === "string" ? JSON.parse(row.metrics) as Record<string, unknown> : row.metrics);
+      const report = await getResearchAgentVariantRolloutReport({
+        queryable: database,
+        workspaceId,
+        variantKey: variant.variant_key,
+        strategyVersion: variant.strategy_version,
+        strategyConfig: config,
+      });
+      const metrics = report.shadow.runs.concat(report.active.runs).map((row) => row.metrics);
       return {
         variantKey: variant.variant_key,
         name: variant.name,
@@ -78,10 +59,13 @@ async function main() {
         weight: variant.weight,
         controllerMode: config.agentControllerMode ?? "off",
         allowedTemplates: config.agentControllerAllowedTemplates ?? null,
-        sampleCount: metrics.length,
-        productionWorkerSampleCount: metrics.length,
-        localProbeCount: localProbe.rows[0]?.count ?? 0,
-        quality: assessResearchAgentRolloutQuality({ metrics, strategyConfig: config }),
+        sampleCount: report.workerSampleCount,
+        productionWorkerSampleCount: report.workerSampleCount,
+        localProbeCount: report.localProbeCount,
+        quality: report.shadow.quality,
+        shadow: report.shadow,
+        active: report.active,
+        automaticFallbacks: report.automaticFallbacks,
         metrics,
       };
     }));

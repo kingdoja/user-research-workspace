@@ -68,19 +68,11 @@ export function classifyTaskError(error: unknown): TaskFailure {
   }
   if (described.code === "PUBLIC_WEB_SOURCES_INSUFFICIENT") {
     return {
-      className: "input_required",
+      className: "upstream",
       code: described.code,
-      message: described.message,
-      retryable: false,
-      disposition: "waiting_input",
-      inputRequest: {
-        title: "补充公开研究范围",
-        description: "当前可核查的公开网页来源不足。请补充具体研究焦点或 1 至 8 个可公开访问的可信 URL。",
-        fields: [
-          { key: "focus", label: "补充研究焦点", type: "text", required: false, maxLength: 600 },
-          { key: "sourceUrls", label: "可信公开 URL", type: "url_list", required: false, maxItems: 8 },
-        ],
-      },
+      message: "系统已自动扩展公开网页检索，但暂未找到可核查来源，将自动重试。",
+      retryable: true,
+      disposition: "retry",
     };
   }
   if (

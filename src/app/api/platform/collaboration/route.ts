@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getViewer } from "@/lib/auth";
+import { isSameOriginRequest } from "@/lib/request-security";
 import {
   createCollaborationDelegation,
   createCollaborationPublication,
@@ -36,6 +37,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  if (!isSameOriginRequest(request)) return NextResponse.json({ error: "请求来源无效" }, { status: 403 });
   const viewer = await getViewer();
   if (!viewer) return NextResponse.json({ error: "未登录" }, { status: 401 });
   const parsed = inputSchema.safeParse(await request.json().catch(() => null));

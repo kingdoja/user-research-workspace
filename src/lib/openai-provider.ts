@@ -1255,6 +1255,80 @@ export function parseProviderSearchSourcePlan(value: unknown): z.infer<typeof se
   return parsed.data;
 }
 
+/**
+ * Builds a second-pass search plan without asking the user to refine the brief.
+ * The first provider plan remains the primary source of truth; these queries
+ * only broaden discovery when its source set is empty or below the evidence
+ * floor after curation.
+ */
+export function buildAutonomousResearchQueries(brief: string, existingQueries: string[] = []) {
+  const existing = [...new Set(existingQueries.map((query) => query.trim()).filter((query) => query.length >= 3))];
+  const subject = brief
+    .replace(/研究|报告|分析|资料|公开|网页|信息|希望|需要|请|给出|了解|如何|为什么|这次|当前/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 100);
+  const bases = [...new Set([...(existing.slice(0, 3)), subject].filter(Boolean))];
+  const suffixes = [
+    "官方资料",
+    "行业报告",
+    "用户体验评测",
+    "市场趋势 数据",
+    "政策 标准",
+    "official report",
+    "user review",
+  ];
+  const expanded = bases.flatMap((base, index) => suffixes
+    .slice(index % 2, (index % 2) + 4)
+    .map((suffix) => `${base} ${suffix}`));
+  return [...new Set(expanded
+    .map((query) => query.replace(/\s+/g, " ").trim().slice(0, 180))
+    .filter((query) => query.length >= 3 && !existing.includes(query)))]
+    .slice(0, 8);
+}
+
+function buildFallbackSearchSourcePlan(brief: string) {
+  const compactBrief = brief.replace(/\s+/g, " ").trim().slice(0, 120);
+  const queries = buildAutonomousResearchQueries(
+    brief,
+    compactBrief ? [`${compactBrief} 用户体验`] : [],
+  ).slice(0, 5);
+  return {
+    queries: queries.length ? queries : [
+      "产品 用户体验 官方资料",
+      "行业市场趋势 公开报告",
+      "用户评测 使用痛点",
+    ],
+    seedUrls: [] as string[],
+  };
+}
+
+function canFallbackSearchSourcePlan(error: unknown) {
+  if (isInvalidStructuredOutput(error)) return true;
+  return error instanceof Error && [
+    "OPENAI_GATEWAY_SCHEMA_KEYS",
+    "OPENAI_TEXT_RESPONSE",
+    "OPENAI_EMPTY_RESPONSE",
+  ].some((prefix) => error.message.startsWith(prefix));
+}
+
+function mergePublicWebSources(groups: PublicWebSource[][]) {
+  const unique = new Map<string, PublicWebSource>();
+  for (const source of groups.flat()) {
+    let key = source.url;
+    try {
+      const parsed = new URL(source.url);
+      parsed.hash = "";
+      key = parsed.toString();
+    } catch {
+      // The source connector already validates URLs; retain the raw key only
+      // as a defensive fallback for older persisted artifacts.
+    }
+    if (!unique.has(key)) unique.set(key, source);
+  }
+  return [...unique.values()];
+}
+
 function isRetryableProviderError(error: unknown) {
   if (
     error instanceof OpenAI.APIConnectionError
@@ -1445,7 +1519,7 @@ export function describeOpenAIError(error: unknown) {
 
   if (error instanceof Error && error.message === "PUBLIC_WEB_SOURCES_INSUFFICIENT") {
     return {
-      message: "可核查的公开网页来源不足，请补充更具体的产品、地区或时间范围后重试。",
+      message: "系统已自动扩展公开网页检索，但暂未找到可核查来源，将自动重试。",
       status: null,
       code: error.message,
       requestId: null,
@@ -1558,6 +1632,7 @@ export async function streamProviderResearchAgentDecision(input: {
     status: string;
     dependsOn: string[];
     input: Record<string, unknown>;
+    resultSummary?: Record<string, unknown>;
   }>;
   completedStateKeys: string[];
   contextSummary?: string;
@@ -1569,14 +1644,14 @@ export async function streamProviderResearchAgentDecision(input: {
 }): Promise<ProviderResearchAgentDecision> {
   const model = getStageModel("reasoning");
   const taskCatalog = input.tasks.length
-    ? input.tasks.map((task) => `${task.key} | ${task.toolName} | ${task.status} | dependsOn=${task.dependsOn.join(",") || "-"} | input=${JSON.stringify(task.input)} | ${task.title}`).join("\n")
+    ? input.tasks.map((task) => `${task.key} | ${task.toolName} | ${task.status} | dependsOn=${task.dependsOn.join(",") || "-"} | input=${JSON.stringify(task.input)} | result=${JSON.stringify(task.resultSummary ?? null)} | ${task.title}`).join("\n")
     : "暂无任务";
   const instructions = [
     "你是研究 Agent Controller，只负责选择下一步可审计动作，不要输出隐藏思维链。",
-    "优先从当前 pending 且依赖已满足的任务中选择一个 call_tool；taskKey 必须精确匹配任务目录，arguments 解码后必须与该任务目录中的 input 完全相同，不得改写、补充或删除字段。",
-    "如果现有任务无法补足明确证据缺口，可以提出 replan；新任务只能使用目录中的工具，只能依赖已完成任务或同一 replan 中更早的新任务，并且会由 Harness 再次校验预算、输入 schema 和报告 gate。",
+    "通常从当前 pending 且依赖已满足的任务中选择一个 call_tool；taskKey 必须精确匹配任务目录，arguments 解码后必须与该任务目录中的 input 完全相同，不得改写、补充或删除字段。",
+    "在进入下游综合任务前，比较研究目标与已完成任务的 result 摘要。如果 Brief 有明确证据要求且现有摘要明显未覆盖，应提出一次 replan 补足具体缺口；不得仅因追求更多资料或重复已有主题而扩展。新任务只能使用目录中的工具，只能依赖已完成任务或同一 replan 中更早的新任务，不能依赖 report、report_review 或 final_report；并且会由 Harness 再次校验预算、输入 schema 和报告 gate。",
     `允许的 capability templates：${input.allowedTaskTemplates?.join(", ") || "不可追加"}。replan 的每个任务必须填写 template；targeted_research 只能绑定 deepResearch，social_signal_scan 只能绑定 scoutSocialTrends。旧模板缺省会由服务端按工具名推断，但新输出请始终填写。`,
-    "只有当前 ready 任务确实缺少用户提供的研究范围或公开来源时才提出 ask_user，并用 taskKey 指明目标任务；fields 只能使用 focus(text)、sourceUrls(url_list)、selectedOption(choice)，choice 必须提供 options；不要用 ask_user 代替正常研究判断。",
+    "公开资料任务应先自行检索，不要因为缺少用户 URL 就 ask_user；只有研究范围、私有资料授权或用户必须选择的决策确实缺失时才提出 ask_user，并用 taskKey 指明目标任务。fields 只能使用 focus(text)、sourceUrls(url_list)、selectedOption(choice)，choice 必须提供 options。",
     "只有所有必需任务和报告契约已经满足时才提出 finish；不确定时继续选择一个可执行任务。",
     "所有 summary 使用简体中文，说明选择依据即可，不要复述长篇内部推理。",
     `研究目标：${input.brief}`,
@@ -1603,17 +1678,37 @@ export async function streamProviderResearchAgentDecision(input: {
       },
     },
   };
+  const parseActionWithSemanticRepair = async (outputText: string) => {
+    try {
+      return { action: parseResearchAgentAction(parseOutput(outputText, z.unknown())), response: null as Awaited<ReturnType<typeof createStructuredResponse>> | null };
+    } catch (error) {
+      const repairResponse = await createStructuredResponse("reasoning", {
+        ...request,
+        instructions: [
+          request.instructions,
+          "上一响应虽然是 JSON，但动作语义无效。请修复后只返回一个可执行动作：replan 必须包含至少一个 requestedTasks，且每个任务必须填写 key、title、toolName、template、dependsOn、input 和 reason；如果当前没有合适的扩展，就选择一个 ready 任务 call_tool，不要返回空 replan。",
+          `语义校验错误：${error instanceof Error ? error.message : "invalid_action"}`,
+          `上一响应：${outputText.slice(0, 20_000)}`,
+        ].join("\n\n"),
+        input: "请修复上一动作并重新输出结构化 JSON。",
+      }, { timeout: 90_000, maxRetries: 1 });
+      return { action: parseResearchAgentAction(parseOutput(repairResponse.output_text, z.unknown())), response: repairResponse };
+    }
+  };
   const providerClient = getProviderClient("reasoning");
   if (getApiProtocol("reasoning") === "chat_completions") {
     await input.onEvent?.({ type: "provider.non_streaming" });
     const response = await createStructuredResponse("reasoning", request, { timeout: 90_000, maxRetries: 1 });
-    const action = parseResearchAgentAction(parseOutput(response.output_text, z.unknown()));
+    const repaired = await parseActionWithSemanticRepair(response.output_text);
+    const action = repaired.action;
+    const responseId = repaired.response?.id ?? response.id;
+    const responseModel = repaired.response?.model ?? response.model;
     await input.onEvent?.({ type: "decision.summary.delta", delta: action.summary });
-    await input.onEvent?.({ type: "decision.completed", responseId: response.id, model: response.model });
+    await input.onEvent?.({ type: "decision.completed", responseId, model: responseModel });
     return {
       action,
-      responseId: response.id,
-      model: response.model,
+      responseId,
+      model: responseModel,
       promptVersion: RESEARCH_AGENT_CONTROLLER_VERSION,
       usage: response.usage,
     };
@@ -1645,7 +1740,12 @@ export async function streamProviderResearchAgentDecision(input: {
     }
   }
   if (!responseId) responseId = `stream_${Date.now()}`;
-  const action = parseResearchAgentAction(parseOutput(outputText, z.unknown()));
+  const repaired = await parseActionWithSemanticRepair(outputText);
+  const action = repaired.action;
+  if (repaired.response) {
+    responseId = repaired.response.id;
+    responseModel = repaired.response.model;
+  }
   // Structured-output deltas contain the whole JSON envelope, not just the
   // user-safe summary. Emit the summary only after schema validation so the UI
   // never renders partial arguments or untrusted action fields.
@@ -2139,62 +2239,102 @@ export async function researchPublicWeb(input: {
   additionalSeedUrls?: string[];
 }): Promise<ProviderResearchSources> {
   const model = getResearchModel();
-  const queryResponse = await createStructuredResponse("research", {
-    model,
-    reasoning: { effort: "low" },
-    safety_identifier: safetyIdentifier(input.userPublicId),
-    store: false,
-    metadata: {
-      surface: "public_web_query_planning",
-      prompt_version: REPORT_PROMPT_VERSION,
-      study_id: input.studyPublicId,
-    },
-    instructions: [
-      "把商业研究 Brief 转换成公开网页检索计划。",
-      "queries 提供 3 到 5 条适合网页搜索的短检索词，同时覆盖中文和英文，不要使用只有地区或年份的宽泛词。",
-      "seedUrls 提供 4 到 16 个你已知且最可能真实存在的 https 官方页面，优先选择产品、定价、隐私、安全、服务条款和客户案例页面。",
-      "seedUrls 不得使用搜索结果页、百科、门户首页或虚构路径；不确定时宁可给供应商官网首页。",
-      "Provider wire 协议要求 queries 和 seedUrls 字段都是 JSON 数组的字符串，例如 queries 输出为字符串 [\"检索词一\",\"检索词二\",\"检索词三\"]，不得使用逗号拼接的普通文本。",
-      "同时覆盖中文和英文公开网页；包含核心品类、关键维度、地区与时间范围。",
-      "不要添加解释。",
-    ].join("\n"),
-    input: `研究 Brief：${input.brief}\n研究框架：${input.framework}`,
-    text: {
-      format: {
-        type: "json_schema",
-        name: "public_web_source_plan",
-        strict: true,
-        schema: searchSourcePlanJsonSchema,
+  let queryResponse: StructuredResponse | null = null;
+  let sourcePlan: { queries: string[]; seedUrls: string[] };
+  let queryPlanFallbackUsed = false;
+  try {
+    queryResponse = await createStructuredResponse("research", {
+      model,
+      reasoning: { effort: "low" },
+      safety_identifier: safetyIdentifier(input.userPublicId),
+      store: false,
+      metadata: {
+        surface: "public_web_query_planning",
+        prompt_version: REPORT_PROMPT_VERSION,
+        study_id: input.studyPublicId,
       },
-    },
-  }, { signal: input.signal });
-  const sourcePlan = parseProviderSearchSourcePlan(parseOutput(queryResponse.output_text, z.unknown()));
+      instructions: [
+        "把商业研究 Brief 转换成公开网页检索计划。",
+        "queries 提供 3 到 5 条适合网页搜索的短检索词，同时覆盖中文和英文，不要使用只有地区或年份的宽泛词。",
+        "seedUrls 提供 4 到 16 个你已知且最可能真实存在的 https 官方页面，优先选择产品、定价、隐私、安全、服务条款和客户案例页面。",
+        "seedUrls 不得使用搜索结果页、百科、门户首页或虚构路径；不确定时宁可给供应商官网首页。",
+        "Provider wire 协议要求 queries 和 seedUrls 字段都是 JSON 数组的字符串，例如 queries 输出为字符串 [\"检索词一\",\"检索词二\",\"检索词三\"]，不得使用逗号拼接的普通文本。",
+        "同时覆盖中文和英文公开网页；包含核心品类、关键维度、地区与时间范围。",
+        "不要添加解释。",
+      ].join("\n"),
+      input: `研究 Brief：${input.brief}\n研究框架：${input.framework}`,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "public_web_source_plan",
+          strict: true,
+          schema: searchSourcePlanJsonSchema,
+        },
+      },
+    }, { signal: input.signal });
+    sourcePlan = parseProviderSearchSourcePlan(parseOutput(queryResponse.output_text, z.unknown()));
+  } catch (error) {
+    if (!canFallbackSearchSourcePlan(error)) throw error;
+    sourcePlan = buildFallbackSearchSourcePlan(input.brief);
+    queryPlanFallbackUsed = true;
+  }
   const queries = sourcePlan.queries.slice(0, 5);
   const seedUrls = [...new Set([...(input.additionalSeedUrls ?? []), ...sourcePlan.seedUrls])].slice(0, 24);
-  const collected = await collectPublicWebSources(queries, seedUrls, input.signal);
+  const webCollections = [await collectPublicWebSources(queries, seedUrls, input.signal)];
   const socialStatus = getBlueskyPublicConnectorStatus();
   const social = socialStatus.enabled
     ? await collectBlueskyPublicSources(queries, input.signal)
     : null;
-  const sources = [...collected.sources, ...(social?.sources ?? [])];
+  let effectiveQueries = queries;
+  let sources = mergePublicWebSources([
+    ...webCollections.map((collection) => collection.sources),
+    ...(social ? [social.sources] : []),
+  ]);
+  let curated = curatePublicWebSources(input.brief, sources, 24, effectiveQueries);
 
-  const curated = curatePublicWebSources(input.brief, sources);
+  const isTargetedResearch = input.auditScope?.taskKey.startsWith("targeted_") === true;
+  const desiredSourceCount = isTargetedResearch ? 1 : 3;
+  let autonomousExpansionUsed = false;
+  let autonomousRecoveryQueryCount = 0;
+  if (curated.sources.length < desiredSourceCount) {
+    const recoveryQueries = buildAutonomousResearchQueries(input.brief, queries);
+    if (recoveryQueries.length) {
+      const recoveryCollection = await collectPublicWebSources(recoveryQueries, [], input.signal);
+      webCollections.push(recoveryCollection);
+      effectiveQueries = [...new Set([...queries, ...recoveryQueries])];
+      autonomousRecoveryQueryCount = Math.max(0, effectiveQueries.length - new Set(queries).size);
+      sources = mergePublicWebSources([
+        ...webCollections.map((collection) => collection.sources),
+        ...(social ? [social.sources] : []),
+      ]);
+      curated = curatePublicWebSources(input.brief, sources, 24, effectiveQueries);
+      autonomousExpansionUsed = true;
+    }
+  }
   const answerability = assessResearchAnswerability({ brief: input.brief, sources: curated.sources });
   const qualityRejectionReasons = curated.rejected.reduce<Record<string, number>>((counts, item) => {
     for (const reason of item.assessment.reasons) counts[reason] = (counts[reason] ?? 0) + 1;
     return counts;
   }, {});
 
-  if (curated.sources.length < 3) {
+  // Answerability is evaluated in the report layer. A single verified source
+  // can still support a bounded directional report; only an empty result is
+  // retried by the task recovery layer.
+  if (!curated.sources.length) {
     throw new Error("PUBLIC_WEB_SOURCES_INSUFFICIENT");
   }
 
+  const sourceAudits = [
+    ...webCollections.map((collection) => collection.audit),
+    ...(social ? [social.audit] : []),
+  ];
+  let materializedAudits = sourceAudits;
   if (input.auditScope) {
     const auditScope = input.auditScope;
     const database = await getDatabase();
     const prepared: PreparedSourceConnectorAudit[] = [];
     try {
-      for (const audit of [collected.audit, ...(social ? [social.audit] : [])]) {
+      for (const audit of sourceAudits) {
         prepared.push(await prepareSourceConnectorAuditRawStorage({ workspaceId: auditScope.workspaceId, audit }));
       }
       await database.transaction(async (transaction) => {
@@ -2206,17 +2346,36 @@ export async function researchPublicWeb(input: {
       await Promise.all(prepared.map(cleanupPreparedSourceRawStorage));
       throw error;
     }
-    collected.audit = prepared[0].audit;
-    if (social) social.audit = prepared[1].audit;
+    materializedAudits = prepared.map((item) => item.audit);
   }
 
-  const audits = [collected.audit, ...(social ? [social.audit] : [])].map(summarizeSourceConnectorAudit);
+  const audits = materializedAudits.map(summarizeSourceConnectorAudit);
+  const rawStorageFallbackReasons = [...new Set(materializedAudits.flatMap((audit) => {
+    const reasons = audit.metadata.rawStorageFallbackReasons;
+    return Array.isArray(reasons)
+      ? reasons.filter((reason): reason is string => typeof reason === "string")
+      : [];
+  }))];
+  const firstCollection = webCollections[0];
+  const sumCollectionMetadata = (key: "seedSourceCount" | "searchSourceCount" | "candidateCount" | "rejectedCount" | "unavailableCount") => (
+    webCollections.reduce((total, collection) => total + (collection.metadata[key] ?? 0), 0)
+  );
 
   return {
-    queries,
+    queries: effectiveQueries,
     sources: curated.sources,
     metadata: {
-      ...collected.metadata,
+      ...firstCollection.metadata,
+      fallbackUsed: webCollections.some((collection) => collection.metadata.fallbackUsed),
+      queryPlanFallbackUsed,
+      autonomousExpansionUsed,
+      autonomousRecoveryQueryCount,
+      rawStorageFallbackUsed: rawStorageFallbackReasons.length > 0,
+      rawStorageFallbackReasons,
+      seedSourceCount: sumCollectionMetadata("seedSourceCount"),
+      searchSourceCount: sumCollectionMetadata("searchSourceCount"),
+      candidateCount: sumCollectionMetadata("candidateCount"),
+      unavailableCount: sumCollectionMetadata("unavailableCount"),
       finalSourceCount: curated.sources.length,
       rejectedCount: curated.rejected.length,
       qualityRejectedCount: curated.rejected.length,
@@ -2228,9 +2387,9 @@ export async function researchPublicWeb(input: {
     },
     audit: audits[0],
     audits,
-    responseId: queryResponse.id,
-    model: queryResponse.model,
-    usage: queryResponse.usage,
+    responseId: queryResponse?.id ?? `local_search_plan_${Date.now()}`,
+    model: queryResponse?.model ?? model,
+    usage: queryResponse?.usage ?? null,
     answerability,
     rejectedSourceCount: curated.rejected.length,
   };

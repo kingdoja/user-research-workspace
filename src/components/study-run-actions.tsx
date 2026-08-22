@@ -8,10 +8,12 @@ export function StudyRunActions({
   publicId,
   configured,
   retry,
+  autonomousRecovery = false,
 }: {
   publicId: string;
   configured: boolean;
   retry: boolean;
+  autonomousRecovery?: boolean;
 }) {
   const router = useRouter();
   const [error, setError] = useState("");
@@ -43,14 +45,14 @@ export function StudyRunActions({
         type="button"
         onClick={startRun}
         disabled={pending || !configured}
-        title={configured ? (retry ? "重新执行研究" : "启动研究") : "服务器需要 OPENAI_API_KEY"}
+        title={configured ? (autonomousRecovery ? "自动扩展公开网页检索并继续" : retry ? "重新执行研究" : "启动研究") : "服务器需要 OPENAI_API_KEY"}
       >
         {pending
           ? <LoaderCircle className="spin" size={17} />
           : retry
             ? <RotateCcw size={17} />
             : <Play size={17} />}
-        {pending ? "正在排队" : retry ? "重新执行" : configured ? "启动公开网页研究" : "等待 API Key"}
+        {pending ? "正在排队" : autonomousRecovery ? "自动补充资料并继续" : retry ? "重新执行" : configured ? "启动公开网页研究" : "等待 API Key"}
       </button>
       {error ? <p className="workspace-inline-error" role="alert">{error}</p> : null}
     </div>

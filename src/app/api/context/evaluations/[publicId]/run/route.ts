@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getViewer } from "@/lib/auth";
 import { contextEmbeddingEvaluationInputSchema, runContextEvaluation } from "@/lib/context-system";
-import { isSameOriginRequest } from "@/lib/request-security";
+import { checkRateLimit, isSameOriginRequest, rateLimitResponse } from "@/lib/request-security";
 
 export async function POST(
   request: Request,
@@ -10,6 +10,8 @@ export async function POST(
   if (!isSameOriginRequest(request)) return NextResponse.json({ error: "请求来源无效" }, { status: 403 });
   const viewer = await getViewer();
   if (!viewer) return NextResponse.json({ error: "请先登录" }, { status: 401 });
+  const rateLimit = checkRateLimit(request, "context-evaluation-run", { limit: 5, windowMs: 60 * 60_000 }, `${viewer.workspaceId}:${viewer.userId}`);
+  if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfterSeconds);
   const parsed = contextEmbeddingEvaluationInputSchema.safeParse(await request.json().catch(() => ({})));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Embedding 评估配置无效" }, { status: 400 });
   try {

@@ -16,6 +16,7 @@ import {
   getAgentWorkspaceFile,
   listUniversalAgentWorkspace,
   processAgentRunQueue,
+  retryAgentRun,
   sendAgentMessage,
 } from "../src/lib/universal-agent";
 
@@ -335,6 +336,26 @@ async function main() {
       tool_calls_used: 0, external_tool_calls_used: 0,
     });
     assert.equal(requests.length, 1, "blocked Skill call must not reach the sandbox runner");
+    const retryDenied = await retryAgentRun(viewer, limitedThread.publicId, limitedRun.runPublicId, {
+      externalExecutionAllowed: false, requestId: `smoke:${suffix}:retry-denied`,
+    });
+    assert.equal(retryDenied, "execution_confirmation_required");
+    const retryQueued = await retryAgentRun(viewer, limitedThread.publicId, limitedRun.runPublicId, {
+      externalExecutionAllowed: true, requestId: `smoke:${suffix}:retry-confirmed`,
+    });
+    assert.equal(typeof retryQueued, "object");
+    if (typeof retryQueued !== "object" || "error" in retryQueued) throw new Error(`Retry enqueue failed: ${JSON.stringify(retryQueued)}`);
+    assert.equal(retryQueued.status, "queued");
+    const retryAudit = await database.query<{ retry_of_run_id: string | null; external_execution_allowed: boolean; status: string }>(
+      `select retry_of_run_id::text as retry_of_run_id, external_execution_allowed, status
+       from agent_runs where public_id = $1`,
+      [retryQueued.runPublicId],
+    );
+    const sourceRunId = await database.query<{ id: string }>("select id::text as id from agent_runs where public_id = $1", [limitedRun.runPublicId]);
+    assert.deepEqual(retryAudit.rows[0], {
+      retry_of_run_id: sourceRunId.rows[0].id, external_execution_allowed: true, status: "queued",
+    });
+    await database.query("update agent_runs set status = 'failed', error_code = 'SMOKE_RETRY_CLEANUP', error_message = 'smoke' where public_id = $1", [retryQueued.runPublicId]);
 
     const budgetThread = await createAgentThread(viewer, { title: "Token budget governance" });
     assert.equal(typeof budgetThread, "object");
@@ -370,6 +391,7 @@ async function main() {
       idempotentQueue: true, oneActiveRunPerThread: true, claimedSetupFailureRecovered: true,
       sseRunCursorOrdering: true, sseRunFilter: true, sseWorkspaceIsolation: true,
       toolCallGovernance: true, tokenBudgetPreflight: true, blockedRunAudit: true,
+      safeRetryConfirmation: true, retryLineage: true,
     }, null, 2));
   } finally {
     for (const workspaceId of workspaceIds) await database.query("delete from workspaces where id = $1", [workspaceId]);

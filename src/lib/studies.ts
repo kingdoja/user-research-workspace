@@ -1975,7 +1975,66 @@ export async function queueStudyRun(viewer: Viewer, publicId: string) {
     }
 
     if (study.run_status === "waiting_input") {
-      return "waiting_input" as const;
+      // Older runs may already be paused by the previous source-count gate.
+      // Resume those runs automatically after the gate is made non-blocking;
+      // explicit agent questions continue to require a real user response.
+      const autonomousRecovery = await transaction.query<{ id: string; task_key: string }>(
+        `select id::text as id, task_key
+         from study_tasks
+         where run_id = $1 and status = 'waiting_input'
+           and last_error_code = 'PUBLIC_WEB_SOURCES_INSUFFICIENT'
+         order by id desc
+         for update`,
+        [study.run_id],
+      );
+      const recoverableTasks = autonomousRecovery.rows;
+      if (!recoverableTasks.length) return "waiting_input" as const;
+      const recoverableTaskIds = recoverableTasks.map((task) => task.id);
+      const recoverableTaskKeys = recoverableTasks.map((task) => task.task_key);
+
+      await transaction.query(
+        `update study_task_inputs
+         set status = 'consumed', response_payload = '{"source":"autonomous_recovery"}'::jsonb,
+             submitted_at = now(), consumed_at = now()
+         where task_id = any($1::bigint[]) and status = 'pending'`,
+        [recoverableTaskIds],
+      );
+      await transaction.query(
+        `update study_tasks
+         set status = 'pending', next_attempt_at = now(), error_message = null,
+             last_error_code = null, last_error_class = null, retryable = null,
+             waiting_reason = null, waiting_payload = null, waiting_since = null,
+             finished_at = null, resumed_at = now(), resume_count = resume_count + 1, updated_at = now()
+         where id = any($1::bigint[])`,
+        [recoverableTaskIds],
+      );
+      await transaction.query(
+        `update study_runs set status = 'queued', error_message = null, finished_at = null where id = $1`,
+        [study.run_id],
+      );
+      await transaction.query(
+        `update studies set status = 'queued', current_stage = 'execution', updated_at = now() where id = $1`,
+        [study.study_id],
+      );
+      await transaction.query(
+        `insert into study_job_queue (run_id, status, available_at)
+         values ($1, 'queued', now())
+         on conflict (run_id) do update set status = 'queued', available_at = now(),
+           lease_owner = null, lease_expires_at = null, error_message = null, updated_at = now()`,
+        [study.run_id],
+      );
+      await transaction.query(
+        `insert into study_events (study_id, run_id, event_type, payload)
+         values ($1, $2, 'run.autonomous_recovery_queued', $3::jsonb),
+                ($1, $2, 'run.resume_queued', $4::jsonb)`,
+        [
+          study.study_id,
+          study.run_id,
+          JSON.stringify({ taskKeys: recoverableTaskKeys, reason: "PUBLIC_WEB_SOURCES_INSUFFICIENT" }),
+          JSON.stringify({ taskKeys: recoverableTaskKeys, source: "autonomous_recovery" }),
+        ],
+      );
+      return "queued" as const;
     }
 
     const activeSince = study.run_last_event_at ?? study.run_started_at ?? study.run_created_at;
@@ -2005,10 +2064,45 @@ export async function queueStudyRun(viewer: Viewer, publicId: string) {
         "update studies set status = 'queued', current_stage = 'execution', updated_at = now() where id = $1",
         [study.study_id],
       );
+      const autonomousRecovery = await transaction.query<{ id: string; task_key: string }>(
+        `select id::text as id, task_key
+         from study_tasks
+         where run_id = $1 and status = 'waiting_input'
+           and last_error_code = 'PUBLIC_WEB_SOURCES_INSUFFICIENT'
+         order by id desc
+         for update`,
+        [study.run_id],
+      );
+      const recoverableTasks = autonomousRecovery.rows;
+      if (recoverableTasks.length) {
+        const taskIds = recoverableTasks.map((task) => task.id);
+        const taskKeys = recoverableTasks.map((task) => task.task_key);
+        await transaction.query(
+          `update study_task_inputs
+           set status = 'consumed', response_payload = '{"source":"autonomous_recovery"}'::jsonb,
+               submitted_at = now(), consumed_at = now()
+           where task_id = any($1::bigint[]) and status = 'pending'`,
+          [taskIds],
+        );
+        await transaction.query(
+          `update study_tasks
+           set status = 'pending', next_attempt_at = now(), error_message = null,
+               last_error_code = null, last_error_class = null, retryable = null,
+               waiting_reason = null, waiting_payload = null, waiting_since = null,
+               finished_at = null, resumed_at = now(), resume_count = resume_count + 1, updated_at = now()
+           where id = any($1::bigint[])`,
+          [taskIds],
+        );
+        await transaction.query(
+          `insert into study_events (study_id, run_id, event_type, payload)
+           values ($1, $2, 'run.autonomous_recovery_queued', $3::jsonb)`,
+          [study.study_id, study.run_id, JSON.stringify({ taskKeys, reason: "PUBLIC_WEB_SOURCES_INSUFFICIENT" })],
+        );
+      }
       await transaction.query(
         `insert into study_events (study_id, run_id, event_type, payload)
          values ($1, $2, 'run.recovery_queued', $3::jsonb)`,
-        [study.study_id, study.run_id, JSON.stringify({ message: interruptionMessage, recoverable: true })],
+        [study.study_id, study.run_id, JSON.stringify({ message: interruptionMessage, recoverable: true, autonomousTaskKeys: recoverableTasks.map((task) => task.task_key) })],
       );
       return "queued" as const;
     }

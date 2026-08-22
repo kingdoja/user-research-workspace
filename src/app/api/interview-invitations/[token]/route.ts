@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getPublicInterviewInvitation, submitPublicInterview } from "@/lib/interviews";
 import { submitPublicInterviewSchema } from "@/lib/interview-schema";
-import { isSameOriginRequest } from "@/lib/request-security";
+import { checkRateLimit, isSameOriginRequest, rateLimitResponse } from "@/lib/request-security";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
@@ -11,6 +11,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tok
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ token: string }> }) {
+  const rateLimit = checkRateLimit(request, "public-interview-submit", { limit: 30, windowMs: 15 * 60_000 });
+  if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfterSeconds);
   if (!isSameOriginRequest(request)) return NextResponse.json({ error: "请求来源无效" }, { status: 403 });
   const parsed = submitPublicInterviewSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "访谈回答无效" }, { status: 400 });

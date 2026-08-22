@@ -8,6 +8,10 @@ import {
 } from "@aws-sdk/client-s3";
 
 export const DEFAULT_SOURCE_RAW_INLINE_LIMIT_BYTES = 64 * 1024;
+// The connector caps fetched responses below this size. Keeping a bounded
+// inline fallback lets research finish when optional S3-compatible storage is
+// down, without allowing unbounded raw bodies into Postgres.
+export const DEFAULT_SOURCE_RAW_INLINE_FALLBACK_LIMIT_BYTES = 2 * 1024 * 1024;
 
 export type SourceRawStorageLocator = {
   provider: "s3";
@@ -53,6 +57,25 @@ export function getSourceRawInlineLimitBytes() {
   return Math.max(0, Math.min(Math.floor(configured), 512 * 1024));
 }
 
+export function getSourceRawInlineFallbackLimitBytes() {
+  const configured = Number(
+    process.env.SOURCE_RAW_INLINE_FALLBACK_LIMIT_BYTES ?? DEFAULT_SOURCE_RAW_INLINE_FALLBACK_LIMIT_BYTES,
+  );
+  if (!Number.isFinite(configured)) return DEFAULT_SOURCE_RAW_INLINE_FALLBACK_LIMIT_BYTES;
+  return Math.max(
+    getSourceRawInlineLimitBytes(),
+    Math.min(Math.floor(configured), 4 * 1024 * 1024),
+  );
+}
+
+export function isSourceRawStorageUnavailable(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  const causeMessage = error.cause instanceof Error ? error.cause.message : "";
+  return error.name === "SourceObjectStorageUnavailableError"
+    || error.message === "SOURCE_OBJECT_STORAGE_UNAVAILABLE"
+    || /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND/.test(`${error.message} ${causeMessage}`);
+}
+
 export function createSourceRawObjectKey(workspaceId: string, contentHash: string) {
   const safeWorkspaceId = workspaceId.replace(/[^a-zA-Z0-9_-]/g, "_");
   if (!/^[a-f0-9]{64}$/.test(contentHash)) throw new Error("SOURCE_CONTENT_HASH_INVALID");
@@ -64,6 +87,7 @@ export function getSourceRawStorageStatus() {
     configured: Boolean(process.env.SOURCE_OBJECT_STORAGE_BUCKET?.trim()),
     provider: "s3",
     inlineLimitBytes: getSourceRawInlineLimitBytes(),
+    inlineFallbackLimitBytes: getSourceRawInlineFallbackLimitBytes(),
   } as const;
 }
 

@@ -39,6 +39,11 @@ export const sendAgentMessageInputSchema = z.object({
   requestId: z.string().trim().min(8).max(160).regex(/^[A-Za-z0-9:_-]+$/).optional(),
 }).strict();
 
+export const retryAgentRunInputSchema = z.object({
+  externalExecutionAllowed: z.boolean().default(false),
+  requestId: z.string().trim().min(8).max(160).regex(/^[A-Za-z0-9:_-]+$/),
+}).strict();
+
 export type UniversalAgentWorkspace = {
   provider: ReturnType<typeof getProviderStageStatus>;
   threads: Array<{
@@ -90,6 +95,9 @@ export type UniversalAgentWorkspace = {
     costMicrosUsed: number;
     maxCostMicros: number;
     externalExecutionAllowed: boolean;
+    retryOfRunPublicId: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
     startedAt: string;
   }>;
 };
@@ -258,6 +266,7 @@ export async function listUniversalAgentWorkspace(
       external_tool_calls_used: number; max_external_tool_calls: number;
       input_tokens_used: string; output_tokens_used: string; token_budget: string;
       cost_micros_used: string; max_cost_micros: string;
+      retry_of_run_public_id: string | null; error_code: string | null; error_message: string | null;
       external_execution_allowed: boolean; started_at: string;
     }>(
       `select run.public_id, thread.public_id as thread_public_id, run.status, run.steps_used,
@@ -267,8 +276,10 @@ export async function listUniversalAgentWorkspace(
               run.input_tokens_used::text as input_tokens_used, run.output_tokens_used::text as output_tokens_used,
               run.token_budget::text as token_budget, run.cost_micros_used::text as cost_micros_used,
               run.max_cost_micros::text as max_cost_micros,
+              retry_source.public_id as retry_of_run_public_id, run.error_code, run.error_message,
               run.external_execution_allowed, run.started_at::text as started_at
        from agent_runs run join agent_threads thread on thread.id = run.thread_id
+       left join agent_runs retry_source on retry_source.id = run.retry_of_run_id
        where run.workspace_id = $1 order by run.started_at desc, run.id desc limit 30`,
       [viewer.workspaceId],
     ),
@@ -315,6 +326,7 @@ export async function listUniversalAgentWorkspace(
       externalToolCallsUsed: row.external_tool_calls_used, maxExternalToolCalls: row.max_external_tool_calls,
       tokensUsed: Number(row.input_tokens_used) + Number(row.output_tokens_used), tokenBudget: Number(row.token_budget),
       costMicrosUsed: Number(row.cost_micros_used), maxCostMicros: Number(row.max_cost_micros),
+      retryOfRunPublicId: row.retry_of_run_public_id, errorCode: row.error_code, errorMessage: row.error_message,
       externalExecutionAllowed: row.external_execution_allowed, startedAt: row.started_at,
     })),
   };
@@ -629,6 +641,8 @@ export async function sendAgentMessage(
     maxExternalToolCalls?: number;
     tokenBudget?: number;
     maxCostMicros?: number;
+    retryOfRunId?: string;
+    retryOfRunPublicId?: string;
   },
 ) {
   if (viewer.role === "viewer") return "forbidden" as const;
@@ -647,7 +661,7 @@ export async function sendAgentMessage(
     );
     if (!thread.rows[0]) return "not_found" as const;
     await expireAgentRunLeases(transaction, thread.rows[0].id);
-    const existing = await transaction.query<{ public_id: string; status: "queued" | "running" | "completed" | "failed" | "cancelled" }>(
+    const existing = await transaction.query<{ public_id: string; status: "queued" | "running" | "completed" | "failed" | "blocked" | "cancelled" }>(
       "select public_id, status from agent_runs where thread_id = $1 and idempotency_key = $2 limit 1",
       [thread.rows[0].id, requestId],
     );
@@ -662,26 +676,80 @@ export async function sendAgentMessage(
       return { error: "busy" as const, runPublicId: active.rows[0].public_id, status: active.rows[0].status };
     }
     const message = await transaction.query<{ id: string }>(
-      `insert into agent_messages (public_id, thread_id, actor_user_id, role, content)
-       values ($1, $2, $3, 'user', $4) returning id::text as id`,
-      [createPublicId("agm"), thread.rows[0].id, viewer.userId, input.content],
+      `insert into agent_messages (public_id, thread_id, actor_user_id, role, content, metadata)
+       values ($1, $2, $3, 'user', $4, $5::jsonb) returning id::text as id`,
+      [
+        createPublicId("agm"), thread.rows[0].id, viewer.userId, input.content,
+        JSON.stringify(options?.retryOfRunPublicId ? { retryOfRunPublicId: options.retryOfRunPublicId } : {}),
+      ],
     );
     const run = await transaction.query<{ id: string; public_id: string }>(
       `insert into agent_runs (
          public_id, workspace_id, thread_id, initiated_by, user_message_id, objective,
          status, max_steps, max_tool_calls, max_product_tool_calls, max_external_tool_calls,
-         token_budget, max_cost_micros, external_execution_allowed, idempotency_key
-       ) values ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, $9, $10, $11, $12, $13, $14)
+         token_budget, max_cost_micros, external_execution_allowed, idempotency_key, retry_of_run_id
+       ) values ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, $9, $10, $11, $12, $13, $14, $15)
        returning id::text as id, public_id`,
       [
         createPublicId("agr"), viewer.workspaceId, thread.rows[0].id, viewer.userId,
         message.rows[0].id, input.content, maxSteps, maxToolCalls, maxProductToolCalls,
         maxExternalToolCalls, tokenBudget, maxCostMicros, input.externalExecutionAllowed, requestId,
+        options?.retryOfRunId ?? null,
       ],
     );
     await bindAgentSkills(transaction, viewer, run.rows[0].id, input.skillPublicIds);
     await transaction.query("update agent_threads set updated_at = now() where id = $1", [thread.rows[0].id]);
     return { runPublicId: run.rows[0].public_id, status: "queued" as const, reused: false };
+  });
+}
+
+export async function retryAgentRun(
+  viewer: Viewer,
+  threadPublicId: string,
+  runPublicId: string,
+  input: z.infer<typeof retryAgentRunInputSchema>,
+) {
+  if (viewer.role === "viewer") return "forbidden" as const;
+  const database = await getDatabase();
+  const sourceResult = await database.query<{
+    id: string; objective: string; status: string; external_execution_allowed: boolean;
+    max_steps: number; max_tool_calls: number; max_product_tool_calls: number;
+    max_external_tool_calls: number; token_budget: string; max_cost_micros: string;
+    skill_public_ids: string[] | string;
+  }>(
+    `select run.id::text as id, run.objective, run.status, run.external_execution_allowed,
+            run.max_steps, run.max_tool_calls, run.max_product_tool_calls,
+            run.max_external_tool_calls, run.token_budget::text as token_budget,
+            run.max_cost_micros::text as max_cost_micros,
+            coalesce(jsonb_agg(binding.skill_public_id order by binding.id)
+              filter (where binding.id is not null), '[]'::jsonb) as skill_public_ids
+     from agent_runs run join agent_threads thread on thread.id = run.thread_id
+     left join agent_run_skill_bindings binding on binding.run_id = run.id
+     where run.public_id = $1 and thread.public_id = $2 and run.workspace_id = $3
+     group by run.id`,
+    [runPublicId, threadPublicId, viewer.workspaceId],
+  );
+  const source = sourceResult.rows[0];
+  if (!source) return "not_found" as const;
+  if (!["failed", "blocked"].includes(source.status)) return "not_retryable" as const;
+  if (source.external_execution_allowed && !input.externalExecutionAllowed) {
+    return "execution_confirmation_required" as const;
+  }
+  const skillPublicIds = jsonValue<string[]>(source.skill_public_ids);
+  return sendAgentMessage(viewer, threadPublicId, {
+    content: source.objective,
+    skillPublicIds,
+    externalExecutionAllowed: input.externalExecutionAllowed,
+    requestId: input.requestId,
+  }, {
+    maxSteps: source.max_steps,
+    maxToolCalls: source.max_tool_calls,
+    maxProductToolCalls: source.max_product_tool_calls,
+    maxExternalToolCalls: source.max_external_tool_calls,
+    tokenBudget: Number(source.token_budget),
+    maxCostMicros: Number(source.max_cost_micros),
+    retryOfRunId: source.id,
+    retryOfRunPublicId: runPublicId,
   });
 }
 

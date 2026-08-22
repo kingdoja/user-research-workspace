@@ -7,7 +7,9 @@ import { createPublicId } from "@/lib/identifiers";
 import {
   createConfiguredSourceRawStorage,
   createSourceRawObjectKey,
+  getSourceRawInlineFallbackLimitBytes,
   getSourceRawInlineLimitBytes,
+  isSourceRawStorageUnavailable,
   type SourceRawStorage,
   type SourceRawStorageLocator,
 } from "@/lib/source-raw-storage";
@@ -553,6 +555,30 @@ export type PreparedSourceConnectorAudit = {
   storage: SourceRawStorage | null;
 };
 
+function inlineSourceSnapshotFallback(
+  candidate: CollectedSourceCandidate,
+  rawByteLength: number,
+  reason: string,
+  fallbackLimitBytes: number,
+) {
+  const snapshot = candidate.snapshot;
+  if (!snapshot?.rawContent) return candidate;
+  if (rawByteLength > fallbackLimitBytes) throw new Error("SOURCE_OBJECT_STORAGE_REQUIRED");
+  return {
+    ...candidate,
+    snapshot: {
+      ...snapshot,
+      rawByteLength,
+      rawStorage: null,
+      metadata: {
+        ...snapshot.metadata,
+        rawStorageMode: "inline_fallback",
+        rawStorageFallbackReason: reason,
+      },
+    },
+  };
+}
+
 export async function prepareSourceConnectorAuditRawStorage(input: {
   workspaceId: string;
   audit: SourceConnectorAudit;
@@ -560,10 +586,27 @@ export async function prepareSourceConnectorAuditRawStorage(input: {
   inlineLimitBytes?: number;
 }): Promise<PreparedSourceConnectorAudit> {
   const storage = input.storage === undefined ? createConfiguredSourceRawStorage() : input.storage;
-  if (storage) await storage.healthCheck();
   const inlineLimitBytes = input.inlineLimitBytes ?? getSourceRawInlineLimitBytes();
+  const fallbackLimitBytes = Math.max(inlineLimitBytes, getSourceRawInlineFallbackLimitBytes());
   const createdObjects: SourceRawStorageLocator[] = [];
   const candidates: CollectedSourceCandidate[] = [];
+  let storageHealthChecked = false;
+  let storageUnavailableReason: string | null = storage ? null : "SOURCE_OBJECT_STORAGE_NOT_CONFIGURED";
+
+  async function storageReady() {
+    if (!storage || storageUnavailableReason) return false;
+    if (storageHealthChecked) return true;
+    storageHealthChecked = true;
+    try {
+      await storage.healthCheck();
+      return true;
+    } catch (error) {
+      if (!isSourceRawStorageUnavailable(error)) throw error;
+      storageUnavailableReason = "SOURCE_OBJECT_STORAGE_UNAVAILABLE";
+      return false;
+    }
+  }
+
   try {
     for (const candidate of input.audit.candidates) {
       const snapshot = candidate.snapshot;
@@ -576,32 +619,65 @@ export async function prepareSourceConnectorAuditRawStorage(input: {
         candidates.push({ ...candidate, snapshot: { ...snapshot, rawByteLength, rawStorage: null } });
         continue;
       }
-      if (!storage) throw new Error("SOURCE_OBJECT_STORAGE_REQUIRED");
       if (!snapshot.contentHash) throw new Error("SOURCE_CONTENT_HASH_REQUIRED");
-      const write = await storage.putImmutable({
-        key: createSourceRawObjectKey(input.workspaceId, snapshot.contentHash),
-        body: snapshot.rawContent,
-        contentType: snapshot.contentType || "application/octet-stream",
-        contentHash: snapshot.contentHash,
-      });
-      const { created, ...rawStorage } = write;
-      if (created) createdObjects.push(rawStorage);
-      candidates.push({
-        ...candidate,
-        snapshot: {
-          ...snapshot,
-          rawContent: null,
-          rawStorage,
-          rawByteLength,
-          metadata: { ...snapshot.metadata, rawStorageMode: "external", rawStorageProvider: "s3" },
-        },
-      });
+      if (await storageReady()) {
+        try {
+          const write = await storage!.putImmutable({
+            key: createSourceRawObjectKey(input.workspaceId, snapshot.contentHash),
+            body: snapshot.rawContent,
+            contentType: snapshot.contentType || "application/octet-stream",
+            contentHash: snapshot.contentHash,
+          });
+          const { created, ...rawStorage } = write;
+          if (created) createdObjects.push(rawStorage);
+          candidates.push({
+            ...candidate,
+            snapshot: {
+              ...snapshot,
+              rawContent: null,
+              rawStorage,
+              rawByteLength,
+              metadata: { ...snapshot.metadata, rawStorageMode: "external", rawStorageProvider: "s3" },
+            },
+          });
+          continue;
+        } catch (error) {
+          if (!isSourceRawStorageUnavailable(error)) throw error;
+          storageUnavailableReason = "SOURCE_OBJECT_STORAGE_UNAVAILABLE";
+        }
+      }
+      candidates.push(inlineSourceSnapshotFallback(
+        candidate,
+        rawByteLength,
+        storageUnavailableReason ?? "SOURCE_OBJECT_STORAGE_UNAVAILABLE",
+        fallbackLimitBytes,
+      ));
     }
   } catch (error) {
     if (storage) await Promise.allSettled(createdObjects.map((locator) => storage.delete(locator)));
     throw error;
   }
-  return { audit: { ...input.audit, candidates }, createdObjects, storage };
+  const fallbackUsed = candidates.some((candidate) => candidate.snapshot?.metadata.rawStorageMode === "inline_fallback");
+  const fallbackReasons = [...new Set(candidates.flatMap((candidate) => {
+    const reason = candidate.snapshot?.metadata.rawStorageFallbackReason;
+    return typeof reason === "string" ? [reason] : [];
+  }))];
+  return {
+    audit: {
+      ...input.audit,
+      candidates,
+      metadata: {
+        ...input.audit.metadata,
+        ...(fallbackUsed ? {
+          rawStorageFallbackUsed: true,
+          rawStorageFallbackReasons: fallbackReasons,
+          rawStorageFallbackLimitBytes: fallbackLimitBytes,
+        } : {}),
+      },
+    },
+    createdObjects,
+    storage,
+  };
 }
 
 export async function cleanupPreparedSourceRawStorage(prepared: PreparedSourceConnectorAudit) {
@@ -648,8 +724,10 @@ export async function materializeSourceConnectorAudit(queryable: Queryable, inpu
     if (!candidate.snapshot) continue;
     const rawByteLength = candidate.snapshot.rawByteLength
       ?? (candidate.snapshot.rawContent ? Buffer.byteLength(candidate.snapshot.rawContent, "utf8") : null);
-    if (candidate.snapshot.rawContent && rawByteLength !== null && rawByteLength > getSourceRawInlineLimitBytes()) {
-      throw new Error("SOURCE_OBJECT_STORAGE_REQUIRED");
+    if (candidate.snapshot.rawContent && rawByteLength !== null) {
+      const inlineFallback = candidate.snapshot.metadata.rawStorageMode === "inline_fallback";
+      const limit = inlineFallback ? getSourceRawInlineFallbackLimitBytes() : getSourceRawInlineLimitBytes();
+      if (rawByteLength > limit) throw new Error("SOURCE_OBJECT_STORAGE_REQUIRED");
     }
     const snapshot = await queryable.query<{ id: string }>(
       `insert into source_snapshots (

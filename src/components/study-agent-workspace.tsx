@@ -268,6 +268,9 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
   const active = (study.runStatus === "queued" || study.runStatus === "running") && !study.runRecoverable;
   const failed = study.runStatus === "failed" || study.runRecoverable;
   const waitingInput = study.runStatus === "waiting_input";
+  const autonomousRecovery = waitingInput && study.tasks.some((task) => (
+    task.status === "waiting_input" && task.lastErrorCode === "PUBLIC_WEB_SOURCES_INSUFFICIENT"
+  ));
   const events = study.events.filter((event) => !study.runId || event.runId === study.runId || event.runId === null);
   const steps = createProgressItems(study);
   const activeStep = steps.find((step) => step.status === "active");
@@ -372,7 +375,11 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
                       {attempt.error ? <small>{attempt.error}</small> : null}
                     </li>)}</ol>
                   </details> : null}
-                  {task?.inputRequest ? <StudyTaskInputForm studyPublicId={study.publicId} taskPublicId={task.publicId} request={task.inputRequest.request} /> : null}
+                  {task?.lastErrorCode === "PUBLIC_WEB_SOURCES_INSUFFICIENT"
+                    ? <p className="agent-step-summary">系统会自动扩展检索并继续，不需要补充 URL。</p>
+                    : task?.inputRequest
+                      ? <StudyTaskInputForm studyPublicId={study.publicId} taskPublicId={task.publicId} request={task.inputRequest.request} />
+                      : null}
               </ToolCall>
               {artifact ? <ArtifactResultCard artifact={artifact} /> : null}
               {todoEvent ? <ToolCall name="updateTodo" status="done" /> : null}
@@ -427,7 +434,14 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
             })}</ol>
           </details>
         ) : null}
-        {!study.report && !active && !waitingInput ? <StudyRunActions publicId={study.publicId} configured={provider.configured} retry={failed} /> : null}
+        {!study.report && !active && (!waitingInput || autonomousRecovery) ? (
+          <StudyRunActions
+            publicId={study.publicId}
+            configured={provider.configured}
+            retry={failed || autonomousRecovery}
+            autonomousRecovery={autonomousRecovery}
+          />
+        ) : null}
       </div>
     </article>
   );

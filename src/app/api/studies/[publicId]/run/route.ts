@@ -1,6 +1,6 @@
 import { after, NextResponse } from "next/server";
 import { getViewer } from "@/lib/auth";
-import { isSameOriginRequest } from "@/lib/request-security";
+import { checkRateLimit, isSameOriginRequest, rateLimitResponse } from "@/lib/request-security";
 import { enqueueLatestStudyRun, processStudyJobQueue } from "@/lib/research-harness";
 import { queueStudyRun } from "@/lib/studies";
 
@@ -16,6 +16,8 @@ export async function POST(request: Request, context: RouteContext<"/api/studies
   if (!viewer) {
     return NextResponse.json({ error: "请先登录" }, { status: 401 });
   }
+  const rateLimit = checkRateLimit(request, "study-run", { limit: 10, windowMs: 15 * 60_000 }, `${viewer.workspaceId}:${viewer.userId}`);
+  if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfterSeconds);
 
   const { publicId } = await context.params;
   const result = await queueStudyRun(viewer, publicId);

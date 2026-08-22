@@ -27,7 +27,44 @@ export type ResearchAgentTaskSnapshot = {
   status: string;
   dependsOn: string[];
   input: Record<string, unknown>;
+  resultSummary?: Record<string, unknown>;
 };
+
+export function summarizeResearchAgentTaskResult(output: unknown) {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return undefined;
+  const record = output as Record<string, unknown>;
+  const sources = Array.isArray(record.sources) ? record.sources : [];
+  const sourcePreview = sources.slice(0, 8).flatMap((source) => {
+    if (!source || typeof source !== "object") return [];
+    const item = source as Record<string, unknown>;
+    const url = typeof item.url === "string" ? item.url : null;
+    const title = typeof item.title === "string" ? item.title.slice(0, 160) : null;
+    return url || title ? [{ title, url }] : [];
+  });
+  const audit = record.audit && typeof record.audit === "object" && !Array.isArray(record.audit)
+    ? record.audit as Record<string, unknown>
+    : null;
+  const directions = Array.isArray(record.directions) ? record.directions.slice(0, 8).flatMap((direction) => {
+    if (!direction || typeof direction !== "object") return [];
+    const item = direction as Record<string, unknown>;
+    return typeof item.title === "string" ? [{ title: item.title.slice(0, 160), verdict: item.verdict ?? null }] : [];
+  }) : [];
+  const summary = typeof record.summary === "string" ? record.summary.slice(0, 800) : null;
+  const result: Record<string, unknown> = {};
+  if (sources.length) result.sourceCount = sources.length;
+  if (sourcePreview.length) result.sources = sourcePreview;
+  if (audit) {
+    result.connector = {
+      status: audit.status ?? null,
+      collectedCount: audit.collectedCount ?? null,
+      rejectedCount: audit.rejectedCount ?? null,
+      unavailableCount: audit.unavailableCount ?? null,
+    };
+  }
+  if (summary) result.summary = summary;
+  if (directions.length) result.directions = directions;
+  return Object.keys(result).length ? result : undefined;
+}
 
 export type ResearchAgentDecisionInput = {
   study: {
@@ -78,7 +115,10 @@ export function assessResearchAgentRolloutQuality(input: {
   const failureRate = input.metrics.reduce((sum, item) => sum + Number(item.controllerFailureRate ?? 1), 0) / input.metrics.length;
   const rejectRate = input.metrics.reduce((sum, item) => sum + Number(item.policyRejectRate ?? 1), 0) / input.metrics.length;
   const matchRate = input.metrics.reduce((sum, item) => sum + Number(item.callToolMatchRate ?? 0), 0) / input.metrics.length;
-  const templateMatchRate = input.metrics.reduce((sum, item) => sum + Number(item.templateMatchRate ?? 1), 0) / input.metrics.length;
+  const templateMatchRate = input.metrics.reduce((sum, item) => {
+    const shadowIgnored = item.controllerMode === "shadow" && Number(item.shadowIgnoredCount ?? 0) > 0;
+    return sum + (shadowIgnored ? 1 : Number(item.templateMatchRate ?? 1));
+  }, 0) / input.metrics.length;
   const reportGateFailures = input.metrics.filter((item) => item.reportGatePassed !== true).length;
   if (failureRate > maxFailureRate) return { passed: false as const, reason: "shadow_failure_rate_exceeded" };
   if (rejectRate > maxRejectRate) return { passed: false as const, reason: "shadow_policy_reject_rate_exceeded" };
@@ -101,14 +141,16 @@ export async function resolveResearchAgentRollout(input: {
   }
   const minRuns = Math.round(boundedNumber(config, "agentControllerShadowMinRuns", 3, 1, 20));
   const recent = await input.queryable.query<{
+    controller_mode: "off" | "shadow" | "active";
     metrics: Record<string, unknown> | string;
   }>(
-    `select evaluation.metrics
+    `select evaluation.controller_mode, evaluation.metrics
      from research_agent_trajectory_evaluations evaluation
      join study_runs run on run.id = evaluation.run_id
      where evaluation.workspace_id = $1 and run.strategy_key = $2
        and evaluation.evaluator_version = 'research-agent-trajectory-v1'
        and evaluation.metrics->>'executionSource' = 'worker'
+       and evaluation.controller_mode = 'shadow'
      order by evaluation.created_at desc, evaluation.id desc
      limit $3`,
     [input.workspaceId, input.strategyKey, minRuns],
@@ -116,7 +158,10 @@ export async function resolveResearchAgentRollout(input: {
   if (recent.rows.length < minRuns) {
     return { requestedMode, effectiveMode: "shadow", reason: "shadow_sample_insufficient", sampleCount: recent.rows.length };
   }
-  const metrics = recent.rows.map((row) => typeof row.metrics === "string" ? JSON.parse(row.metrics) as Record<string, unknown> : row.metrics);
+  const metrics = recent.rows.map((row) => ({
+    ...(typeof row.metrics === "string" ? JSON.parse(row.metrics) as Record<string, unknown> : row.metrics),
+    controllerMode: row.controller_mode,
+  }));
   const quality = assessResearchAgentRolloutQuality({ metrics, strategyConfig: config });
   if (!quality.passed) return { requestedMode, effectiveMode: "shadow", reason: quality.reason, sampleCount: metrics.length };
   return { requestedMode, effectiveMode: "active", reason: quality.reason, sampleCount: metrics.length };
@@ -152,6 +197,9 @@ export function validateResearchAgentAction(input: {
     const requestedKeys = new Set<string>();
     const maxDynamicTasks = Math.max(0, Math.min(8, input.maxDynamicTasks ?? 2));
     if (!requested.length) return { accepted: false as const, reason: "replan_requires_tasks", task: null };
+    if (!input.tasks.some((task) => task.toolName === "generateReport" && task.status === "pending")) {
+      return { accepted: false as const, reason: "report_gate_not_open", task: null };
+    }
     if (requested.length > maxDynamicTasks) {
       return { accepted: false as const, reason: "dynamic_task_limit_exceeded", task: null };
     }
@@ -243,7 +291,9 @@ export async function decideResearchAgentAction(
     allowedTaskTemplates: input.allowedTaskTemplates ?? null,
   });
   let summary = "";
-  const result = await streamProviderResearchAgentDecision({
+  let result: ProviderResearchAgentDecision;
+  try {
+    result = await streamProviderResearchAgentDecision({
     brief: input.study.brief,
     studyType: input.study.studyType,
     framework: input.study.framework,
@@ -263,7 +313,31 @@ export async function decideResearchAgentAction(
         await writeControllerEvent(options.queryable, input, "agent.provider.non_streaming", { turnId });
       }
     },
-  });
+    });
+  } catch (error) {
+    const fallbackTask = input.tasks.find((task) => (
+      task.status === "pending" && task.dependsOn.every((dependency) => input.completedStateKeys.includes(dependency))
+    ));
+    if (!fallbackTask) throw error;
+    result = {
+      action: {
+        type: "call_tool",
+        summary: "Controller 输出未通过动作协议，回退到当前就绪任务。",
+        taskKey: fallbackTask.key,
+        toolName: fallbackTask.toolName,
+        arguments: fallbackTask.input,
+      },
+      responseId: "controller-protocol-repair",
+      model: "deterministic-fallback",
+      promptVersion: RESEARCH_AGENT_CONTROLLER_VERSION,
+      usage: null,
+    };
+    await writeControllerEvent(options.queryable, input, "agent.controller.repaired", {
+      turnId,
+      reason: error instanceof Error ? error.message.slice(0, 300) : "provider_action_invalid",
+      fallbackTaskKey: fallbackTask.key,
+    });
+  }
   const validation = validateResearchAgentAction({
     action: result.action,
     tasks: input.tasks,

@@ -58,13 +58,15 @@ if (!versionOnly && !agentOnly) {
     const storageStatus = await assertConfiguredSourceRawStorageReady();
     console.log(JSON.stringify({ event: "research_worker_source_storage_ready", ...storageStatus }));
   } catch (error) {
-    console.error(JSON.stringify({
-      event: "research_worker_dependency_unavailable",
+    // Raw source storage is an optimization for large immutable bodies. The
+    // connector has a bounded inline fallback, so a local MinIO outage must
+    // not prevent the worker from processing research jobs.
+    console.warn(JSON.stringify({
+      event: "research_worker_dependency_degraded",
       dependency: "source_object_storage",
+      fallback: "inline_bounded",
       message: error instanceof Error ? error.message : "SOURCE_OBJECT_STORAGE_UNAVAILABLE",
     }));
-    process.exitCode = 1;
-    process.exit();
   }
 }
 

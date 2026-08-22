@@ -24,6 +24,11 @@ export type PublicWebSource = {
 export type PublicWebSearchMetadata = {
   primaryProvider: "tavily" | "bing";
   fallbackUsed: boolean;
+  queryPlanFallbackUsed?: boolean;
+  autonomousExpansionUsed?: boolean;
+  autonomousRecoveryQueryCount?: number;
+  rawStorageFallbackUsed?: boolean;
+  rawStorageFallbackReasons?: string[];
   seedSourceCount: number;
   searchSourceCount: number;
   finalSourceCount: number;

@@ -68,6 +68,7 @@ import {
 } from "@/lib/runtime-control";
 import {
   decideResearchAgentAction,
+  summarizeResearchAgentTaskResult,
   resolveResearchAgentRollout,
   validateResearchAgentAction,
 } from "@/lib/research-agent-controller";
@@ -196,6 +197,11 @@ const webResearchSchema = z.object({
   metadata: z.object({
     primaryProvider: z.enum(["tavily", "bing"]),
     fallbackUsed: z.boolean(),
+    queryPlanFallbackUsed: z.boolean().optional(),
+    autonomousExpansionUsed: z.boolean().optional(),
+    autonomousRecoveryQueryCount: z.number().optional(),
+    rawStorageFallbackUsed: z.boolean().optional(),
+    rawStorageFallbackReasons: z.array(z.string()).optional(),
     seedSourceCount: z.number(),
     searchSourceCount: z.number(),
     finalSourceCount: z.number(),
@@ -381,6 +387,11 @@ function mergedResearchState(state: HarnessState): ProviderResearchSources {
       searchSourceCount: packets.reduce((total, packet) => total + packet.metadata.searchSourceCount, 0),
       finalSourceCount: sources.length,
       fallbackUsed: packets.some((packet) => packet.metadata.fallbackUsed),
+      queryPlanFallbackUsed: packets.some((packet) => packet.metadata.queryPlanFallbackUsed === true),
+      autonomousExpansionUsed: packets.some((packet) => packet.metadata.autonomousExpansionUsed === true),
+      autonomousRecoveryQueryCount: packets.reduce((total, packet) => total + (packet.metadata.autonomousRecoveryQueryCount ?? 0), 0),
+      rawStorageFallbackUsed: packets.some((packet) => packet.metadata.rawStorageFallbackUsed === true),
+      rawStorageFallbackReasons: [...new Set(packets.flatMap((packet) => packet.metadata.rawStorageFallbackReasons ?? []))],
       qualityRejectedCount: packets.reduce((total, packet) => total + (packet.metadata.qualityRejectedCount ?? 0), 0),
       qualityRejectionReasons: packets.reduce<Record<string, number>>((counts, packet) => {
         for (const [reason, count] of Object.entries(packet.metadata.qualityRejectionReasons ?? {})) {
@@ -495,6 +506,11 @@ const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, Provide
         provider: output.metadata.primaryProvider,
         answerability: output.answerability,
         rejectedSourceCount: output.rejectedSourceCount ?? output.metadata.qualityRejectedCount ?? 0,
+        autonomousExpansionUsed: output.metadata.autonomousExpansionUsed ?? false,
+        autonomousRecoveryQueryCount: output.metadata.autonomousRecoveryQueryCount ?? 0,
+        queryPlanFallbackUsed: output.metadata.queryPlanFallbackUsed ?? false,
+        rawStorageFallbackUsed: output.metadata.rawStorageFallbackUsed ?? false,
+        rawStorageFallbackReasons: output.metadata.rawStorageFallbackReasons ?? [],
         platform: input.platform ?? "public_web",
         focus: input.resumeInput?.focus ?? input.focus ?? "行业与用户背景",
       },
@@ -2414,6 +2430,7 @@ export async function runStudyHarness(runId: string, options: {
             status: task.status,
             dependsOn: task.dependsOn,
             input: task.input,
+            resultSummary: task.status === "completed" ? summarizeResearchAgentTaskResult(task.output) : undefined,
           })),
           completedStateKeys: Object.keys(state),
           contextSummary: context.citations.slice(0, 6).map((citation) => citation.title).join("；"),
@@ -2431,6 +2448,7 @@ export async function runStudyHarness(runId: string, options: {
             tasks: controllerInput.tasks,
             completedStateKeys: controllerInput.completedStateKeys,
             availableToolNames: controllerInput.availableToolNames,
+            allowedTaskTemplates: controllerInput.allowedTaskTemplates,
             maxDynamicTasks: controllerInput.maxDynamicTasks,
           });
           if (agentControllerMode === "active" && validation.accepted) {

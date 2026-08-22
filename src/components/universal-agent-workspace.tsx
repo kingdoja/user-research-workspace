@@ -17,6 +17,7 @@ import {
   PanelRightOpen,
   Play,
   Plus,
+  RotateCcw,
   ShieldCheck,
   X,
 } from "lucide-react";
@@ -26,6 +27,7 @@ import { type FormEvent, useEffect, useState, useTransition } from "react";
 import type { UniversalAgentWorkspace as AgentWorkspaceData } from "@/lib/universal-agent";
 
 type RightTab = "skills" | "files" | "runs";
+type RunFilter = "all" | "active" | "issues";
 type FilePreview = { path: string; content: string; version: number; byteSize: number; checksum: string } | null;
 type AgentLiveEvent = {
   id: string;
@@ -80,6 +82,8 @@ export function UniversalAgentWorkspace({
   const [notice, setNotice] = useState<{ kind: "error" | "success"; text: string } | null>(null);
   const [filePreview, setFilePreview] = useState<FilePreview>(null);
   const [fileLoading, setFileLoading] = useState<string | null>(null);
+  const [retryingRun, setRetryingRun] = useState<string | null>(null);
+  const [runFilter, setRunFilter] = useState<RunFilter>("all");
   const [liveEvents, setLiveEvents] = useState<AgentLiveEvent[]>([]);
   const selectedThread = initialWorkspace.threads.find((thread) => thread.publicId === initialWorkspace.selectedThreadPublicId) ?? null;
   const threadBusy = selectedThread?.lastRunStatus === "queued" || selectedThread?.lastRunStatus === "running";
@@ -169,6 +173,38 @@ export function UniversalAgentWorkspace({
     setSelectedSkills((current) => current.includes(publicId)
       ? current.filter((item) => item !== publicId)
       : [...current, publicId]);
+  }
+
+  async function retryRun(run: AgentWorkspaceData["recentRuns"][number]) {
+    if (!selectedThread || retryingRun || threadBusy) return;
+    if (run.externalExecutionAllowed && !externalAllowed) {
+      setNotice({ kind: "error", text: "此 Run 曾允许副作用，请先重新勾选执行确认" });
+      return;
+    }
+    setNotice(null);
+    setRetryingRun(run.publicId);
+    try {
+      const response = await fetch(
+        `/api/agent/threads/${encodeURIComponent(selectedThread.publicId)}/runs/${encodeURIComponent(run.publicId)}/retry`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ externalExecutionAllowed: externalAllowed, requestId: createAgentRequestId() }),
+        },
+      );
+      const body = await response.json().catch(() => ({})) as { error?: string; message?: string };
+      if (!response.ok) {
+        setNotice({ kind: "error", text: body.message ?? body.error ?? "Agent 重试失败" });
+        return;
+      }
+      setExternalAllowed(false);
+      setNotice({ kind: "success", text: "已创建新 Run；原运行记录和步骤保持不变" });
+      startTransition(() => router.refresh());
+    } catch {
+      setNotice({ kind: "error", text: "Agent 重试请求中断，请在 Runs 中核对状态" });
+    } finally {
+      setRetryingRun(null);
+    }
   }
 
   async function openFile(publicId: string) {
@@ -292,6 +328,13 @@ export function UniversalAgentWorkspace({
           <button className={rightTab === "files" ? "active" : ""} type="button" role="tab" onClick={() => setRightTab("files")}>Files</button>
           <button className={rightTab === "runs" ? "active" : ""} type="button" role="tab" onClick={() => setRightTab("runs")}>Runs</button>
         </div>
+        {rightTab === "runs" ? (
+          <div className="agent-run-filters" role="group" aria-label="Run 状态筛选">
+            {([["all", "全部"], ["active", "进行中"], ["issues", "需处理"]] as const).map(([value, label]) => (
+              <button className={runFilter === value ? "active" : ""} type="button" onClick={() => setRunFilter(value)} key={value}>{label}</button>
+            ))}
+          </div>
+        ) : null}
         <div className="agent-resource-list">
           {rightTab === "skills" ? initialWorkspace.skills.map((skill) => (
             <label className={selectedSkills.includes(skill.publicId) ? "agent-skill-option active" : "agent-skill-option"} key={skill.publicId}>
@@ -321,15 +364,32 @@ export function UniversalAgentWorkspace({
             </button>
           )) : null}
           {rightTab === "files" && !initialWorkspace.files.length ? <div className="agent-resource-empty"><FolderOpen size={21} /><span>Workspace 为空</span></div> : null}
-          {rightTab === "runs" ? initialWorkspace.recentRuns.map((run) => (
+          {rightTab === "runs" ? initialWorkspace.recentRuns.filter((run) => (
+            run.threadPublicId === selectedThread?.publicId
+            && (runFilter === "all"
+              || (runFilter === "active" && (run.status === "queued" || run.status === "running"))
+              || (runFilter === "issues" && (run.status === "failed" || run.status === "blocked")))
+          )).map((run) => (
             <article className="agent-run-row" key={run.publicId}>
-              <span className={run.status}>{runStatusLabel(run.status)}</span>
+              <div className="agent-run-heading"><span className={run.status}>{runStatusLabel(run.status)}</span>{run.retryOfRunPublicId ? <small>RETRY</small> : null}</div>
               <strong>{run.publicId}</strong>
               <small>{run.stepsUsed}/{run.maxSteps} steps · {run.toolCallsUsed}/{run.maxToolCalls} tools</small>
               <small>{run.tokensUsed}/{run.tokenBudget} tokens · {run.costMicrosUsed}/{run.maxCostMicros} μ$</small>
+              {run.errorMessage ? <p>{run.errorMessage}{run.errorCode ? ` (${run.errorCode})` : ""}</p> : null}
+              {run.status === "failed" || run.status === "blocked" ? (
+                <button
+                  className="agent-run-retry"
+                  type="button"
+                  title={run.externalExecutionAllowed && !externalAllowed ? "请先重新勾选执行确认" : "创建新 Run 重试"}
+                  disabled={Boolean(retryingRun) || threadBusy || (run.externalExecutionAllowed && !externalAllowed)}
+                  onClick={() => retryRun(run)}
+                >
+                  {retryingRun === run.publicId ? <LoaderCircle className="spin" size={13} /> : <RotateCcw size={13} />}重试
+                </button>
+              ) : null}
             </article>
           )) : null}
-          {rightTab === "runs" && !initialWorkspace.recentRuns.length ? <div className="agent-resource-empty"><Play size={21} /><span>暂无 Run</span></div> : null}
+          {rightTab === "runs" && !initialWorkspace.recentRuns.some((run) => run.threadPublicId === selectedThread?.publicId) ? <div className="agent-resource-empty"><Play size={21} /><span>暂无 Run</span></div> : null}
         </div>
       </aside>
 

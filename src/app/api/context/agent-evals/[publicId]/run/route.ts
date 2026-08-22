@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getViewer } from "@/lib/auth";
 import { agentEvalRunInputSchema, runAgentEvalSuite } from "@/lib/agent-evals";
-import { isSameOriginRequest } from "@/lib/request-security";
+import { checkRateLimit, isSameOriginRequest, rateLimitResponse } from "@/lib/request-security";
 
 export async function POST(
   request: Request,
@@ -10,6 +10,8 @@ export async function POST(
   if (!isSameOriginRequest(request)) return NextResponse.json({ error: "请求来源无效" }, { status: 403 });
   const viewer = await getViewer();
   if (!viewer) return NextResponse.json({ error: "请先登录" }, { status: 401 });
+  const rateLimit = checkRateLimit(request, "agent-evaluation-run", { limit: 10, windowMs: 60 * 60_000 }, `${viewer.workspaceId}:${viewer.userId}`);
+  if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfterSeconds);
   const parsed = agentEvalRunInputSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Agent Eval 输出无效" }, { status: 400 });
   const result = await runAgentEvalSuite(viewer, (await params).publicId, parsed.data);

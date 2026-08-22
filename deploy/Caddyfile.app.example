@@ -1,0 +1,33 @@
+app.example.com {
+	encode zstd gzip
+
+	request_body {
+		max_size 2MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	# Only Caddy may reach the Next.js listener. Do not publish port 3000.
+	reverse_proxy 127.0.0.1:3000 {
+		header_up -X-Forwarded-Host
+		header_up -X-Forwarded-Proto
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto {scheme}
+		transport http {
+			dial_timeout 3s
+			response_header_timeout 300s
+		}
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

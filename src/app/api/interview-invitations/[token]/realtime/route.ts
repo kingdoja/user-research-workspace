@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { startRealtimeInterviewSchema } from "@/lib/interview-schema";
 import { startRealtimeInterview } from "@/lib/realtime-interviews";
-import { isSameOriginRequest } from "@/lib/request-security";
+import { checkRateLimit, isSameOriginRequest, rateLimitResponse } from "@/lib/request-security";
 
 export const maxDuration = 120;
 
 export async function POST(request: Request, { params }: { params: Promise<{ token: string }> }) {
+  const rateLimit = checkRateLimit(request, "realtime-interview-start", { limit: 5, windowMs: 60 * 60_000 });
+  if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfterSeconds);
   if (!isSameOriginRequest(request)) return NextResponse.json({ error: "请求来源无效" }, { status: 403 });
   const parsed = startRealtimeInterviewSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "参与者信息无效" }, { status: 400 });

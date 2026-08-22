@@ -29,6 +29,7 @@ const visibleEventTypes = new Set([
   "agent.turn.completed",
   "agent.controller.failed",
   "reasoning.decision.recorded",
+  "run.autonomous_recovery_queued",
   "research.completed",
   "run.failed",
   "run.cancelled",
@@ -65,6 +66,7 @@ function eventLabel(event: StreamedStudyEvent) {
     const reason = typeof event.payload.reason === "string" ? event.payload.reason : "已完成一次调度检查";
     return { title: `调度决策 · ${action}`, detail: reason, status: "decision" };
   }
+  if (event.type === "run.autonomous_recovery_queued") return { title: "自动扩展检索", detail: "已识别来源不足，系统将自动补充公开网页资料并继续", status: "active" };
   if (event.type === "run.failed") return { title: "研究运行失败", detail: typeof event.payload.message === "string" ? event.payload.message : "运行已停止", status: "failed" };
   if (event.type === "run.cancelled") return { title: "研究运行已取消", detail: "执行已停止", status: "failed" };
   if (event.type === "research.completed") return { title: "研究运行完成", detail: "所有必需任务已完成", status: "done" };

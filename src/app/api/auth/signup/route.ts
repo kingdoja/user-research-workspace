@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createAccount } from "@/lib/auth";
-import { isSameOriginRequest, safeCallbackPath } from "@/lib/request-security";
+import { checkRateLimit, isSameOriginRequest, rateLimitResponse, safeCallbackPath } from "@/lib/request-security";
 
 const signupSchema = z.object({
   name: z.string().trim().min(2, "请输入至少 2 个字符的姓名").max(80),
@@ -11,6 +11,8 @@ const signupSchema = z.object({
 });
 
 export async function POST(request: Request) {
+  const rateLimit = checkRateLimit(request, "auth-signup", { limit: 5, windowMs: 60 * 60_000 });
+  if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfterSeconds);
   if (!isSameOriginRequest(request)) {
     return NextResponse.json({ error: "请求来源无效" }, { status: 403 });
   }
