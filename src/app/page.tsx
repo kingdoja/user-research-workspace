@@ -27,8 +27,8 @@ export default function Home() {
         <section className="home-hero site-container">
           <div className="pixel pixel-one" />
           <div className="pixel pixel-two" />
-          <h1>商业研究多智能体</h1>
-          <p className="hero-lede">Cognara 模拟消费者决策，全自动访谈和分析，并产出报告。</p>
+          <h1>Cognara AI</h1>
+          <p className="hero-lede">模拟消费者决策，全自动访谈和分析，并产出研究报告。</p>
           <div className="hero-actions">
             <div>
               <Link className="button button-green" href="/newstudy">

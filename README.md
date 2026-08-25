@@ -1,4 +1,4 @@
-# atypica.AI recovery rebuild
+# Cognara AI recovery rebuild
 
 This repository is a clean-room reconstruction created from the surviving public website after the original source code was lost.
 
