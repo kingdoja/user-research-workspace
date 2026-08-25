@@ -35,7 +35,7 @@ export function SiteFooter() {
     <footer className="site-footer">
       <div className="site-container footer-grid">
         <div>
-          <div className="brand">atypica.AI</div>
+          <div className="brand">Cognara AI</div>
           <p>为「主观世界」建模</p>
           <p className="footer-copyright">© 2026 BMRLab. 保留所有权利。</p>
         </div>

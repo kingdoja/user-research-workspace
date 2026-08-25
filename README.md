@@ -27,6 +27,10 @@ pnpm dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+Production hosts run published images only. Build `deploy/Dockerfile.server` in CI
+with `--build-arg ALLOW_PRODUCTION_BUILD=1`, then transfer and restart the image;
+do not run `docker build` or `next build` on the production host.
+
 Register a local account at [http://localhost:3000/auth/signup](http://localhost:3000/auth/signup). Local data is stored under `.data/` and is excluded from Git.
 
 The recommended high-quality routing uses DeepSeek V4 Flash for planning and high-volume

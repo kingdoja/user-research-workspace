@@ -23,7 +23,7 @@ export default async function SharedStudyPage({ params }: SharedPageProps) {
   return (
     <main className="shared-report-page">
       <header className="shared-report-header">
-        <strong>atypica.AI</strong>
+        <strong>Cognara AI</strong>
         <span><FileText size={15} />只读研究报告</span>
       </header>
       <article className="shared-report-document">

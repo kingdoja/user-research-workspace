@@ -11,8 +11,8 @@ export function SiteHeader() {
   return (
     <header className="site-header">
       <div className="site-container header-inner">
-        <Link className="brand" href="/" aria-label="atypica.AI 首页">
-          atypica.AI
+        <Link className="brand" href="/" aria-label="Cognara AI 首页">
+          Cognara AI
         </Link>
         <nav className="desktop-nav" aria-label="主导航">
           {navigation.map((item) => (

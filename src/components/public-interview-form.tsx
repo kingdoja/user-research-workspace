@@ -150,7 +150,7 @@ export function PublicInterviewForm({ invitation }: { invitation: PublicIntervie
   if (completed) return <main className="public-interview-shell"><section className="public-interview-complete"><span><Check size={24} /></span><h1>访谈已完成</h1><p>感谢你的时间。回答已经安全提交给研究团队。</p></section></main>;
 
   if (!started) return <main className="public-interview-shell"><section className="public-interview-intro">
-    <div className="public-interview-brand">atypica.AI <span>INTERVIEW</span></div>
+    <div className="public-interview-brand">Cognara AI <span>INTERVIEW</span></div>
     <span className="public-interview-icon">{mode === "realtime" ? <MessageCircleMore size={23} /> : <ClipboardList size={23} />}</span><h1>{invitation.projectTitle}</h1><p>{invitation.objective}</p>
     <div className="public-interview-mode" role="group" aria-label="访谈方式"><button className={mode === "realtime" ? "active" : ""} type="button" onClick={() => { setMode("realtime"); setError(""); }}><Bot size={15} />Agent 对话</button><button className={mode === "form" ? "active" : ""} type="button" onClick={() => { setMode("form"); setError(""); }}><ClipboardList size={15} />传统问卷</button></div>
     <dl><div><dt>{invitation.questions.length}</dt><dd>个核心问题</dd></div><div><dt>约 {Math.max(3, invitation.questions.length * (mode === "realtime" ? 3 : 2))}</dt><dd>分钟</dd></div></dl>
@@ -161,7 +161,7 @@ export function PublicInterviewForm({ invitation }: { invitation: PublicIntervie
   </section></main>;
 
   if (mode === "realtime" && realtime) return <main className="public-interview-shell public-realtime-shell"><section className="public-realtime-interview">
-    <header><div className="public-interview-brand">atypica.AI <span>AGENT INTERVIEW</span></div><div><span>{Math.min(realtime.currentQuestionPosition, realtime.questionCount)} / {realtime.questionCount}</span><button type="button" disabled={pending} onClick={cancelRealtime} title="结束访谈" aria-label="结束访谈"><X size={15} /></button></div></header>
+    <header><div className="public-interview-brand">Cognara AI <span>AGENT INTERVIEW</span></div><div><span>{Math.min(realtime.currentQuestionPosition, realtime.questionCount)} / {realtime.questionCount}</span><button type="button" disabled={pending} onClick={cancelRealtime} title="结束访谈" aria-label="结束访谈"><X size={15} /></button></div></header>
     <div className="public-interview-progress"><i style={{ width: `${Math.min(100, (realtime.currentQuestionPosition / realtime.questionCount) * 100)}%` }} /></div>
     <section className="public-realtime-transcript" aria-live="polite">{realtime.messages.map((message) => <article className={message.role} key={message.publicId}><div>{message.role === "agent" ? <Bot size={15} /> : realtime.participantName.slice(0, 1)}</div><section><strong>{message.role === "agent" ? "访谈 Agent" : realtime.participantName}</strong><p>{message.content}</p></section></article>)}{pending ? <article className="agent pending"><div><LoaderCircle className="spin" size={15} /></div><section><strong>访谈 Agent</strong><p>正在结合你的回答决定下一步...</p></section></article> : null}<div ref={transcriptEnd} /></section>
     {realtime.status === "cancelled" ? <footer className="public-realtime-ended"><p>本次访谈已结束，已提交的回答仍会保留。</p></footer> : <form onSubmit={submitRealtimeTurn}><textarea autoFocus value={draft} onChange={(event) => setDraft(event.target.value)} disabled={pending} maxLength={4000} placeholder="分享你的真实经历和想法..." /><button type="submit" disabled={pending || !draft.trim()} title="发送回答" aria-label="发送回答">{pending ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}</button></form>}
@@ -169,7 +169,7 @@ export function PublicInterviewForm({ invitation }: { invitation: PublicIntervie
   </section></main>;
 
   return <main className="public-interview-shell"><form className="public-interview-question" onSubmit={submitForm}>
-    <header><div className="public-interview-brand">atypica.AI <span>INTERVIEW</span></div><strong>{step + 1} / {invitation.questions.length}</strong></header>
+    <header><div className="public-interview-brand">Cognara AI <span>INTERVIEW</span></div><strong>{step + 1} / {invitation.questions.length}</strong></header>
     <div className="public-interview-progress"><i style={{ width: `${((step + 1) / invitation.questions.length) * 100}%` }} /></div>
     <section><span>QUESTION {String(step + 1).padStart(2, "0")}</span><h1>{question.content}</h1>{question.imageUrls.length > 0 ? <div className={`public-interview-images count-${question.imageUrls.length}`}>{question.imageUrls.map((url, index) => <img key={url} src={url} alt={`问题参考图 ${index + 1}`} />)}</div> : null}
       {question.questionType === "open" ? <textarea autoFocus value={typeof answer === "string" ? answer : ""} onChange={(event) => setAnswers((current) => ({ ...current, [question.publicId]: event.target.value }))} required minLength={1} maxLength={4000} placeholder="请分享你的真实经历和想法..." /> : <div className="public-interview-options">{question.options.map((option) => { const selected = typeof answer === "string" ? answer === option : Array.isArray(answer) && answer.includes(option); return <button type="button" className={selected ? "selected" : ""} onClick={() => toggleOption(option)} key={option}><i>{selected ? <Check size={14} /> : null}</i>{option}</button>; })}</div>}

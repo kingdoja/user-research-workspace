@@ -28,7 +28,7 @@ export default function Home() {
           <div className="pixel pixel-one" />
           <div className="pixel pixel-two" />
           <h1>商业研究多智能体</h1>
-          <p className="hero-lede">Atypica 模拟消费者决策，全自动访谈和分析,并产出报告。</p>
+          <p className="hero-lede">Cognara 模拟消费者决策，全自动访谈和分析，并产出报告。</p>
           <div className="hero-actions">
             <div>
               <Link className="button button-green" href="/newstudy">
@@ -53,7 +53,7 @@ export default function Home() {
         <section className="site-container promo-section">
           <VideoPanel
             featured
-            title="atypica.AI"
+            title="Cognara AI"
             poster="/assets/hero-poster.jpeg"
             video="https://bmrlab-s3.musecdn1.com/atypica/public/atypica-promo-20250627.mp4?region=us-east-1"
           />

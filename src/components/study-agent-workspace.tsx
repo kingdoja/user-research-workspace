@@ -201,7 +201,7 @@ function PlanningTrace({ study }: { study: StudyDetail }) {
       <article className="agent-message">
         <span className="agent-avatar agent-avatar-ai"><Bot size={17} /></span>
         <div className="agent-message-content">
-          <strong>atypica.AI</strong>
+              <strong>Cognara AI</strong>
           <p className="agent-thought-label">计划解析 · 结构化输出</p>
           <p>{clarificationPending
             ? "这个 Brief 已经包含一个明确的研究主题，但业务决策、研究重点和目标人群仍会直接改变研究设计。我需要先确认这些关键边界。"
@@ -500,7 +500,7 @@ function FollowupThread({ study }: { study: StudyDetail }) {
           <article className={`agent-message ${user ? "agent-user-message agent-followup-user" : "agent-followup-answer"}`} key={message.id}>
             <span className={`agent-avatar ${user ? "" : "agent-avatar-ai"}`}>{user ? <UserRound size={16} /> : <Bot size={17} />}</span>
             <div className="agent-message-content">
-              <strong>{user ? "您" : "atypica.AI"}</strong>
+              <strong>{user ? "您" : "Cognara AI"}</strong>
               {user
                 ? <p>{message.content}</p>
                 : <StructuredFollowupAnswer content={message.content} presentation={message.payload.presentation} />}
@@ -531,7 +531,7 @@ export function StudyAgentWorkspace({
     <main className="agent-workspace-shell">
       <section className="agent-conversation-pane">
         <header className="agent-workspace-header">
-          <Link href="/newstudy" className="agent-wordmark">atypica.AI</Link>
+          <Link href="/newstudy" className="agent-wordmark">Cognara AI</Link>
           <nav aria-label="研究工具">
             <button type="button" disabled title="统计面板后续开放"><BarChart3 size={17} />Nerd Stats</button>
             {study.report ? <StudyShareControls publicId={study.publicId} initialEnabled={study.report.shareEnabled} initialToken={study.report.shareToken} /> : null}

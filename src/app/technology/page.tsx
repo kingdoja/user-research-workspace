@@ -16,7 +16,7 @@ export default function TechnologyPage() {
       <main>
         <section className="technology-hero">
           <div className="site-container technology-hero-inner">
-            <p className="tech-version">ATYPICA 2.0</p>
+            <p className="tech-version">COGNARA 2.0</p>
             <h1>理解人的<br /><em>AI</em></h1>
             <p>大多数 AI 替人干活。我们相信 AI 还有第二种形态——理解人的主观世界。</p>
             <div className="technology-actions">

@@ -82,7 +82,7 @@ export function PanelWorkspace({
   return (
     <div className="panel-page-shell">
       <header className="panel-page-header">
-        <Link href="/newstudy" className="panel-page-brand">atypica.AI</Link>
+        <Link href="/newstudy" className="panel-page-brand">Cognara AI</Link>
         <nav aria-label="Panel 工具">
           <Link href="/account" title="Token 余额"><Coins size={16} />{Math.round(viewer.tokenBalance / 1000)}k</Link>
           <button type="button" disabled aria-label="帮助"><CircleHelp size={19} /></button>

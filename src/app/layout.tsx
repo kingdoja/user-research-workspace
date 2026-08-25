@@ -3,8 +3,8 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: {
-    default: "atypica.AI - 商业研究多智能体",
-    template: "%s | atypica.AI",
+    default: "Cognara AI - 证据驱动的智能研究",
+    template: "%s | Cognara AI",
   },
   description: "AI 驱动的商业研究、用户访谈和消费者洞察平台。",
 };

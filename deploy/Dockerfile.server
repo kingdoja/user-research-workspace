@@ -10,6 +10,10 @@ RUN pnpm install --frozen-lockfile
 FROM dependencies AS builder
 
 COPY . .
+# Production hosts run the built image only. Require an explicit CI/release
+# authorization so an accidental build cannot exhaust the small web host.
+ARG ALLOW_PRODUCTION_BUILD=0
+RUN test "$ALLOW_PRODUCTION_BUILD" = "1" || (echo "Production image builds must run in CI; pass --build-arg ALLOW_PRODUCTION_BUILD=1 from the release pipeline" >&2; exit 1)
 RUN --mount=type=secret,id=env_local,target=/app/.env.local pnpm build
 
 FROM node:24-bookworm-slim AS runner

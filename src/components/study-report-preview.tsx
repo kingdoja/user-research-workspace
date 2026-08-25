@@ -69,7 +69,7 @@ export function StudyReportPreview({ study }: { study: StudyDetail }) {
             <div><dt>{recommendationCount || study.plan.methods.length}</dt><dd>{report ? "行动建议" : "研究方法"}<br />优先级排序</dd></div>
             <div><dt>{sourceCount}</dt><dd>公开资料来源<br />可核查引用</dd></div>
           </dl>
-          <footer>基于可核查公开资料与透明标注的 AI 合成 Persona 模拟 · atypica.AI Research Intelligence</footer>
+          <footer>基于可核查公开资料与透明标注的 AI 合成 Persona 模拟 · Cognara AI Research Intelligence</footer>
         </article>
         <button className="view-report-button" type="button" disabled={!report} onClick={() => setOpen(true)}>
           <Eye size={18} />{report ? "查看报告" : "报告生成中"}

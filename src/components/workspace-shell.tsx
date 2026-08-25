@@ -129,8 +129,8 @@ export function WorkspaceShell({ children, viewer }: WorkspaceShellProps) {
   return (
     <div className={`workspace-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <header className="workspace-topbar">
-        <Link className="workspace-brand" href="/" aria-label="atypica.AI 首页">
-          atypica.AI
+        <Link className="workspace-brand" href="/" aria-label="Cognara AI 首页">
+          Cognara AI
         </Link>
         <div className="workspace-switcher">
           <span>{viewer.workspaceName}</span>
