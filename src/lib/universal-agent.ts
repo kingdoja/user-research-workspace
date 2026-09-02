@@ -225,7 +225,8 @@ export async function listUniversalAgentWorkspace(
        from agent_threads thread
        left join lateral (select content from agent_messages where thread_id = thread.id order by created_at desc, id desc limit 1) message on true
        left join lateral (select status from agent_runs where thread_id = thread.id order by started_at desc, id desc limit 1) run on true
-       where thread.workspace_id = $1 order by thread.updated_at desc, thread.id desc limit 40`,
+       where thread.workspace_id = $1 and thread.status = 'active'
+       order by thread.updated_at desc, thread.id desc limit 40`,
       [viewer.workspaceId],
     ),
     database.query<{ public_id: string; path: string; media_type: string; version: number; byte_size: number; updated_at: string }>(
@@ -341,6 +342,18 @@ export async function createAgentThread(viewer: Viewer, input: z.infer<typeof cr
     [createPublicId("agt"), viewer.workspaceId, viewer.userId, input.title],
   );
   return { publicId: result.rows[0].public_id };
+}
+
+export async function archiveAgentThread(viewer: Viewer, publicId: string) {
+  if (viewer.role === "viewer") return "forbidden" as const;
+  const database = await getDatabase();
+  const result = await database.query<{ status: "active" | "archived" }>(
+    `update agent_threads set status = 'archived', updated_at = now()
+     where public_id = $1 and workspace_id = $2 and status = 'active'
+     returning status`,
+    [publicId, viewer.workspaceId],
+  );
+  return result.rows[0] ? "archived" as const : "not_found" as const;
 }
 
 export async function getAgentWorkspaceFile(viewer: Viewer, publicId: string) {

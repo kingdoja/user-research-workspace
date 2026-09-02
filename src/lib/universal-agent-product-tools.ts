@@ -2,8 +2,10 @@ import { z } from "zod";
 import type { Viewer } from "@/lib/auth";
 import { createInterviewProjectSchema } from "@/lib/interview-schema";
 import { personaInputSchema } from "@/lib/persona-input-schema";
+import { collectPublicWebSources, getPublicWebSearchStatus } from "@/lib/public-web-search";
 
 const productToolNameSchema = z.enum([
+  "web.search",
   "persona.list",
   "persona.create",
   "interview.create",
@@ -34,6 +36,13 @@ export type UniversalAgentProductToolResult = {
 };
 
 export const UNIVERSAL_AGENT_PRODUCT_TOOLS: readonly UniversalAgentProductTool[] = [
+  {
+    name: "web.search",
+    title: "联网搜索公开网页",
+    description: "搜索并抓取公开网页，返回可核查的标题、链接和摘要；只读，不修改工作区数据。",
+    mutates: false,
+    inputHint: "query, maxResults(1-8)",
+  },
   {
     name: "persona.list",
     title: "查询 AI Persona",
@@ -79,6 +88,10 @@ export const UNIVERSAL_AGENT_PRODUCT_TOOLS: readonly UniversalAgentProductTool[]
 ] as const;
 
 const productToolSchemas: Record<UniversalAgentProductToolName, z.ZodType<Record<string, unknown>>> = {
+  "web.search": z.object({
+    query: z.string().trim().min(3).max(500),
+    maxResults: z.number().int().min(1).max(8).default(6),
+  }).strict(),
   "persona.list": z.object({ limit: z.number().int().min(1).max(100).default(20) }).strict(),
   "persona.create": personaInputSchema.strict(),
   "interview.create": createInterviewProjectSchema.strict(),
@@ -129,6 +142,31 @@ export async function executeUniversalAgentProductTool(input: {
         path: issue.path.join("."),
         message: issue.message,
       })) },
+    };
+  }
+
+  if (input.toolName === "web.search") {
+    const args = parsed.data as { query: string; maxResults: number };
+    const result = await collectPublicWebSources([args.query], []);
+    const sources = result.sources.slice(0, args.maxResults).map((source) => ({
+      title: source.title,
+      url: source.url,
+      excerpt: source.excerpt.slice(0, 1200),
+    }));
+    const provider = getPublicWebSearchStatus();
+    if (!sources.length) {
+      return {
+        status: "ok", resourceType: "product_tool", resourcePublicId: null, href: null,
+        summary: `未找到可核查的公开网页（${provider.primaryProvider} 搜索无结果或来源抓取失败）。`,
+        nextAction: "尝试更具体的关键词，或提供一个公开网页链接。",
+        data: { query: args.query, sources: [], metadata: result.metadata },
+      };
+    }
+    return {
+      status: "ok", resourceType: "product_tool", resourcePublicId: null, href: null,
+      summary: `已搜索“${args.query}”，找到 ${sources.length} 条可核查公开来源。`,
+      nextAction: null,
+      data: { query: args.query, sources, metadata: result.metadata },
     };
   }
 

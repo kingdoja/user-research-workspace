@@ -19,6 +19,7 @@ import {
   Plus,
   RotateCcw,
   ShieldCheck,
+  Trash2,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -207,6 +208,18 @@ export function UniversalAgentWorkspace({
     }
   }
 
+  async function deleteThread(thread: AgentWorkspaceData["threads"][number]) {
+    if (!window.confirm(`确定删除会话“${thread.title}”？`)) return;
+    setNotice(null);
+    const response = await fetch(`/api/agent/threads/${encodeURIComponent(thread.publicId)}`, { method: "DELETE" });
+    const body = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) {
+      setNotice({ kind: "error", text: body.error ?? "会话删除失败" });
+      return;
+    }
+    startTransition(() => router.push("/agent"));
+  }
+
   async function openFile(publicId: string) {
     setFileLoading(publicId);
     setNotice(null);
@@ -248,11 +261,14 @@ export function UniversalAgentWorkspace({
         ) : null}
         <nav aria-label="Universal Agent 会话">
           {initialWorkspace.threads.map((thread) => (
-            <Link className={thread.publicId === selectedThread?.publicId ? "active" : ""} href={`/agent?thread=${encodeURIComponent(thread.publicId)}`} key={thread.publicId}>
-              <span><Bot size={15} /></span>
-              <div><strong>{thread.title}</strong><small>{thread.lastMessage ?? "空会话"}</small></div>
-              <i className={thread.lastRunStatus ?? "idle"}>{runStatusLabel(thread.lastRunStatus)}</i>
-            </Link>
+            <div className="agent-thread-item" key={thread.publicId}>
+              <Link className={thread.publicId === selectedThread?.publicId ? "active" : ""} href={`/agent?thread=${encodeURIComponent(thread.publicId)}`}>
+                <span><Bot size={15} /></span>
+                <div><strong>{thread.title}</strong><small>{thread.lastMessage ?? "空会话"}</small></div>
+                <i className={thread.lastRunStatus ?? "idle"}>{runStatusLabel(thread.lastRunStatus)}</i>
+              </Link>
+              <button className="agent-thread-delete" type="button" title="删除会话" aria-label={`删除会话 ${thread.title}`} onClick={() => void deleteThread(thread)}><Trash2 size={14} /></button>
+            </div>
           ))}
           {!initialWorkspace.threads.length && !createOpen ? <div className="agent-rail-empty"><Bot size={21} /><span>暂无会话</span></div> : null}
         </nav>

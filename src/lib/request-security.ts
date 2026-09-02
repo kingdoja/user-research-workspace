@@ -77,6 +77,22 @@ function getPublicRequestOrigin(request: Request) {
   }
 }
 
+function getIncomingRequestOrigin(request: Request) {
+  const requestUrl = new URL(request.url);
+  const forwardedProtocol = firstHeaderValue(request.headers.get("x-forwarded-proto"));
+  const protocol = forwardedProtocol === "http" || forwardedProtocol === "https"
+    ? forwardedProtocol
+    : requestUrl.protocol.slice(0, -1);
+  const host = firstHeaderValue(request.headers.get("x-forwarded-host"))
+    ?? request.headers.get("host")?.trim();
+  if (!host) return requestUrl.origin;
+  try {
+    return new URL(`${protocol}://${host}`).origin;
+  } catch {
+    return requestUrl.origin;
+  }
+}
+
 export function isSameOriginRequest(request: Request) {
   const origin = request.headers.get("origin");
 
@@ -85,17 +101,24 @@ export function isSameOriginRequest(request: Request) {
   }
 
   const configuredOrigin = process.env.PUBLIC_APP_ORIGIN?.trim();
+  let normalizedConfiguredOrigin: string | null = null;
   if (process.env.NODE_ENV === "production") {
     if (!configuredOrigin) return false;
     try {
-      if (new URL(configuredOrigin).origin !== configuredOrigin.replace(/\/$/, "")) return false;
+      normalizedConfiguredOrigin = new URL(configuredOrigin).origin;
+      if (normalizedConfiguredOrigin !== configuredOrigin.replace(/\/$/, "")) return false;
     } catch {
       return false;
     }
   }
 
   try {
-    return new URL(origin).origin === getPublicRequestOrigin(request);
+    const requestOrigin = getPublicRequestOrigin(request);
+    // Proxies may expose the app on a temporary IP/host while PUBLIC_APP_ORIGIN
+    // still points at the canonical hostname. Accept either public origin.
+    return new URL(origin).origin === requestOrigin
+      || new URL(origin).origin === getIncomingRequestOrigin(request)
+      || (normalizedConfiguredOrigin !== null && new URL(origin).origin === normalizedConfiguredOrigin);
   } catch {
     return false;
   }
