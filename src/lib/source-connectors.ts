@@ -156,6 +156,11 @@ export function canonicalizeSourceUrl(value: string) {
   const url = new URL(value);
   url.hash = "";
   url.hostname = url.hostname.toLowerCase();
+  const trackingParameters = /^(utm_[a-z0-9_]+|fbclid|gclid|dclid|msclkid|mc_cid|mc_eid)$/i;
+  for (const key of [...url.searchParams.keys()]) {
+    if (trackingParameters.test(key)) url.searchParams.delete(key);
+  }
+  url.searchParams.sort();
   if ((url.protocol === "https:" && url.port === "443") || (url.protocol === "http:" && url.port === "80")) {
     url.port = "";
   }
@@ -292,7 +297,7 @@ async function assertRobotsAllowed(url: URL, options: ConnectorDependencies) {
   if (!isRobotsAllowed(text, url)) throw new SourceCollectionError("SOURCE_ROBOTS_DENIED");
 }
 
-function extractPageText(html: string) {
+function extractPageTextWithCheerio(html: string) {
   const $ = cheerio.load(html);
   $("script, style, noscript, svg, nav, footer, form").remove();
   const root = $("article").first().length
@@ -301,6 +306,23 @@ function extractPageText(html: string) {
       ? $("main").first()
       : $("body");
   return root.text().replace(/\s+/g, " ").trim().slice(0, SOURCE_PAGE_TEXT_LIMIT);
+}
+
+async function extractPageText(html: string, fetchedUrl: string) {
+  try {
+    // JSDOM is used only as a parser; scripts are never executed.
+    const [{ Readability }, { JSDOM }] = await Promise.all([
+      import("@mozilla/readability"),
+      import("jsdom"),
+    ]);
+    const document = new JSDOM(html, { url: fetchedUrl, runScripts: "outside-only" }).window.document;
+    const article = new Readability(document).parse();
+    const readable = article?.textContent?.replace(/\s+/g, " ").trim();
+    if (readable && readable.length >= 120) return readable.slice(0, SOURCE_PAGE_TEXT_LIMIT);
+  } catch {
+    // Fall back to the conservative Cheerio extractor for malformed HTML.
+  }
+  return extractPageTextWithCheerio(html);
 }
 
 function extractPageTitle(html: string, fallbackUrl: string) {
@@ -367,9 +389,10 @@ export async function collectSourceCandidate(candidate: SourceCandidate, options
     }
     const { text: fetchedContent, bytesRead } = await readLimitedText(response);
     const rawContent = stripNullBytes(fetchedContent) ?? "";
-    const normalizedText = contentType.includes("text/plain")
+    const usedPlainTextExtractor = contentType.includes("text/plain");
+    const normalizedText = usedPlainTextExtractor
       ? rawContent.replace(/\s+/g, " ").trim().slice(0, SOURCE_PAGE_TEXT_LIMIT)
-      : extractPageText(rawContent);
+      : await extractPageText(rawContent, url.toString());
     if (looksAccessRestricted(rawContent, normalizedText)) throw new SourceCollectionError("SOURCE_ACCESS_RESTRICTED", { httpStatus: response.status });
     if (normalizedText.length < 120) throw new SourceCollectionError("SOURCE_TEXT_TOO_SHORT", { textLength: normalizedText.length });
     canonicalUrl = extractCanonicalUrl(rawContent, url);
@@ -388,7 +411,7 @@ export async function collectSourceCandidate(candidate: SourceCandidate, options
       rawByteLength: bytesRead,
       normalizedText,
       fetchedAt,
-      metadata: { robotsChecked: true, redirectPolicy: "manual-public-only" },
+      metadata: { robotsChecked: true, redirectPolicy: "manual-public-only", extractor: usedPlainTextExtractor ? "plain-text" : "readability-with-cheerio-fallback" },
     };
     const observation: SourceObservation = {
       publicId: createPublicId("obs"),

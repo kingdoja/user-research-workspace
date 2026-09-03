@@ -6,6 +6,7 @@ import { collectPublicWebSources, getPublicWebSearchStatus } from "@/lib/public-
 
 const productToolNameSchema = z.enum([
   "web.search",
+  "web.open",
   "persona.list",
   "persona.create",
   "interview.create",
@@ -42,6 +43,13 @@ export const UNIVERSAL_AGENT_PRODUCT_TOOLS: readonly UniversalAgentProductTool[]
     description: "搜索并抓取公开网页，返回可核查的标题、链接和摘要；只读，不修改工作区数据。",
     mutates: false,
     inputHint: "query, maxResults(1-8)",
+  },
+  {
+    name: "web.open",
+    title: "读取公开网页",
+    description: "读取用户或 Agent 指定的公开网页，返回清洗后的正文和来源元数据；只读，不绕过登录或付费墙。",
+    mutates: false,
+    inputHint: "urls(1-8)",
   },
   {
     name: "persona.list",
@@ -91,6 +99,9 @@ const productToolSchemas: Record<UniversalAgentProductToolName, z.ZodType<Record
   "web.search": z.object({
     query: z.string().trim().min(3).max(500),
     maxResults: z.number().int().min(1).max(8).default(6),
+  }).strict(),
+  "web.open": z.object({
+    urls: z.array(z.string().trim().url().max(2000)).min(1).max(8),
   }).strict(),
   "persona.list": z.object({ limit: z.number().int().min(1).max(100).default(20) }).strict(),
   "persona.create": personaInputSchema.strict(),
@@ -149,9 +160,12 @@ export async function executeUniversalAgentProductTool(input: {
     const args = parsed.data as { query: string; maxResults: number };
     const result = await collectPublicWebSources([args.query], []);
     const sources = result.sources.slice(0, args.maxResults).map((source) => ({
+      sourceId: source.observationPublicId ?? source.snapshotPublicId ?? source.url,
       title: source.title,
       url: source.url,
       excerpt: source.excerpt.slice(0, 1200),
+      contentHash: source.contentHash ?? null,
+      collectedAt: source.collectedAt ?? null,
     }));
     const provider = getPublicWebSearchStatus();
     if (!sources.length) {
@@ -167,6 +181,27 @@ export async function executeUniversalAgentProductTool(input: {
       summary: `已搜索“${args.query}”，找到 ${sources.length} 条可核查公开来源。`,
       nextAction: null,
       data: { query: args.query, sources, metadata: result.metadata },
+    };
+  }
+
+  if (input.toolName === "web.open") {
+    const args = parsed.data as { urls: string[] };
+    const result = await collectPublicWebSources([], args.urls);
+    const sources = result.sources.map((source) => ({
+      sourceId: source.observationPublicId ?? source.snapshotPublicId ?? source.url,
+      title: source.title,
+      url: source.url,
+      excerpt: source.excerpt.slice(0, 5000),
+      contentHash: source.contentHash ?? null,
+      collectedAt: source.collectedAt ?? null,
+    }));
+    return {
+      status: "ok", resourceType: "product_tool", resourcePublicId: null, href: null,
+      summary: sources.length
+        ? `已读取 ${sources.length} 个公开网页，返回清洗后的正文证据。`
+        : "指定网页未返回可核查正文（可能被 robots、访问限制或页面类型策略拒绝）。",
+      nextAction: sources.length ? null : "检查链接是否公开可访问，或提供其他来源。",
+      data: { urls: args.urls, sources, metadata: result.metadata },
     };
   }
 

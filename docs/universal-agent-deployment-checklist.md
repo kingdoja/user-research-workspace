@@ -35,6 +35,17 @@ LOCAL_SMOKE_DATABASE_URL=postgresql://postgres:<local-password>@127.0.0.1:5432/p
 
 1. `supabase/migrations/20260821010000_universal_agent_run_governance.sql`
 2. `supabase/migrations/20260821020000_universal_agent_run_retry.sql`
+3. `supabase/migrations/20260903010000_agent_source_evidence_refs.sql`
+4. `supabase/migrations/20260903020000_agent_stream_events.sql`
+5. `supabase/migrations/20260903030000_universal_agent_search_budget.sql`
+6. `supabase/migrations/20260903040000_expand_universal_agent_budget.sql`
+
+本次新增迁移创建 `agent_step_source_refs`，把 `web.search` / `web.open` 返回的来源绑定到具体 Agent Run/Step。迁移是幂等的；应用后检查：
+
+```sql
+select to_regclass('public.agent_step_source_refs');
+select to_regclass('public.agent_run_stream_events');
+```
 
 迁移只新增 Run 预算字段、约束、重试血缘字段和索引，不删除历史 Run。应用后检查：
 
@@ -59,6 +70,8 @@ pnpm exec tsx scripts/research-worker.mjs --version
 ```
 
 启动日志中的 `agentPromptVersion` 应为 `universal-agent-v2-product-tools`。如果仍是旧版本，停止验收并继续发布 Worker。
+
+流式回答验收：发送一个只需文字回答的短问题，提交后应先看到“实时输出”草稿，再看到最终助手消息。SSE 事件类型为 `agent-stream`，断线重连使用复合 `Last-Event-ID` 游标；若上游网关不支持流式结构化响应，会自动回退为一次性响应，不影响 Run 完成。
 
 ## 4. 单 Run 灰度验收
 

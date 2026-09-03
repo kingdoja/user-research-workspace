@@ -17,8 +17,9 @@ const fakeViewer = {
 } as never;
 
 async function main() {
-  assert.equal(UNIVERSAL_AGENT_PRODUCT_TOOLS.length, 7);
+  assert.equal(UNIVERSAL_AGENT_PRODUCT_TOOLS.length, 8);
   assert.match(formatUniversalAgentProductToolCatalog(), /web\.search/);
+  assert.match(formatUniversalAgentProductToolCatalog(), /web\.open/);
   assert.match(formatUniversalAgentProductToolCatalog(), /persona\.create/);
   assert.match(formatUniversalAgentProductToolCatalog(), /research\.run_confirmed/);
 

@@ -190,7 +190,7 @@ async function main() {
     const processed = await processAgentRunQueue({
       workerId: `universal-agent-smoke:${suffix}`,
       maxRuns: 1,
-      decide: async () => {
+      decide: async (input) => {
         decision += 1;
         if (decision === 1) return {
           decisionSummary: "Use the selected immutable sandbox Skill.", action: "execute_skill" as const,
@@ -204,6 +204,8 @@ async function main() {
           content: JSON.stringify({ result: "sandbox-ok" }, null, 2), skillPublicId: null, argumentsJson: null,
           usage: { input_tokens: 120, output_tokens: 40 }, model: "gpt-agent-smoke", promptVersion: "smoke", responseId: "resp-2",
         };
+        await input.onMessageDelta?.("已完成受治理的 ");
+        await input.onMessageDelta?.("Sandbox Skill 执行，并保存结果文件。");
         return {
           decisionSummary: "The sandbox result and file are complete.", action: "finish" as const,
           message: "已完成受治理的 Sandbox Skill 执行，并保存结果文件。", path: null, content: null,
@@ -231,6 +233,22 @@ async function main() {
     assert.ok(sseSteps.rows.every((step) => step.run_public_id === result.runPublicId));
     assert.ok(sseSteps.rows.every((step, index) => index === 0 || BigInt(step.id) > BigInt(sseSteps.rows[index - 1].id)));
     assert.deepEqual(sseSteps.rows.map((step) => step.sequence), [...sseSteps.rows].map((step) => step.sequence).sort((a, b) => a - b));
+    const streamEvents = await database.query<{ event_type: string; content: string }>(
+      `select event_type, content from agent_run_stream_events event
+       join agent_runs run on run.id = event.run_id
+       where run.public_id = $1 order by event.id`,
+      [result.runPublicId],
+    );
+    const finalStartIndex = streamEvents.rows.map((event) => event.event_type).lastIndexOf("assistant.start");
+    assert.deepEqual(
+      streamEvents.rows.slice(finalStartIndex).map((event) => event.event_type),
+      ["assistant.start", "assistant.delta", "assistant.delta", "assistant.commit"],
+    );
+    assert.equal(
+      streamEvents.rows.filter((event) => event.event_type === "assistant.delta").slice(-2).map((event) => event.content).join(""),
+      "已完成受治理的 Sandbox Skill 执行，并保存结果文件。",
+    );
+    assert.equal(streamEvents.rows.at(-1)?.event_type, "assistant.commit");
     const outsiderSseSteps = await database.query<{ id: string }>(
       `select step.id::text as id
        from agent_steps step join agent_runs run on run.id = step.run_id

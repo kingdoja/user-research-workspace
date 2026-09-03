@@ -38,8 +38,31 @@ type AgentLiveEvent = {
   sequence: number;
   summary: string;
   toolName: string | null;
+  output: Record<string, unknown> | null;
   errorCode: string | null;
 };
+type AgentStreamEvent = {
+  id: string;
+  runPublicId: string;
+  type: "assistant.start" | "assistant.delta" | "assistant.reset" | "assistant.commit" | "assistant.error";
+  content: string;
+  metadata: Record<string, unknown>;
+};
+type LiveRun = { threadPublicId: string; runPublicId: string } | null;
+
+function eventSources(event: AgentLiveEvent) {
+  const data = event.output?.data;
+  if (!data || typeof data !== "object") return [];
+  const sources = (data as Record<string, unknown>).sources;
+  if (!Array.isArray(sources)) return [];
+  return sources.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const source = item as Record<string, unknown>;
+    return typeof source.url === "string" && typeof source.title === "string"
+      ? [{ url: source.url, title: source.title }]
+      : [];
+  }).slice(0, 8);
+}
 
 function createAgentRequestId() {
   const browserCrypto = globalThis.crypto as Crypto | undefined;
@@ -86,6 +109,8 @@ export function UniversalAgentWorkspace({
   const [retryingRun, setRetryingRun] = useState<string | null>(null);
   const [runFilter, setRunFilter] = useState<RunFilter>("all");
   const [liveEvents, setLiveEvents] = useState<AgentLiveEvent[]>([]);
+  const [streamDraft, setStreamDraft] = useState<{ runPublicId: string; content: string; error?: string } | null>(null);
+  const [submittedRun, setSubmittedRun] = useState<LiveRun>(null);
   const selectedThread = initialWorkspace.threads.find((thread) => thread.publicId === initialWorkspace.selectedThreadPublicId) ?? null;
   const threadBusy = selectedThread?.lastRunStatus === "queued" || selectedThread?.lastRunStatus === "running";
   const activeRun = selectedThread
@@ -101,10 +126,22 @@ export function UniversalAgentWorkspace({
 
   const selectedThreadPublicId = selectedThread?.publicId ?? null;
   const activeRunPublicId = activeRun?.publicId ?? null;
+  const submittedRunFinished = submittedRun ? initialWorkspace.messages.some((message) => (
+    message.role === "assistant" && message.metadata.runPublicId === submittedRun.runPublicId
+  )) : false;
+  const liveRun = submittedRun
+    && submittedRun.threadPublicId === selectedThreadPublicId
+    && !submittedRunFinished
+    ? submittedRun
+    : activeRunPublicId && selectedThreadPublicId
+      ? { threadPublicId: selectedThreadPublicId, runPublicId: activeRunPublicId }
+      : null;
+  const visibleStreamDraft = streamDraft?.runPublicId === liveRun?.runPublicId ? streamDraft : null;
 
   useEffect(() => {
-    if (!selectedThreadPublicId || !activeRunPublicId) return;
-    const source = new EventSource(`/api/agent/threads/${encodeURIComponent(selectedThreadPublicId)}/events?run=${encodeURIComponent(activeRunPublicId)}`);
+    if (!liveRun || liveRun.threadPublicId !== selectedThreadPublicId) return;
+    const { runPublicId, threadPublicId } = liveRun;
+    const source = new EventSource(`/api/agent/threads/${encodeURIComponent(threadPublicId)}/events?run=${encodeURIComponent(runPublicId)}`);
     source.addEventListener("agent-step", (event) => {
       try {
         const payload = JSON.parse((event as MessageEvent).data) as AgentLiveEvent;
@@ -113,9 +150,30 @@ export function UniversalAgentWorkspace({
         // Ignore a malformed event; the server snapshot remains authoritative.
       }
     });
-    source.onerror = () => source.close();
+    source.addEventListener("agent-stream", (event) => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as AgentStreamEvent;
+        if (payload.runPublicId !== runPublicId) return;
+        setStreamDraft((current) => {
+          const base = current?.runPublicId === payload.runPublicId ? current.content : "";
+          if (payload.type === "assistant.reset") return { runPublicId: payload.runPublicId, content: "" };
+          if (payload.type === "assistant.error") return { runPublicId: payload.runPublicId, content: base, error: payload.content };
+          if (payload.type === "assistant.commit") return { runPublicId: payload.runPublicId, content: payload.content };
+          if (payload.type === "assistant.delta") return { runPublicId: payload.runPublicId, content: base + payload.content };
+          return { runPublicId: payload.runPublicId, content: base };
+        });
+        if (payload.type === "assistant.commit" || payload.type === "assistant.error") {
+          startTransition(() => router.refresh());
+        }
+      } catch {
+        // Ignore malformed stream events; persisted messages remain authoritative.
+      }
+    });
+    // EventSource reconnects automatically after the bounded server stream
+    // closes; the compound Last-Event-ID prevents replaying old deltas.
+    source.onerror = () => undefined;
     return () => source.close();
-  }, [activeRunPublicId, selectedThreadPublicId]);
+  }, [liveRun, router, selectedThreadPublicId]);
 
   async function createThread(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -161,6 +219,11 @@ export function UniversalAgentWorkspace({
       }
       form.reset();
       setExternalAllowed(false);
+      setLiveEvents([]);
+      setStreamDraft(body.runPublicId ? { runPublicId: body.runPublicId, content: "" } : null);
+      if (body.runPublicId) {
+        setSubmittedRun({ threadPublicId: selectedThread.publicId, runPublicId: body.runPublicId });
+      }
       setNotice({ kind: "success", text: "任务已入队，页面会自动更新运行状态" });
       startTransition(() => router.refresh());
     } catch {
@@ -193,12 +256,17 @@ export function UniversalAgentWorkspace({
           body: JSON.stringify({ externalExecutionAllowed: externalAllowed, requestId: createAgentRequestId() }),
         },
       );
-      const body = await response.json().catch(() => ({})) as { error?: string; message?: string };
+      const body = await response.json().catch(() => ({})) as { error?: string; message?: string; runPublicId?: string };
       if (!response.ok) {
         setNotice({ kind: "error", text: body.message ?? body.error ?? "Agent 重试失败" });
         return;
       }
       setExternalAllowed(false);
+      setLiveEvents([]);
+      setStreamDraft(body.runPublicId ? { runPublicId: body.runPublicId, content: "" } : null);
+      if (body.runPublicId) {
+        setSubmittedRun({ threadPublicId: selectedThread.publicId, runPublicId: body.runPublicId });
+      }
       setNotice({ kind: "success", text: "已创建新 Run；原运行记录和步骤保持不变" });
       startTransition(() => router.refresh());
     } catch {
@@ -305,10 +373,24 @@ export function UniversalAgentWorkspace({
           </div>
         </header>
         <div className="agent-message-list">
-          {liveEvents.filter((event) => event.runPublicId === activeRunPublicId).map((event) => (
+          {visibleStreamDraft && (visibleStreamDraft.content || visibleStreamDraft.error) ? (
+            <article className="universal-message assistant streaming">
+              <span><Bot size={15} /></span>
+              <div><small>UNIVERSAL AGENT · 实时输出</small><p>{visibleStreamDraft.content}{visibleStreamDraft.error ? `\n${visibleStreamDraft.error}` : ""}<span className="agent-stream-cursor" aria-hidden="true" /></p></div>
+            </article>
+          ) : null}
+          {liveEvents.filter((event) => event.runPublicId === liveRun?.runPublicId).map((event) => (
             <article className={`universal-message tool ${event.status}`} key={`live-${event.id}`}>
               <span><Code2 size={14} /></span>
-              <div><small>{event.kind.toUpperCase()} · {event.toolName ?? "DECISION"}</small><p>{event.summary}{event.errorCode ? `（${event.errorCode}）` : ""}</p></div>
+              <div>
+                <small>{event.kind.toUpperCase()} · {event.toolName ?? "DECISION"}</small>
+                <p>{event.summary}{event.errorCode ? `（${event.errorCode}）` : ""}</p>
+                {eventSources(event).length ? (
+                  <div className="agent-source-links">
+                    {eventSources(event).map((source) => <a href={source.url} target="_blank" rel="noreferrer" key={source.url}>{source.title}</a>)}
+                  </div>
+                ) : null}
+              </div>
             </article>
           ))}
           {initialWorkspace.messages.length ? initialWorkspace.messages.map((message) => (

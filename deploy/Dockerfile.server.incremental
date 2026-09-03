@@ -1,0 +1,15 @@
+# Emergency incremental release path when the CI registry is unavailable.
+# Reuses an already published server image and rebuilds only the Next output.
+FROM atypica-rebuild:server
+
+USER root
+COPY package.json ./package.json
+COPY src ./src
+COPY public ./public
+COPY scripts ./scripts
+COPY tsconfig.json ./tsconfig.json
+RUN node_modules/.bin/next build --webpack
+
+USER node
+ENV NODE_ENV=production HOSTNAME=0.0.0.0 PORT=3000
+CMD ["node", "node_modules/next/dist/bin/next", "start"]
