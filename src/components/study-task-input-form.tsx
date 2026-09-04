@@ -2,7 +2,7 @@
 
 import { LoaderCircle, Send } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { parseTaskInputRequest, validateTaskInputResponse } from "@/lib/task-input-contract";
 
 export function StudyTaskInputForm({
@@ -18,9 +18,15 @@ export function StudyTaskInputForm({
   const [values, setValues] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [pending, startTransition] = useTransition();
+  const inputRef = useRef<HTMLElement>(null);
   const inputRequest = parseTaskInputRequest(request);
   const title = inputRequest?.title ?? "需要补充输入";
   const description = inputRequest?.description ?? "补充信息后将从当前 checkpoint 继续。";
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => inputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 120);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   function update(key: string, value: string) {
     setValues((current) => ({ ...current, [key]: value }));
@@ -63,7 +69,7 @@ export function StudyTaskInputForm({
   }
 
   return (
-    <section className="agent-task-input" aria-label={title}>
+    <section ref={inputRef} className="agent-task-input" aria-label={title}>
       <header><strong>{title}</strong><span>checkpoint 已保留</span></header>
       <p>{description}</p>
       {inputRequest?.fields.map((field) => field.type === "choice" ? (

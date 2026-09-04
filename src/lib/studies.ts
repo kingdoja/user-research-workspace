@@ -11,6 +11,7 @@ import {
   formatIntentPlanningContext,
 } from "@/lib/intent-workflow-contracts";
 import { createMarketInsightTaskPlan, createResearchTaskPlan, listResearchSkills } from "@/lib/research-harness";
+import { normalizeGptResearcherReportType, type GptResearcherReportType } from "@/lib/gpt-researcher-adapter";
 import { getRuntimeLimits } from "@/lib/runtime-control";
 import { submitTaskInput } from "@/lib/task-recovery";
 import { getReportEvidenceGraph, materializeReportEvidenceGraph, sanitizeReportEvidenceGraphForPublic, type ReportEvidenceGraph } from "@/lib/evidence-graph";
@@ -92,6 +93,7 @@ export type StudyDetail = StudySummary & {
     providerModel: string | null;
     promptVersion: string;
     rationale: string;
+    gptResearcherReportType: GptResearcherReportType;
   };
   intent: {
     version: number;
@@ -542,9 +544,11 @@ export async function createStudy(
   briefInput: string,
   productLine: StudyProductLine = "research",
   sourcePanelPublicId?: string,
+  gptResearcherReportType: GptResearcherReportType = "research_report",
 ) {
   const database = await getDatabase();
   const brief = briefInput.trim();
+  const selectedReportType = normalizeGptResearcherReportType(gptResearcherReportType);
   const initialPlan = normalizeProductLinePlan(productLine, derivePlan(brief));
   const fallbackQuestions = createFallbackClarificationQuestions(brief, productLine);
   const providerStatus = getOpenAIProviderStatus();
@@ -637,8 +641,8 @@ export async function createStudy(
       `insert into study_plans (
          study_id, framework, methods, persona_filters, persona_count,
          estimated_duration_minutes, estimated_tokens, source,
-         provider_response_id, provider_model, prompt_version, rationale
-       ) values ($1, $2, $3::jsonb, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12)`,
+         provider_response_id, provider_model, prompt_version, rationale, gpt_researcher_report_type
+       ) values ($1, $2, $3::jsonb, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
       [
         studyId,
         plan.framework,
@@ -652,6 +656,7 @@ export async function createStudy(
         plan.model,
         plan.promptVersion,
         plan.rationale,
+        selectedReportType,
       ],
     );
 
@@ -1481,10 +1486,11 @@ export async function confirmStudyPlan(viewer: Viewer, publicId: string) {
       plan_status: string;
       methods: StudyMethod[] | string;
       persona_count: number;
+      gpt_researcher_report_type: GptResearcherReportType;
     }>(
       `select studies.id::text as id, studies.workspace_id::text as workspace_id,
               studies.brief, studies.product_line, studies.study_type, study_plans.status as plan_status,
-              study_plans.methods, study_plans.persona_count
+              study_plans.methods, study_plans.persona_count, study_plans.gpt_researcher_report_type
        from studies
        join study_plans on study_plans.study_id = studies.id
        where studies.public_id = $1 and studies.workspace_id = $2
@@ -1505,12 +1511,13 @@ export async function confirmStudyPlan(viewer: Viewer, publicId: string) {
     const planVersion = await createConfirmedPlanVersion(transaction, study.id, viewer.userId, intentVersion.id);
     const methods = typeof study.methods === "string" ? JSON.parse(study.methods) as StudyMethod[] : study.methods;
     const taskGraph = study.product_line === "market_insight"
-      ? createMarketInsightTaskPlan({ methods, brief: study.brief })
+      ? createMarketInsightTaskPlan({ methods, brief: study.brief, gptResearcherReportType: study.gpt_researcher_report_type })
       : createResearchTaskPlan({
           studyType: study.study_type,
           methods,
           brief: study.brief,
           personaCount: study.persona_count,
+          gptResearcherReportType: study.gpt_researcher_report_type,
         });
     const workflowContract = study.product_line === "market_insight" ? {
       workflowType: "market_insight" as const,
@@ -1583,6 +1590,74 @@ export async function confirmStudyPlan(viewer: Viewer, publicId: string) {
     );
 
     return "confirmed" as const;
+  });
+}
+
+export type StudyPlanRevision = {
+  framework: string;
+  methods: StudyMethod[];
+  audience: string;
+  source: string;
+  personaCount: number;
+  estimatedDurationMinutes: number;
+  estimatedTokens: number;
+  rationale: string;
+  feedback?: string;
+};
+
+/** Update only the mutable draft plan. Confirmed versions remain immutable. */
+export async function reviseStudyPlan(viewer: Viewer, publicId: string, revision: StudyPlanRevision) {
+  const database = await getDatabase();
+  return database.transaction(async (transaction) => {
+    const result = await transaction.query<{ id: string; plan_status: string }>(
+      `select studies.id::text as id, study_plans.status as plan_status
+       from studies join study_plans on study_plans.study_id = studies.id
+       where studies.public_id = $1 and studies.workspace_id = $2 for update`,
+      [publicId, viewer.workspaceId],
+    );
+    const study = result.rows[0];
+    if (!study) return "not_found" as const;
+    if (study.plan_status === "confirmed") return "already_confirmed" as const;
+
+    await transaction.query(
+      `update study_plans set version = version + 1, framework = $2, methods = $3::jsonb,
+         persona_filters = $4::jsonb, persona_count = $5, estimated_duration_minutes = $6,
+         estimated_tokens = $7, rationale = $8, status = 'draft', updated_at = now()
+       where study_id = $1`,
+      [
+        study.id,
+        revision.framework,
+        JSON.stringify(revision.methods),
+        JSON.stringify({ audience: revision.audience, source: revision.source }),
+        revision.personaCount,
+        revision.estimatedDurationMinutes,
+        revision.estimatedTokens,
+        revision.rationale,
+      ],
+    );
+    await transaction.query(
+      `update studies set status = 'awaiting_confirmation', current_stage = 'confirmation',
+         estimated_tokens = $2, updated_at = now() where id = $1`,
+      [study.id, revision.estimatedTokens],
+    );
+    await transaction.query(
+      `insert into study_messages (study_id, role, content, payload)
+       values ($1, 'user', $2, $3::jsonb),
+              ($1, 'assistant', $4, $5::jsonb)`,
+      [
+        study.id,
+        revision.feedback?.trim() || "手动调整研究计划",
+        JSON.stringify({ feedback: revision.feedback ?? null, revision }),
+        "已根据你的反馈更新研究计划草案，请检查后确认。",
+        JSON.stringify({ revision: true }),
+      ],
+    );
+    await transaction.query(
+      `insert into study_events (study_id, event_type, payload)
+       values ($1, 'plan.revised', $2::jsonb)`,
+      [study.id, JSON.stringify({ feedback: revision.feedback ?? null, revision })],
+    );
+    return "revised" as const;
   });
 }
 
@@ -2230,6 +2305,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
     plan_provider_model: string | null;
     plan_prompt_version: string;
     plan_rationale: string;
+    gpt_researcher_report_type: GptResearcherReportType;
     run_id: string | null;
     run_attempt: number | null;
     run_status: string | null;
@@ -2274,6 +2350,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
        study_plans.provider_model as plan_provider_model,
        study_plans.prompt_version as plan_prompt_version,
        study_plans.rationale as plan_rationale,
+       study_plans.gpt_researcher_report_type,
        latest_run.id::text as run_id,
        latest_run.attempt as run_attempt,
        latest_run.status as run_status,
@@ -2704,6 +2781,7 @@ export async function getStudy(viewer: Viewer, publicId: string): Promise<StudyD
       providerModel: row.plan_provider_model,
       promptVersion: row.plan_prompt_version,
       rationale: row.plan_rationale,
+      gptResearcherReportType: normalizeGptResearcherReportType(row.gpt_researcher_report_type),
     },
     intent: intent ? {
       version: intent.version,

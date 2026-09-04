@@ -22,7 +22,7 @@ export type PublicWebSource = {
 };
 
 export type PublicWebSearchMetadata = {
-  primaryProvider: "tavily" | "bing";
+  primaryProvider: "tavily" | "bing" | "gpt-researcher";
   fallbackUsed: boolean;
   queryPlanFallbackUsed?: boolean;
   autonomousExpansionUsed?: boolean;
@@ -38,9 +38,14 @@ export type PublicWebSearchMetadata = {
   connectorRunPublicId?: string;
   policyVersion?: string;
   socialConnectorEnabled?: boolean;
+  socialRequestedPlatform?: string | null;
+  socialCollectionMode?: "official_public_api" | "public_web_plus_official_api" | "public_web_search_only";
   socialSourceCount?: number;
   socialCandidateCount?: number;
   socialConnectorRunPublicId?: string;
+  researchEngine?: "local" | "gpt-researcher";
+  researchEngineFallbackUsed?: boolean;
+  researchEngineFallbackReason?: string;
   qualityRejectedCount?: number;
   qualityRejectionReasons?: Record<string, number>;
 };

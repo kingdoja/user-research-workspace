@@ -314,9 +314,32 @@ function GenericConsole({ artifact }: { artifact: Artifact }) {
   );
 }
 
+function StudyPlanConsole({ study }: { study: StudyDetail }) {
+  const plan = study.plan;
+  const confirmed = plan.status === "confirmed";
+  return (
+    <section className="console-study-plan">
+      <header className="console-section-heading">
+        <div><FileText size={18} /><span>RESEARCH PLAN</span></div>
+        <h2>{study.title}</h2>
+        <p>{confirmed ? "这是已锁定的执行版本，后续任务将严格按此范围运行。" : "这是当前研究计划草案。请先检查目标、范围和预算，再确认或提出返修。"}</p>
+        <small className={confirmed ? "console-plan-status confirmed" : "console-plan-status draft"}>{confirmed ? `已确认 · Plan v${plan.version}` : `待确认 · 草案 v${plan.version}`}</small>
+      </header>
+      <div className="console-plan-sections">
+        <article><span>01</span><div><h3>研究目标</h3><p>{plan.rationale}</p></div></article>
+        <article><span>02</span><div><h3>研究范围</h3><dl><div><dt>框架</dt><dd>{plan.framework}</dd></div><div><dt>目标人群 / 市场</dt><dd>{plan.personaFilters.audience}</dd></div><div><dt>证据来源</dt><dd>{plan.personaFilters.source}</dd></div></dl></div></article>
+        <article><span>03</span><div><h3>研究方法</h3><div className="console-plan-methods">{plan.methods.map((method) => <span key={method}>{method}</span>)}</div><p className="console-plan-note">方法代表后续执行步骤，不代表系统已经完成真人访谈或数据采集。</p></div></article>
+        <article><span>04</span><div><h3>交付与预算</h3><dl><div><dt>Persona 数量</dt><dd>{plan.personaCount} 个</dd></div><div><dt>预计周期</dt><dd>{plan.estimatedDurationMinutes >= 1440 ? `${Math.ceil(plan.estimatedDurationMinutes / 1440)} 天内` : `${Math.ceil(plan.estimatedDurationMinutes / 60)} 小时内`}</dd></div><div><dt>预计用量</dt><dd>{new Intl.NumberFormat("zh-CN").format(plan.estimatedTokens)} Tokens</dd></div></dl></div></article>
+      </div>
+    </section>
+  );
+}
+
 export function StudyAgentConsole({ study }: { study: StudyDetail }) {
   const { selectedArtifactId } = useStudyArtifactConsole();
   const artifact = study.artifacts.find((item) => item.publicId === selectedArtifactId) ?? null;
+
+  if (selectedArtifactId === "__study_plan__") return <aside className="agent-console-pane" aria-label="研究计划 Console"><header className="agent-console-header"><div><span>Console</span><strong>研究计划</strong></div></header><div className="agent-console-stage"><StudyPlanConsole study={study} /></div></aside>;
 
   if (artifact?.type === "research_report" || (!artifact && study.report)) return <StudyReportPreview study={study} />;
 

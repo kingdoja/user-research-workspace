@@ -80,6 +80,7 @@ export function classifyTaskError(error: unknown): TaskFailure {
     || messageIncludes(
       error,
       "API_KEY_MISSING", "UNSAFE", "FORBIDDEN", "SKILL_DISABLED",
+      "GPT_RESEARCHER_BRIDGE_TOKEN_MISSING",
       "SKILL_BINDING_MISSING", "SKILL_VERSION_UNAVAILABLE", "SKILL_EXECUTOR_", "SKILL_MCP_",
     )
   ) {
@@ -92,6 +93,7 @@ export function classifyTaskError(error: unknown): TaskFailure {
       error,
       "APIConnection", "ECONN", "ETIMEDOUT", "OPENAI_INVALID_JSON",
       "OPENAI_INVALID_SCHEMA", "UPSTREAM_INCOMPATIBLE_RESPONSE",
+      "GPT_RESEARCHER_BRIDGE_", "GPT_RESEARCHER_IDLE_TIMEOUT", "GPT_RESEARCHER_SOURCE_HYDRATION_EMPTY",
       "SOURCE_OBJECT_STORAGE_UNAVAILABLE", "SOURCE_OBJECT_STORAGE_CONNECTION",
     )
   ) {

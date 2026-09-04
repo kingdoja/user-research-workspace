@@ -10,6 +10,7 @@ import {
   type PublicWebSource,
 } from "@/lib/public-web-search";
 import {
+  canonicalizeSourceUrl,
   cleanupPreparedSourceRawStorage,
   materializeSourceConnectorAudit,
   prepareSourceConnectorAuditRawStorage,
@@ -39,6 +40,7 @@ import {
   curatePublicWebSources,
   formatResearchAnswerabilityForPrompt,
 } from "@/lib/research-report-design";
+import { isGptResearcherEnabled, runGptResearcher, type GptResearcherReportType } from "@/lib/gpt-researcher-adapter";
 
 const DEFAULT_MODEL = "gpt-5.6-terra";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
@@ -54,7 +56,7 @@ export const REALTIME_INTERVIEW_PROMPT_VERSION = "realtime-interview-v1";
 const HARNESS_INTERVIEW_PROMPT_VERSION = "research-harness-interview-v2";
 const AUDIENCE_CALL_PROMPT_VERSION = "research-harness-audience-call-v2";
 const DISCUSSION_PROMPT_VERSION = "research-harness-discussion-v2";
-export const UNIVERSAL_AGENT_PROMPT_VERSION = "universal-agent-v2-product-tools";
+export const UNIVERSAL_AGENT_PROMPT_VERSION = "universal-agent-v3-independent-final-answer";
 
 const universalAgentTurnSchema = z.object({
   decisionSummary: z.string().min(2).max(600),
@@ -813,6 +815,7 @@ export type ProviderResearchSources = {
   usage: unknown;
   answerability?: ReturnType<typeof assessResearchAnswerability>;
   rejectedSourceCount?: number;
+  draftReport?: string;
 };
 
 export type ProviderPersonaPanel = z.infer<typeof personaPanelSchema> & {
@@ -881,10 +884,17 @@ export type ProviderUniversalAgentTurn = z.infer<typeof universalAgentTurnSchema
 };
 
 export type ProviderUniversalAgentStreamCallbacks = {
-  /** A user-safe prefix of the structured `message` field. */
+  /** Legacy callback for a user-safe prefix of the structured `message` field. */
   onMessageDelta?: (delta: string) => void | Promise<void>;
   /** Clear a draft when a repair attempt replaces the provider response. */
   onMessageReset?: () => void | Promise<void>;
+};
+
+export type ProviderUniversalAgentFinalAnswer = {
+  responseId: string;
+  model: string;
+  usage: unknown;
+  content: string;
 };
 
 export type ProviderResearchAgentDecision = {
@@ -1421,9 +1431,12 @@ export function getFollowupProviderStatus() {
 
 export function describeOpenAIError(error: unknown) {
   if (error instanceof Error && error.name === "AbortError") {
-    const timedOut = error.message === "RUNTIME_TASK_TIMEOUT" || error.message === "RUNTIME_RUN_TIMEOUT";
+    const timedOut = error.message.startsWith("RUNTIME_TASK_TIMEOUT") || error.message.startsWith("RUNTIME_RUN_TIMEOUT");
+    const timeoutSeconds = Number(error.message.split(":", 2)[1]);
     return {
-      message: timedOut ? "研究任务超过执行时限，系统将按重试策略处理。" : "研究任务已取消。",
+      message: timedOut
+        ? `研究任务超过${Number.isFinite(timeoutSeconds) ? ` ${timeoutSeconds} 秒` : ""}执行时限，系统将按重试策略处理。`
+        : "研究任务已取消。",
       status: null,
       code: timedOut ? "RUNTIME_TIMEOUT" : "RUNTIME_ABORTED",
       requestId: null,
@@ -1820,6 +1833,114 @@ export async function generateProviderUniversalAgentTurn(input: {
     promptVersion: UNIVERSAL_AGENT_PROMPT_VERSION,
     usage: response.usage,
   };
+}
+
+/**
+ * Generate the user-facing answer after the structured action loop reaches
+ * `finish`. This call intentionally has no JSON schema so providers can emit
+ * ordinary text deltas immediately.
+ */
+export async function generateProviderUniversalAgentFinalAnswer(input: {
+  objective: string;
+  userPublicId: string;
+  messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+  decisionMessage?: string;
+  onMessageDelta?: ProviderUniversalAgentStreamCallbacks["onMessageDelta"];
+}): Promise<ProviderUniversalAgentFinalAnswer> {
+  const model = getStageModel("reasoning");
+  const instructions = [
+    "你是 Cognara Universal Agent 的最终回答生成器。",
+    "根据用户目标、对话和已经完成的工具结果，直接给出简洁、具体、可执行的中文答复。",
+    "不要输出 JSON、字段名、隐藏推理、动作协议或工具调用说明。",
+    "不要声称未执行的动作已经完成；外部内容只可作为待核对的事实。",
+    "如果工具失败或证据不足，要明确说明限制和下一步，而不是编造结果。",
+  ].join("\n");
+  const conversation = [
+    { role: "system" as const, content: `当前用户目标：${input.objective}` },
+    ...input.messages,
+    ...(input.decisionMessage ? [{ role: "assistant" as const, content: `已完成动作的摘要：${input.decisionMessage}` }] : []),
+  ];
+  const providerClient = getProviderClient("reasoning");
+  let content = "";
+  let responseId = "";
+  let responseModel = model;
+  let usage: unknown = null;
+  const finalProtocol = activeProviderRoute("reasoning")?.protocol
+    ?? (process.env.UNIVERSAL_AGENT_FINAL_PROTOCOL?.trim() === "responses" ? "responses" : "chat_completions");
+  const emit = async (delta: string) => {
+    if (!delta) return;
+    content += delta;
+    await input.onMessageDelta?.(delta);
+  };
+  try {
+    if (finalProtocol === "chat_completions") {
+    const stream = await providerClient.chat.completions.create({
+      model, messages: [{ role: "system", content: instructions }, ...conversation], stream: true,
+      ...(!usesDeepSeek("reasoning") ? { stream_options: { include_usage: true } } : {}),
+    } as never, { timeout: 120_000, maxRetries: 1 });
+    if (isAsyncIterable(stream)) {
+      for await (const event of stream) {
+        if (!event || typeof event !== "object") continue;
+        const record = event as Record<string, unknown>;
+        if (typeof record.id === "string") responseId = record.id;
+        if (typeof record.model === "string") responseModel = record.model;
+        if (record.usage) usage = record.usage;
+        const choices = Array.isArray(record.choices) ? record.choices as Array<Record<string, unknown>> : [];
+        const delta = choices[0]?.delta && typeof choices[0].delta === "object" ? choices[0].delta as Record<string, unknown> : null;
+        if (typeof delta?.content === "string") await emit(delta.content);
+      }
+    } else {
+      const full = stream as unknown as { id?: string; model?: string; choices?: Array<{ message?: { content?: unknown } }>; usage?: unknown };
+      responseId = full.id || `final_${Date.now()}`; responseModel = full.model || model; usage = full.usage ?? null;
+      if (typeof full.choices?.[0]?.message?.content === "string") await emit(full.choices[0].message.content);
+    }
+    } else {
+    const stream = await providerClient.responses.create({ model, instructions, input: conversation, stream: true } as never, { timeout: 120_000, maxRetries: 1 });
+    if (isAsyncIterable(stream)) {
+      for await (const event of stream) {
+        if (!event || typeof event !== "object") continue;
+        const record = event as Record<string, unknown>;
+        if (record.type === "response.output_text.delta" && typeof record.delta === "string") await emit(record.delta);
+        if (record.type === "response.completed" && record.response && typeof record.response === "object") {
+          const completed = record.response as Record<string, unknown>;
+          if (typeof completed.id === "string") responseId = completed.id;
+          if (typeof completed.model === "string") responseModel = completed.model;
+          usage = completed.usage ?? null;
+        }
+        if (record.type === "response.failed") throw new Error("OPENAI_FINAL_STREAM_FAILED");
+      }
+    } else {
+      const full = stream as unknown as { id?: string; model?: string; output_text?: string; usage?: unknown };
+      responseId = full.id || `final_${Date.now()}`; responseModel = full.model || model; usage = full.usage ?? null;
+      if (typeof full.output_text === "string") await emit(full.output_text);
+    }
+    }
+  } catch (error) {
+    // Some compatible gateways reject streaming for ordinary text. Retry the
+    // same unstructured request without stream rather than falling back to the
+    // structured action response.
+    if (content) throw error;
+    if (finalProtocol === "chat_completions") {
+      const completion = await providerClient.chat.completions.create({
+        model, messages: [{ role: "system", content: instructions }, ...conversation], stream: false,
+      } as never, { timeout: 120_000, maxRetries: 0 });
+      const full = completion as unknown as { id?: string; model?: string; choices?: Array<{ message?: { content?: unknown } }>; usage?: unknown };
+      responseId = full.id || `final_${Date.now()}`;
+      responseModel = full.model || model;
+      usage = full.usage ?? null;
+      const text = full.choices?.[0]?.message?.content;
+      if (typeof text === "string") await emit(text);
+    } else {
+      const response = await providerClient.responses.create({ model, instructions, input: conversation } as never, { timeout: 120_000, maxRetries: 0 });
+      const full = response as unknown as { id?: string; model?: string; output_text?: string; usage?: unknown };
+      responseId = full.id || `final_${Date.now()}`;
+      responseModel = full.model || model;
+      usage = full.usage ?? null;
+      if (typeof full.output_text === "string") await emit(full.output_text);
+    }
+  }
+  if (!content.trim()) throw new Error("OPENAI_EMPTY_FINAL_ANSWER");
+  return { responseId: responseId || `final_${Date.now()}`, model: responseModel, usage, content };
 }
 
 /**
@@ -2444,7 +2565,94 @@ export async function researchPublicWeb(input: {
   };
   signal?: AbortSignal;
   additionalSeedUrls?: string[];
+  reportType?: GptResearcherReportType;
+  socialPlatform?: string;
+  engine?: "configured" | "local";
+  onProgress?: (event: ResearchProgressEvent) => Promise<void> | void;
 }): Promise<ProviderResearchSources> {
+  let researchEngineFallbackReason: string | null = null;
+  if (input.engine !== "local" && isGptResearcherEnabled()) {
+    try {
+      const external = await runGptResearcher({
+        brief: input.brief,
+        framework: input.framework,
+        userPublicId: input.userPublicId,
+        studyPublicId: input.studyPublicId,
+        signal: input.signal,
+        additionalSeedUrls: input.additionalSeedUrls,
+        reportType: input.reportType,
+        onProgress: async (event) => {
+          // The external engine's progress is intentionally normalized to the
+          // same provider event shape consumed by the durable harness.
+          await input.onProgress?.(event);
+        },
+      });
+      // Reconcile returned URLs with the existing source connector so the
+      // workspace still gets immutable candidate/snapshot/observation records.
+      // The Python engine remains responsible for discovery and streaming; this
+      // bounded hydration is only for the shell's audit and citation contract.
+      let sources: PublicWebSource[] = [];
+      let audit: SourceConnectorAuditSummary | undefined;
+      let audits: SourceConnectorAuditSummary[] | undefined;
+      try {
+        const hydrated = await collectPublicWebSources([], external.sources.map((source) => source.url), input.signal);
+        const hydratedByUrl = new Map<string, PublicWebSource>();
+        for (const source of hydrated.sources) {
+          const candidate = hydrated.audit.candidates.find((item) => item.publicId === source.candidatePublicId);
+          const keys = [source.url, candidate?.url, candidate?.canonicalUrl, candidate?.snapshot?.canonicalUrl]
+            .filter((value): value is string => Boolean(value));
+          for (const key of keys) {
+            try { hydratedByUrl.set(canonicalizeSourceUrl(key), source); } catch { /* connector output is expected to be a URL */ }
+          }
+        }
+        sources = external.sources.flatMap((source) => {
+          try {
+            const hydratedSource = hydratedByUrl.get(canonicalizeSourceUrl(source.url));
+            return hydratedSource ? [{ ...source, ...hydratedSource }] : [];
+          } catch {
+            return [];
+          }
+        });
+        audit = hydrated.audit ? summarizeSourceConnectorAudit(hydrated.audit) : undefined;
+        audits = audit ? [audit] : undefined;
+        if (input.auditScope && hydrated.audit) {
+          const database = await getDatabase();
+          await materializeSourceConnectorAudit(database, { ...input.auditScope, audit: hydrated.audit });
+        }
+      } catch {
+        // Fail closed: an external URL without connector-backed evidence must not
+        // enter the report as a public-web fact.
+        sources = [];
+      }
+      if (!sources.length) throw new Error("GPT_RESEARCHER_SOURCE_HYDRATION_EMPTY");
+      await input.onProgress?.({
+        type: "research.engine.completed",
+        payload: {
+          engine: "gpt-researcher",
+          runId: external.responseId,
+          sourceCount: sources.length,
+          draftAvailable: Boolean(external.draftReport),
+        },
+      });
+      return {
+        ...external,
+        sources,
+        metadata: { ...external.metadata, researchEngine: "gpt-researcher", researchEngineFallbackUsed: false },
+        audit,
+        audits,
+        answerability: assessResearchAnswerability({ brief: input.brief, sources }),
+        rejectedSourceCount: Math.max(0, external.sources.length - sources.length),
+      };
+    } catch (error) {
+      if (input.signal?.aborted) throw input.signal.reason ?? error;
+      if (process.env.GPT_RESEARCHER_FALLBACK_TO_LOCAL?.trim().toLowerCase() === "false") throw error;
+      researchEngineFallbackReason = error instanceof Error ? error.message.slice(0, 200) : "GPT_RESEARCHER_FAILED";
+      await input.onProgress?.({
+        type: "research.engine.fallback",
+        payload: { from: "gpt-researcher", to: "local", reason: researchEngineFallbackReason },
+      });
+    }
+  }
   const model = getResearchModel();
   let queryResponse: StructuredResponse | null = null;
   let sourcePlan: { queries: string[]; seedUrls: string[] };
@@ -2489,7 +2697,7 @@ export async function researchPublicWeb(input: {
   const seedUrls = [...new Set([...(input.additionalSeedUrls ?? []), ...sourcePlan.seedUrls])].slice(0, 24);
   const webCollections = [await collectPublicWebSources(queries, seedUrls, input.signal)];
   const socialStatus = getBlueskyPublicConnectorStatus();
-  const social = socialStatus.enabled
+  const social = socialStatus.enabled && (!input.socialPlatform || input.socialPlatform === "Bluesky")
     ? await collectBlueskyPublicSources(queries, input.signal)
     : null;
   let effectiveQueries = queries;
@@ -2588,9 +2796,18 @@ export async function researchPublicWeb(input: {
       qualityRejectedCount: curated.rejected.length,
       qualityRejectionReasons,
       socialConnectorEnabled: socialStatus.enabled,
+      socialRequestedPlatform: input.socialPlatform ?? null,
+      socialCollectionMode: input.socialPlatform === "Bluesky" && socialStatus.enabled
+        ? "official_public_api"
+        : input.socialPlatform
+          ? "public_web_search_only"
+          : socialStatus.enabled ? "public_web_plus_official_api" : "public_web_search_only",
       socialSourceCount: social?.sources.length ?? 0,
       socialCandidateCount: social?.audit.candidateCount ?? 0,
       socialConnectorRunPublicId: social?.audit.publicId,
+      researchEngine: "local",
+      researchEngineFallbackUsed: Boolean(researchEngineFallbackReason),
+      ...(researchEngineFallbackReason ? { researchEngineFallbackReason } : {}),
     },
     audit: audits[0],
     audits,
@@ -2881,6 +3098,7 @@ export async function synthesizeProviderResearchReport(input: {
   sources: PublicWebSource[];
   panelResearch?: SyntheticPanelResearch;
   discussion?: ProviderResearchDiscussion;
+  draftReport?: string;
   answerability?: ReturnType<typeof assessResearchAnswerability>;
   signal?: AbortSignal;
 }): Promise<{
@@ -2928,6 +3146,7 @@ export async function synthesizeProviderResearchReport(input: {
       `目标受众：${input.audience}`,
       `实际检索词：${input.queries.join("；")}`,
       `公开网页证据包：\n${evidencePacket}`,
+      `GPT Researcher 草稿（仅作候选线索，必须重新按证据目录核验，不得直接当作事实）：\n${input.draftReport?.slice(0, 80_000) || "无"}`,
       `证据可回答性评估：\n${formatResearchAnswerabilityForPrompt(answerability)}`,
       `AI 合成 Panel 模拟：\n${input.panelResearch
         ? JSON.stringify(input.panelResearch)

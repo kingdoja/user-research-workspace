@@ -47,16 +47,19 @@ function getArtifactPanel(study: StudyDetail): StudyDetail["panel"] {
 }
 
 function ProgressPanel({ items, onClose }: { items: StudyProgressItem[]; onClose: () => void }) {
+  const visibleItems = items.filter((item) => item.status !== "waiting");
+  const upcomingCount = items.length - visibleItems.length;
   return (
     <section className="agent-status-popover agent-progress-popover" aria-label="研究进度">
       <header><div><ListChecks size={20} /><h2>进度</h2></div><strong>{items.filter((item) => item.status === "done").length}/{items.length}</strong><button type="button" onClick={onClose} aria-label="关闭"><X size={17} /></button></header>
       <ol>
-        {items.map((item) => (
+        {visibleItems.map((item) => (
           <li className={`progress-item-${item.status}`} key={item.key}>
             <span>{item.status === "done" ? <Check size={13} /> : null}</span>
             <p>{item.label}</p>
           </li>
         ))}
+        {upcomingCount > 0 ? <li className="progress-item-upcoming"><span>...</span><p>后续 {upcomingCount} 个阶段将在前序任务完成后由 Agent 按依赖和证据状态推进</p></li> : null}
       </ol>
     </section>
   );

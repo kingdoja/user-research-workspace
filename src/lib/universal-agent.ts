@@ -5,6 +5,7 @@ import { getDatabase, type Queryable } from "@/lib/db";
 import { createPublicId } from "@/lib/identifiers";
 import {
   describeOpenAIError,
+  generateProviderUniversalAgentFinalAnswer,
   generateProviderUniversalAgentTurn,
   getProviderStageStatus,
   type ProviderUniversalAgentTurn,
@@ -1074,6 +1075,7 @@ async function executeClaimedAgentRun(input: {
   runId: string;
   workerId: string;
   decide: AgentDecisionProvider;
+  useIndependentFinalAnswer?: boolean;
 }) {
   const database = await getDatabase();
   const claimed = await database.query<{ public_id: string; thread_id: string }>(
@@ -1176,8 +1178,8 @@ async function executeClaimedAgentRun(input: {
         files: files.rows.map((file) => ({ path: file.path, byteSize: file.byte_size, version: file.version })),
         externalExecutionAllowed: run.external_execution_allowed,
         productToolCatalog: formatUniversalAgentProductToolCatalog(),
-        onMessageDelta: publisher.onMessageDelta,
-        onMessageReset: publisher.onMessageReset,
+        onMessageDelta: input.useIndependentFinalAnswer ? undefined : publisher.onMessageDelta,
+        onMessageReset: input.useIndependentFinalAnswer ? undefined : publisher.onMessageReset,
       };
       const decision = await withAgentRunLeaseHeartbeat({
         queryable: database,
@@ -1231,7 +1233,44 @@ async function executeClaimedAgentRun(input: {
         throw new AgentRunBlockedError("AGENT_COST_BUDGET_EXCEEDED", "Agent Run 已达到费用预算上限，未执行模型请求的后续动作。", sequence * 2);
       }
       if (decision.action === "finish") {
-        const content = decision.message.trim() || "任务已完成。";
+        let content = decision.message.trim() || "任务已完成。";
+        let finalAnswerUsage: unknown = null;
+        let finalAnswerResponseId: string | null = null;
+        let finalAnswerModel: string | null = null;
+        if (input.useIndependentFinalAnswer) {
+          const finalAnswerInput = {
+            objective: run.objective,
+            userPublicId: viewer.userPublicId,
+            messages,
+            decisionMessage: decision.message,
+            onMessageDelta: publisher.onMessageDelta,
+          };
+          const finalAnswer = route
+            ? await withProviderRoute(route.override, () => generateProviderUniversalAgentFinalAnswer(finalAnswerInput))
+            : await generateProviderUniversalAgentFinalAnswer(finalAnswerInput);
+          content = finalAnswer.content;
+          finalAnswerUsage = finalAnswer.usage;
+          finalAnswerResponseId = finalAnswer.responseId;
+          finalAnswerModel = finalAnswer.model;
+          const finalUsage = tokenUsage(finalAnswer.usage);
+          routeUsage = {
+            input_tokens: routeUsage.input_tokens + finalUsage.input_tokens,
+            output_tokens: routeUsage.output_tokens + finalUsage.output_tokens,
+          };
+          inputTokensUsed += finalUsage.input_tokens;
+          outputTokensUsed += finalUsage.output_tokens;
+          const finalCumulativeCost = Math.max(costMicrosUsed, providerCostMicros(inputTokensUsed, outputTokensUsed, route));
+          const finalCost = Math.max(0, finalCumulativeCost - costMicrosUsed);
+          costMicrosUsed = finalCumulativeCost;
+          const finalUsageRecorded = await database.query<{ id: string }>(
+            `update agent_runs set input_tokens_used = input_tokens_used + $3,
+               output_tokens_used = output_tokens_used + $4, cost_micros_used = cost_micros_used + $5,
+               heartbeat_at = now(), lease_expires_at = now() + ($6::double precision * interval '1 millisecond')
+             where id = $1 and status = 'running' and lease_owner = $2 returning id::text as id`,
+            [run.id, input.workerId, finalUsage.input_tokens, finalUsage.output_tokens, finalCost, AGENT_RUN_LEASE_MS],
+          );
+          if (!finalUsageRecorded.rows[0]) throw new Error("AGENT_RUN_LEASE_LOST");
+        }
         const result = await database.transaction(async (transaction) => {
           const completed = await transaction.query<{ id: string }>(
             `update agent_runs set status = 'completed', steps_used = $3, finished_at = now(),
@@ -1249,7 +1288,14 @@ async function executeClaimedAgentRun(input: {
           const assistant = await transaction.query<{ public_id: string }>(
             `insert into agent_messages (public_id, thread_id, role, content, metadata)
              values ($1, $2, 'assistant', $3, $4::jsonb) returning public_id`,
-            [createPublicId("agm"), run.thread_id, content, JSON.stringify({ runPublicId: run.public_id, model: decision.model ?? null })],
+            [createPublicId("agm"), run.thread_id, content, JSON.stringify({
+              runPublicId: run.public_id,
+              model: decision.model ?? null,
+              finalAnswer: input.useIndependentFinalAnswer,
+              finalAnswerResponseId,
+              finalAnswerModel,
+              finalAnswerUsage,
+            })],
           );
           await publisher.commit(content, transaction);
           await transaction.query("update agent_threads set updated_at = now() where id = $1", [run.thread_id]);
@@ -1385,10 +1431,12 @@ export async function processAgentRunQueue(input: {
     const claimed = await database.transaction((transaction) => claimAgentRun(transaction, workerId, input.runPublicId));
     if (!claimed) break;
     try {
+      const useIndependentFinalAnswer = !input.decide;
       await executeClaimedAgentRun({
         runId: claimed.id,
         workerId,
         decide: input.decide ?? generateProviderUniversalAgentTurn,
+        useIndependentFinalAnswer,
       });
     } catch (error) {
       console.error(JSON.stringify({

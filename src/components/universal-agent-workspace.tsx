@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type FormEvent, useEffect, useState, useTransition } from "react";
+import { type FormEvent, useEffect, useRef, useState, useTransition } from "react";
 import type { UniversalAgentWorkspace as AgentWorkspaceData } from "@/lib/universal-agent";
 
 type RightTab = "skills" | "files" | "runs";
@@ -95,6 +95,8 @@ export function UniversalAgentWorkspace({
   canRun: boolean;
 }) {
   const router = useRouter();
+  const messageListRef = useRef<HTMLDivElement>(null);
+  const followingOutputRef = useRef(true);
   const [pending, startTransition] = useTransition();
   const [sending, setSending] = useState(false);
   const [rightTab, setRightTab] = useState<RightTab>("skills");
@@ -112,7 +114,7 @@ export function UniversalAgentWorkspace({
   const [streamDraft, setStreamDraft] = useState<{ runPublicId: string; content: string; error?: string } | null>(null);
   const [submittedRun, setSubmittedRun] = useState<LiveRun>(null);
   const selectedThread = initialWorkspace.threads.find((thread) => thread.publicId === initialWorkspace.selectedThreadPublicId) ?? null;
-  const threadBusy = selectedThread?.lastRunStatus === "queued" || selectedThread?.lastRunStatus === "running";
+  const serverThreadBusy = selectedThread?.lastRunStatus === "queued" || selectedThread?.lastRunStatus === "running";
   const activeRun = selectedThread
     ? initialWorkspace.recentRuns.find((run) => run.threadPublicId === selectedThread.publicId && (run.status === "queued" || run.status === "running"))
     : null;
@@ -136,11 +138,26 @@ export function UniversalAgentWorkspace({
     : activeRunPublicId && selectedThreadPublicId
       ? { threadPublicId: selectedThreadPublicId, runPublicId: activeRunPublicId }
       : null;
-  const visibleStreamDraft = streamDraft?.runPublicId === liveRun?.runPublicId ? streamDraft : null;
+  const liveRunPublicId = liveRun?.runPublicId ?? null;
+  const liveRunThreadPublicId = liveRun?.threadPublicId ?? null;
+  const threadBusy = serverThreadBusy || liveRun !== null;
+  const visibleStreamDraft = streamDraft?.runPublicId === liveRunPublicId ? streamDraft : null;
+  const visibleLiveEvents = liveEvents.filter((event) => event.runPublicId === liveRunPublicId);
+  const visibleStreamLength = (visibleStreamDraft?.content.length ?? 0) + (visibleStreamDraft?.error?.length ?? 0);
 
   useEffect(() => {
-    if (!liveRun || liveRun.threadPublicId !== selectedThreadPublicId) return;
-    const { runPublicId, threadPublicId } = liveRun;
+    if (!followingOutputRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const list = messageListRef.current;
+      if (list) list.scrollTop = list.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [initialWorkspace.messages.length, liveRunPublicId, visibleLiveEvents.length, visibleStreamLength]);
+
+  useEffect(() => {
+    if (!liveRunPublicId || !liveRunThreadPublicId || liveRunThreadPublicId !== selectedThreadPublicId) return;
+    const runPublicId = liveRunPublicId;
+    const threadPublicId = liveRunThreadPublicId;
     const source = new EventSource(`/api/agent/threads/${encodeURIComponent(threadPublicId)}/events?run=${encodeURIComponent(runPublicId)}`);
     source.addEventListener("agent-step", (event) => {
       try {
@@ -173,7 +190,7 @@ export function UniversalAgentWorkspace({
     // closes; the compound Last-Event-ID prevents replaying old deltas.
     source.onerror = () => undefined;
     return () => source.close();
-  }, [liveRun, router, selectedThreadPublicId]);
+  }, [liveRunPublicId, liveRunThreadPublicId, router, selectedThreadPublicId]);
 
   async function createThread(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -219,6 +236,7 @@ export function UniversalAgentWorkspace({
       }
       form.reset();
       setExternalAllowed(false);
+      followingOutputRef.current = true;
       setLiveEvents([]);
       setStreamDraft(body.runPublicId ? { runPublicId: body.runPublicId, content: "" } : null);
       if (body.runPublicId) {
@@ -262,6 +280,7 @@ export function UniversalAgentWorkspace({
         return;
       }
       setExternalAllowed(false);
+      followingOutputRef.current = true;
       setLiveEvents([]);
       setStreamDraft(body.runPublicId ? { runPublicId: body.runPublicId, content: "" } : null);
       if (body.runPublicId) {
@@ -372,14 +391,23 @@ export function UniversalAgentWorkspace({
             </button>
           </div>
         </header>
-        <div className="agent-message-list">
-          {visibleStreamDraft && (visibleStreamDraft.content || visibleStreamDraft.error) ? (
-            <article className="universal-message assistant streaming">
-              <span><Bot size={15} /></span>
-              <div><small>UNIVERSAL AGENT · 实时输出</small><p>{visibleStreamDraft.content}{visibleStreamDraft.error ? `\n${visibleStreamDraft.error}` : ""}<span className="agent-stream-cursor" aria-hidden="true" /></p></div>
+        <div
+          className="agent-message-list"
+          ref={messageListRef}
+          onScroll={(event) => {
+            const list = event.currentTarget;
+            followingOutputRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 120;
+          }}
+        >
+          {initialWorkspace.messages.length ? initialWorkspace.messages.map((message) => (
+            <article className={`universal-message ${message.role}`} key={message.publicId}>
+              <span>{message.role === "user" ? "你" : message.role === "assistant" ? <Bot size={15} /> : <Code2 size={14} />}</span>
+              <div><small>{message.role === "user" ? "YOU" : message.role === "assistant" ? "UNIVERSAL AGENT" : message.role.toUpperCase()}</small><p>{message.content}</p></div>
             </article>
+          )) : !liveRunPublicId ? (
+            <div className="agent-conversation-empty"><Bot size={28} /><strong>{selectedThread ? "准备执行" : "创建一个会话"}</strong></div>
           ) : null}
-          {liveEvents.filter((event) => event.runPublicId === liveRun?.runPublicId).map((event) => (
+          {visibleLiveEvents.map((event) => (
             <article className={`universal-message tool ${event.status}`} key={`live-${event.id}`}>
               <span><Code2 size={14} /></span>
               <div>
@@ -393,14 +421,19 @@ export function UniversalAgentWorkspace({
               </div>
             </article>
           ))}
-          {initialWorkspace.messages.length ? initialWorkspace.messages.map((message) => (
-            <article className={`universal-message ${message.role}`} key={message.publicId}>
-              <span>{message.role === "user" ? "你" : message.role === "assistant" ? <Bot size={15} /> : <Code2 size={14} />}</span>
-              <div><small>{message.role === "user" ? "YOU" : message.role === "assistant" ? "UNIVERSAL AGENT" : message.role.toUpperCase()}</small><p>{message.content}</p></div>
+          {liveRunPublicId ? (
+            <article className="universal-message assistant streaming">
+              <span><Bot size={15} /></span>
+              <div>
+                <small>UNIVERSAL AGENT · 实时输出</small>
+                <p>
+                  {visibleStreamDraft?.content || "正在处理…"}
+                  {visibleStreamDraft?.error ? `\n${visibleStreamDraft.error}` : ""}
+                  <span className="agent-stream-cursor" aria-hidden="true" />
+                </p>
+              </div>
             </article>
-          )) : (
-            <div className="agent-conversation-empty"><Bot size={28} /><strong>{selectedThread ? "准备执行" : "创建一个会话"}</strong></div>
-          )}
+          ) : null}
         </div>
         <form className="agent-composer" onSubmit={sendMessage}>
           <textarea name="message" required minLength={1} maxLength={12000} disabled={!selectedThread || !canRun || pending || sending || threadBusy} placeholder="交给 Universal Agent…" />

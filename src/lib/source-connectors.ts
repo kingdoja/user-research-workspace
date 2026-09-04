@@ -120,7 +120,7 @@ export type SourceConnectorAuditSummary = Omit<SourceConnectorAudit, "candidates
   }>;
 };
 
-type LookupHost = (hostname: string) => Promise<Array<{ address: string }>>;
+export type LookupHost = (hostname: string) => Promise<Array<{ address: string }>>;
 type ConnectorDependencies = {
   fetchImpl?: typeof fetch;
   lookupHost?: LookupHost;
@@ -139,17 +139,31 @@ class SourceCollectionError extends Error {
 
 function isPrivateAddress(address: string) {
   const normalized = address.toLowerCase();
-  if (normalized === "::1" || normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")) {
-    return true;
+  const ipv4Parts = normalized.split(".").map(Number);
+  if (ipv4Parts.length === 4 && ipv4Parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) {
+    const [first, second, third] = ipv4Parts;
+    return first === 0 || first === 10 || first === 127 || first >= 224
+      || (first === 100 && second >= 64 && second <= 127)
+      || (first === 169 && second === 254)
+      || (first === 172 && second >= 16 && second <= 31)
+      || (first === 192 && second === 168)
+      || (first === 192 && second === 0 && third <= 2)
+      || (first === 198 && (second === 18 || second === 19 || second === 51))
+      || (first === 203 && second === 0 && third === 113);
   }
-  const parts = normalized.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) return false;
-  return parts[0] === 10
-    || parts[0] === 127
-    || (parts[0] === 169 && parts[1] === 254)
-    || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
-    || (parts[0] === 192 && parts[1] === 168)
-    || parts[0] === 0;
+
+  const mappedDottedIpv4 = normalized.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/u)?.[1];
+  if (mappedDottedIpv4) return isPrivateAddress(mappedDottedIpv4);
+  const mappedHexIpv4 = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/u);
+  if (mappedHexIpv4) {
+    const high = Number.parseInt(mappedHexIpv4[1], 16);
+    const low = Number.parseInt(mappedHexIpv4[2], 16);
+    return isPrivateAddress(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+  }
+  if (normalized === "::" || normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd")
+    || normalized.startsWith("fe8") || normalized.startsWith("fe9") || normalized.startsWith("fea") || normalized.startsWith("feb")
+    || normalized.startsWith("ff")) return true;
+  return false;
 }
 
 export function canonicalizeSourceUrl(value: string) {
@@ -167,11 +181,13 @@ export function canonicalizeSourceUrl(value: string) {
   return url.toString();
 }
 
-async function assertPublicSourceUrl(value: string, lookupHost: LookupHost) {
+const defaultLookupHost: LookupHost = async (hostname) => lookup(hostname, { all: true });
+
+export async function assertPublicSourceUrl(value: string, lookupHost: LookupHost = defaultLookupHost) {
   const url = new URL(value);
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new SourceCollectionError("SOURCE_UNSAFE_URL");
   if (url.username || url.password) throw new SourceCollectionError("SOURCE_URL_CREDENTIALS");
-  const hostname = url.hostname.toLowerCase();
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/gu, "");
   if (hostname === "localhost" || hostname.endsWith(".local")) throw new SourceCollectionError("SOURCE_UNSAFE_URL");
   if (isIP(hostname)) {
     if (isPrivateAddress(hostname)) throw new SourceCollectionError("SOURCE_UNSAFE_URL");
@@ -199,7 +215,7 @@ async function fetchWithControlledRedirects(
   options: ConnectorDependencies & { accept: string; timeoutMs: number },
 ) {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const lookupHost = options.lookupHost ?? (async (hostname) => lookup(hostname, { all: true }));
+  const lookupHost = options.lookupHost ?? defaultLookupHost;
   let url = await assertPublicSourceUrl(value, lookupHost);
 
   for (let redirectCount = 0; redirectCount < 4; redirectCount += 1) {
@@ -373,7 +389,7 @@ export async function collectSourceCandidate(candidate: SourceCandidate, options
   const fetchedAt = new Date().toISOString();
   let canonicalUrl: string;
   try {
-    const lookupHost = options.lookupHost ?? (async (hostname) => lookup(hostname, { all: true }));
+    const lookupHost = options.lookupHost ?? defaultLookupHost;
     const initialUrl = await assertPublicSourceUrl(candidate.url, lookupHost);
     canonicalUrl = canonicalizeSourceUrl(initialUrl.toString());
     await assertRobotsAllowed(initialUrl, options);

@@ -1,10 +1,11 @@
 "use client";
 
-import { ArrowUp, ChartNoAxesCombined, Clock3, Lightbulb, LoaderCircle, Paperclip, Search, Sparkles } from "lucide-react";
+import { ArrowUp, ChartNoAxesCombined, Clock3, FileSearch, Lightbulb, LoaderCircle, Paperclip, Search, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useState, useTransition } from "react";
 import type { StudySummary } from "@/lib/studies";
 import type { StudyProductLine } from "@/lib/research-types";
+import { GPT_RESEARCHER_REPORT_TYPES, GPT_RESEARCHER_REPORT_TYPE_LABELS, type GptResearcherReportType } from "@/lib/gpt-researcher-types";
 import {
   formatStudyDate,
   methodLabels,
@@ -30,9 +31,17 @@ const marketInsightScenarioPrompts = [
   ["品类演化", "研究无酒精饮品品类近两年的消费场景、品牌动作和增长方向。"],
 ] as const;
 
+const reportTypeOptionLabels: Record<GptResearcherReportType, string> = {
+  research_report: "标准报告",
+  deep: "深度研究",
+  detailed_report: "详细报告",
+  subtopic_report: "子主题报告",
+};
+
 export function StudyWorkspace({ studies }: { studies: StudySummary[] }) {
   const [brief, setBrief] = useState("");
   const [productLine, setProductLine] = useState<StudyProductLine>("research");
+  const [gptResearcherReportType, setGptResearcherReportType] = useState<GptResearcherReportType>("research_report");
   const [error, setError] = useState("");
   const [pending, startTransition] = useTransition();
 
@@ -45,7 +54,7 @@ export function StudyWorkspace({ studies }: { studies: StudySummary[] }) {
         const response = await fetch("/api/studies", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ brief, productLine }),
+          body: JSON.stringify({ brief, productLine, gptResearcherReportType }),
         });
         const result = (await response.json()) as { error?: string; redirectTo?: string };
 
@@ -101,6 +110,13 @@ export function StudyWorkspace({ studies }: { studies: StudySummary[] }) {
               <Paperclip size={18} />
               <span className="sr-only">添加附件</span>
             </button>
+            <label className="composer-report-type" title={`GPT Researcher：${GPT_RESEARCHER_REPORT_TYPE_LABELS[gptResearcherReportType]}`}>
+              <FileSearch size={16} aria-hidden="true" />
+              <span className="sr-only">GPT Researcher 报告类型</span>
+              <select value={gptResearcherReportType} onChange={(event) => setGptResearcherReportType(event.target.value as GptResearcherReportType)}>
+                {GPT_RESEARCHER_REPORT_TYPES.map((type) => <option key={type} value={type}>{reportTypeOptionLabels[type]}</option>)}
+              </select>
+            </label>
             <span className="composer-count">{brief.length} / 4000</span>
             <button className="composer-submit" type="submit" disabled={pending || brief.trim().length < 12} title="生成研究计划">
               {pending ? <LoaderCircle className="spin" size={18} /> : <ArrowUp size={19} />}

@@ -31,6 +31,8 @@
     "smoke:research-agent-controller": "tsx scripts/research-agent-controller-smoke.ts",
     "smoke:research-agent-ledger": "tsx scripts/research-agent-ledger-smoke.ts",
     "smoke:research-agent-trajectory": "tsx scripts/research-agent-trajectory-smoke.ts",
+    "smoke:research-runtime-policy": "tsx scripts/research-runtime-policy-smoke.ts",
+    "smoke:gpt-researcher-adapter": "tsx scripts/gpt-researcher-adapter-smoke.ts",
     "research-agent:rollout-status": "tsx scripts/research-agent-rollout-status.ts",
     "research-agent:rollout-sample": "tsx scripts/research-agent-rollout-sample.ts",
     "smoke:source-candidate-dedup": "tsx scripts/source-candidate-dedup-smoke.ts",

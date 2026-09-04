@@ -30,6 +30,7 @@ import {
   type ResearchReport,
 } from "@/lib/openai-provider";
 import { finishProviderRouteDecision, resolveProviderRoute } from "@/lib/platform-control";
+import { getBlueskyPublicConnectorStatus } from "@/lib/bluesky-social-connector";
 import { materializeReportEvidenceGraph } from "@/lib/evidence-graph";
 import { groundStudyPersonasFromEvidence } from "@/lib/persona-evidence";
 import { buildReportEvidenceCatalog } from "@/lib/report-evidence";
@@ -80,6 +81,11 @@ import {
 } from "@/lib/research-task-mutation";
 import { evaluateResearchAgentTrajectory } from "@/lib/research-agent-evaluation";
 import {
+  getGptResearcherRuntimeLimits,
+  isGptResearcherEnabled,
+  type GptResearcherReportType,
+} from "@/lib/gpt-researcher-adapter";
+import {
   getAllowedResearchAgentTaskTemplates,
   RESEARCH_AGENT_TASK_TEMPLATE_VERSION,
   validateResearchAgentTaskTemplate,
@@ -94,6 +100,7 @@ export type ResearchTaskDefinition = {
   template?: string | null;
   dependsOn: string[];
   input?: Record<string, unknown>;
+  gptResearcherReportType?: GptResearcherReportType;
 };
 
 type HarnessStudy = {
@@ -115,6 +122,7 @@ type HarnessStudy = {
   workflowType: Exclude<WorkflowType, "realtime_agent">;
   workflowVersion: string;
   workflowTaskGraph: ResearchTaskDefinition[] | null;
+  gptResearcherReportType?: GptResearcherReportType;
 };
 
 type StoredTask = {
@@ -148,11 +156,12 @@ type ToolResult<Output> = {
 
 type ToolContext = {
   study: HarnessStudy;
-  task: Pick<StoredTask, "key" | "publicId" | "attempt">;
+  task: Pick<StoredTask, "key" | "publicId" | "attempt" | "toolName">;
   state: HarnessState;
   context: ContextSnapshot;
   signal: AbortSignal;
   strategy: StrategyAssignment;
+  emitProgress?: (event: { type: string; payload?: Record<string, unknown> }) => Promise<void>;
 };
 
 type ResearchTool<Input, Output> = {
@@ -195,7 +204,7 @@ const webResearchSchema = z.object({
   queries: z.array(z.string()),
   sources: z.array(sourceSchema),
   metadata: z.object({
-    primaryProvider: z.enum(["tavily", "bing"]),
+    primaryProvider: z.enum(["tavily", "bing", "gpt-researcher"]),
     fallbackUsed: z.boolean(),
     queryPlanFallbackUsed: z.boolean().optional(),
     autonomousExpansionUsed: z.boolean().optional(),
@@ -211,8 +220,13 @@ const webResearchSchema = z.object({
     connectorRunPublicId: z.string().optional(),
     policyVersion: z.string().optional(),
     socialConnectorEnabled: z.boolean().optional(),
+    socialRequestedPlatform: z.string().nullable().optional(),
+    socialCollectionMode: z.enum(["official_public_api", "public_web_plus_official_api", "public_web_search_only"]).optional(),
     socialSourceCount: z.number().optional(),
     socialCandidateCount: z.number().optional(),
+    researchEngine: z.enum(["local", "gpt-researcher"]).optional(),
+    researchEngineFallbackUsed: z.boolean().optional(),
+    researchEngineFallbackReason: z.string().optional(),
     socialConnectorRunPublicId: z.string().optional(),
     qualityRejectedCount: z.number().optional(),
     qualityRejectionReasons: z.record(z.string(), z.number()).optional(),
@@ -224,6 +238,7 @@ const webResearchSchema = z.object({
   usage: z.unknown(),
   answerability: z.custom<ReturnType<typeof assessResearchAnswerability>>().optional(),
   rejectedSourceCount: z.number().optional(),
+  draftReport: z.string().max(200_000).optional(),
 });
 
 const personaSchema = z.object({
@@ -461,7 +476,9 @@ const designStudyTool: ResearchTool<Record<string, never>, Record<string, unknow
 
 const researchInputSchema = z.object({
   platform: z.string().optional(),
+  collectionMode: z.enum(["official_public_api", "public_web_search_only"]).optional(),
   focus: z.string().optional(),
+  gptResearcherReportType: z.enum(["research_report", "deep", "detailed_report", "subtopic_report"]).optional(),
   resumeInput: z.object({
     focus: z.string().max(600).optional(),
     sourceUrls: z.array(z.string().url()).max(8).optional(),
@@ -478,7 +495,7 @@ const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, Provide
   providerStage: "research",
   inputSchema: researchInputSchema,
   outputSchema: webResearchSchema,
-  async execute({ study, task, context, signal, strategy }, input) {
+  async execute({ study, task, context, signal, strategy, emitProgress }, input) {
     const output = await researchPublicWeb({
       brief: [contextualBrief(study, context, strategy), input.platform ? `重点平台：${input.platform}` : "", input.focus ? `研究焦点：${input.focus}` : "", input.resumeInput?.focus ? `用户补充研究焦点：${input.resumeInput.focus}` : "", input.resumeInput?.selectedOption ? `用户选择：${input.resumeInput.selectedOption}` : ""].filter(Boolean).join("\n"),
       framework: study.framework,
@@ -493,6 +510,10 @@ const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, Provide
       },
       signal,
       additionalSeedUrls: input.resumeInput?.sourceUrls,
+      reportType: input.gptResearcherReportType ?? study.gptResearcherReportType,
+      socialPlatform: input.platform,
+      engine: task.toolName === "scoutSocialTrends" ? "local" : "configured",
+      onProgress: async (event) => emitProgress?.(event),
     });
     return {
       output,
@@ -512,7 +533,14 @@ const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, Provide
         rawStorageFallbackUsed: output.metadata.rawStorageFallbackUsed ?? false,
         rawStorageFallbackReasons: output.metadata.rawStorageFallbackReasons ?? [],
         platform: input.platform ?? "public_web",
+        collectionMode: input.collectionMode ?? "public_web_search_only",
         focus: input.resumeInput?.focus ?? input.focus ?? "行业与用户背景",
+        socialConnectorEnabled: output.metadata.socialConnectorEnabled ?? false,
+        socialSourceCount: output.metadata.socialSourceCount ?? 0,
+        socialCandidateCount: output.metadata.socialCandidateCount ?? 0,
+        researchEngine: output.metadata.researchEngine ?? "local",
+        researchEngineFallbackUsed: output.metadata.researchEngineFallbackUsed ?? false,
+        researchEngineFallbackReason: output.metadata.researchEngineFallbackReason,
       },
     };
   },
@@ -522,7 +550,7 @@ const scoutResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, Provi
   ...webResearchTool,
   name: "scoutSocialTrends",
   displayName: "社交趋势扫描",
-  description: "扫描指定社交平台的趋势、场景和用户表达。",
+  description: "按平台连接器能力扫描趋势、场景和用户表达；未配置官方连接器时仅检索公开网页，不执行站内爬虫。",
   capabilities: ["web.search", "social.scout", "research.sources"],
 };
 
@@ -820,6 +848,7 @@ const generateReportTool: ResearchTool<Record<string, never>, z.infer<typeof rep
       studyPublicId: study.publicId,
       queries: research.queries,
       sources: research.sources,
+      draftReport: research.draftReport,
       panelResearch,
       discussion,
       answerability,
@@ -983,6 +1012,28 @@ const researchTools = {
 export type ResearchToolName = keyof typeof researchTools;
 const agentDynamicToolNames: readonly ResearchToolName[] = ["deepResearch", "scoutSocialTrends"];
 
+const socialPlatformPatterns = [
+  { label: "小红书", patterns: ["小红书", "xiaohongshu", "rednote"] },
+  { label: "抖音", patterns: ["抖音", "douyin"] },
+  { label: "微博", patterns: ["微博", "weibo"] },
+  { label: "B站", patterns: ["b站", "哔哩哔哩", "bilibili"] },
+  { label: "知乎", patterns: ["知乎", "zhihu"] },
+  { label: "Bluesky", patterns: ["bluesky"] },
+] as const;
+
+function detectRequestedSocialPlatforms(brief?: string) {
+  const normalized = (brief ?? "").toLowerCase();
+  return socialPlatformPatterns
+    .filter(({ patterns }) => patterns.some((pattern) => normalized.includes(pattern)))
+    .map(({ label }) => label);
+}
+
+function socialTaskTitle(platform: string, directConnectorEnabled: boolean) {
+  if (platform === "Bluesky" && directConnectorEnabled) return "扫描 Bluesky 公开 API 趋势与用户表达";
+  if (platform === "公开社交信号") return "检索公开网页中的社交趋势与用户表达";
+  return `检索 ${platform} 相关公开网页信号（非站内爬虫）`;
+}
+
 export function listResearchSkills(): SkillSummary[] {
   return describeBuiltInSkills(Object.values(researchTools).map((tool) => ({
     slug: tool.name,
@@ -1000,6 +1051,7 @@ export function createResearchTaskPlan(input: {
   methods: StudyMethod[];
   brief?: string;
   personaCount?: number;
+  gptResearcherReportType?: GptResearcherReportType;
 }): ResearchTaskDefinition[] {
   const tasks: ResearchTaskDefinition[] = [{
     key: "design",
@@ -1008,24 +1060,27 @@ export function createResearchTaskPlan(input: {
     dependsOn: [],
   }];
   const sourceTool = input.methods.includes("Scout Agent") ? "scoutSocialTrends" : "deepResearch";
-  const platformCandidates = ["小红书", "抖音", "微博", "B站", "知乎"].filter((platform) => input.brief?.includes(platform));
+  const platformCandidates = detectRequestedSocialPlatforms(input.brief);
+  const directConnectorEnabled = getBlueskyPublicConnectorStatus().enabled;
   const platforms = sourceTool === "scoutSocialTrends"
-    ? (platformCandidates.length ? platformCandidates : ["小红书", "抖音"]).slice(0, 3)
+    ? (platformCandidates.length ? platformCandidates : ["公开社交信号"]).slice(0, 3)
     : [];
   const researchTasks: ResearchTaskDefinition[] = platforms.length
     ? platforms.map((platform, index) => ({
         key: `research_${index + 1}`,
-        title: `扫描 ${platform} 趋势、场景与用户表达`,
+        title: socialTaskTitle(platform, directConnectorEnabled),
         toolName: sourceTool,
         dependsOn: ["design"],
-        input: { platform, focus: index === 0 ? "痛点、场景与自然语言表达" : "比较、阻力与决策触发" },
+        input: { platform, collectionMode: platform === "Bluesky" && directConnectorEnabled ? "official_public_api" : "public_web_search_only", focus: index === 0 ? "痛点、场景与自然语言表达" : "比较、阻力与决策触发", gptResearcherReportType: input.gptResearcherReportType ?? "research_report" },
+        gptResearcherReportType: input.gptResearcherReportType ?? "research_report",
       }))
     : [{
         key: "research",
         title: "研究公开资料、行业背景与用户场景",
         toolName: sourceTool,
         dependsOn: ["design"],
-        input: { focus: "行业事实、竞品、用户场景与决策约束" },
+        input: { focus: "行业事实、竞品、用户场景与决策约束", gptResearcherReportType: input.gptResearcherReportType ?? "research_report" },
+        gptResearcherReportType: input.gptResearcherReportType ?? "research_report",
       }];
   tasks.push(...researchTasks);
   const researchDependencies = researchTasks.map((task) => task.key);
@@ -1123,6 +1178,7 @@ export function createResearchTaskPlan(input: {
 export function createMarketInsightTaskPlan(input: {
   methods: StudyMethod[];
   brief?: string;
+  gptResearcherReportType?: GptResearcherReportType;
 }): ResearchTaskDefinition[] {
   const sourceTool: ResearchToolName = input.methods.includes("Scout Agent")
     ? "scoutSocialTrends"
@@ -1142,21 +1198,24 @@ export function createMarketInsightTaskPlan(input: {
       title: "建立市场格局与品类变化基线",
       toolName: "deepResearch",
       dependsOn: ["design"],
-      input: { focus: "市场规模信号、品类结构、增长驱动、政策与渠道变化" },
+      input: { focus: "市场规模信号、品类结构、增长驱动、政策与渠道变化", gptResearcherReportType: input.gptResearcherReportType ?? "research_report" },
+      gptResearcherReportType: input.gptResearcherReportType ?? "research_report",
     },
     {
       key: "competitive_signals",
       title: "梳理竞争信号与替代方案",
       toolName: "deepResearch",
       dependsOn: ["design"],
-      input: { focus: "主要竞品、替代方案、定位差异、定价动作与能力缺口" },
+      input: { focus: "主要竞品、替代方案、定位差异、定价动作与能力缺口", gptResearcherReportType: input.gptResearcherReportType ?? "research_report" },
+      gptResearcherReportType: input.gptResearcherReportType ?? "research_report",
     },
     {
       key: "opportunity_signals",
       title: `扫描${sourceLabel}中的机会信号`,
       toolName: sourceTool,
       dependsOn: ["design"],
-      input: { focus: "新兴需求、未满足场景、用户自然语言、弱信号与反向证据" },
+      input: { focus: "新兴需求、未满足场景、用户自然语言、弱信号与反向证据", gptResearcherReportType: input.gptResearcherReportType ?? "research_report" },
+      gptResearcherReportType: input.gptResearcherReportType ?? "research_report",
     },
     {
       key: "report",
@@ -1215,6 +1274,7 @@ async function loadHarnessStudy(runId: string): Promise<HarnessStudy | null> {
     methods: StudyMethod[] | string;
     persona_filters: { audience?: string } | string;
     persona_count: number;
+    gpt_researcher_report_type: GptResearcherReportType;
     estimated_tokens: string;
     workflow_type: Exclude<WorkflowType, "realtime_agent">;
     workflow_version: string;
@@ -1226,6 +1286,7 @@ async function loadHarnessStudy(runId: string): Promise<HarnessStudy | null> {
             run.status as run_status, run.started_at::text as run_started_at,
             study.brief, study.study_type, study.estimated_tokens::text as estimated_tokens,
             plan.framework, plan.methods, plan.persona_filters, plan.persona_count,
+            plan.gpt_researcher_report_type,
             run.workflow_type, run.workflow_version, workflow.task_graph as workflow_task_graph
      from study_runs run
      join studies study on study.id = run.study_id
@@ -1258,6 +1319,7 @@ async function loadHarnessStudy(runId: string): Promise<HarnessStudy | null> {
     workflowType: row.workflow_type,
     workflowVersion: row.workflow_version,
     workflowTaskGraph: row.workflow_task_graph ? parseJson(row.workflow_task_graph) : null,
+    gptResearcherReportType: row.gpt_researcher_report_type,
   };
 }
 
@@ -1622,6 +1684,28 @@ function sanitizePostgresJsonValue<T>(value: T): T {
   ) as T;
 }
 
+export function resolveResearchTaskRuntimePolicy(input: {
+  toolName: ResearchToolName;
+  persistedTimeoutSeconds: number;
+  strategyConfig?: Record<string, unknown>;
+}) {
+  const strategyOverride = input.strategyConfig
+    && Object.prototype.hasOwnProperty.call(input.strategyConfig, "taskTimeoutSeconds")
+    ? Number(input.strategyConfig.taskTimeoutSeconds)
+    : null;
+  const configuredTimeout = strategyOverride !== null && Number.isFinite(strategyOverride)
+    ? strategyOverride
+    : input.persistedTimeoutSeconds;
+  const usesGptResearcher = input.toolName === "deepResearch" && isGptResearcherEnabled();
+  const timeoutSeconds = usesGptResearcher && strategyOverride === null
+    ? Math.max(configuredTimeout, getGptResearcherRuntimeLimits().taskTimeoutSeconds)
+    : configuredTimeout;
+  return {
+    timeoutSeconds: Math.max(15, Math.min(3600, timeoutSeconds)),
+    researchEngine: usesGptResearcher ? "gpt-researcher" as const : "local" as const,
+  };
+}
+
 async function executeTask(input: {
   study: HarnessStudy;
   task: StoredTask;
@@ -1663,12 +1747,17 @@ async function executeTask(input: {
       : getProviderStageStatus(providerStage)
     : null;
   const providerStartedAt = Date.now();
-  const timeoutSeconds = Number(input.strategy.config.taskTimeoutSeconds ?? input.task.timeoutSeconds);
-  const timeout = Math.max(15, Math.min(3600, timeoutSeconds)) * 1000;
+  const runtimePolicy = resolveResearchTaskRuntimePolicy({
+    toolName: input.task.toolName,
+    persistedTimeoutSeconds: input.task.timeoutSeconds,
+    strategyConfig: input.strategy.config,
+  });
+  const timeoutSeconds = runtimePolicy.timeoutSeconds;
+  const timeout = timeoutSeconds * 1000;
   const controller = new AbortController();
   const abortFromRun = () => controller.abort(input.runSignal.reason ?? abortError("RUNTIME_CANCELLED"));
   input.runSignal.addEventListener("abort", abortFromRun, { once: true });
-  const timer = setTimeout(() => controller.abort(abortError("RUNTIME_TASK_TIMEOUT")), timeout);
+  const timer = setTimeout(() => controller.abort(abortError(`RUNTIME_TASK_TIMEOUT:${timeoutSeconds}`)), timeout);
   const invocation = await beginInvocation(input.study, input.task, binding, input.context.retrievalId);
   await appendEvent(database, input.study.studyId, input.study.runId, `task.${input.task.key}.started`, {
     taskKey: input.task.key,
@@ -1680,6 +1769,8 @@ async function executeTask(input: {
     contextRetrievalId: input.context.retrievalPublicId,
     invocationId: invocation.invocationPublicId,
     strategyVersion: input.strategy.strategyVersion,
+    timeoutSeconds,
+    researchEngine: runtimePolicy.researchEngine,
     ...(providerStatus ? { providerStage, provider: providerStatus.providerName, model: providerStatus.model } : {}),
   });
   await appendEvent(database, input.study.studyId, input.study.runId, "tool.call.started", {
@@ -1692,6 +1783,8 @@ async function executeTask(input: {
     contextRetrievalId: input.context.retrievalPublicId,
     invocationId: invocation.invocationPublicId,
     arguments: input.task.input,
+    timeoutSeconds,
+    researchEngine: runtimePolicy.researchEngine,
     ...(providerStatus ? { providerStage, provider: providerStatus.providerName, model: providerStatus.model } : {}),
   });
   const progressStartedAt = Date.now();
@@ -1731,17 +1824,22 @@ async function executeTask(input: {
       if (!rateAccepted) throw new Error("RUNTIME_RATE_LIMITED");
     }
     const parsedInput = tool.inputSchema.parse(input.task.input);
+    const emitProgress = async (event: { type: string; payload?: Record<string, unknown> }) => {
+      await appendEvent(database, input.study.studyId, input.study.runId, event.type, event.payload ?? {});
+    };
     const execute = () => tool.execute({
         study: input.study,
         task: {
           key: input.task.key,
           publicId: input.task.publicId,
           attempt: invocation.attempt,
+          toolName: input.task.toolName,
         },
         state: input.state,
         context: input.context,
         signal: controller.signal,
         strategy: input.strategy,
+        emitProgress,
       }, parsedInput);
     const result = providerRoute
       ? await withProviderRoute(providerRoute.override, execute)

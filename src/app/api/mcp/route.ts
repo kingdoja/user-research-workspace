@@ -57,10 +57,11 @@ function createMcpServer(principal: ApiAccessPrincipal) {
     inputSchema: {
       brief: z.string().min(12).max(4000),
       productLine: z.enum(["research", "market_insight"]).default("research"),
+      gptResearcherReportType: z.enum(["research_report", "deep", "detailed_report", "subtopic_report"]).default("research_report"),
     },
-  }, async ({ brief, productLine }) => {
+  }, async ({ brief, productLine, gptResearcherReportType }) => {
     if (!principal.scopes.includes("studies:write")) return toolScopeError("studies:write");
-    const publicId = await createStudy(principal.viewer, brief, productLine);
+    const publicId = await createStudy(principal.viewer, brief, productLine, undefined, gptResearcherReportType);
     return { content: [{ type: "text", text: JSON.stringify({ publicId, status: "planning" }) }] };
   });
 

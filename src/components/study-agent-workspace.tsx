@@ -32,11 +32,13 @@ import { StudyAutoRefresh } from "@/components/study-auto-refresh";
 import { StudyReplayControls } from "@/components/study-replay-controls";
 import { StudyShareControls } from "@/components/study-share-controls";
 import { StudyTaskInputForm } from "@/components/study-task-input-form";
+import { StudyToolCall } from "@/components/study-tool-call";
 import { StructuredFollowupAnswer } from "@/components/structured-followup-answer";
 import type { Viewer } from "@/lib/auth";
 import { getOpenAIProviderStatus } from "@/lib/openai-provider";
 import type { StudyDetail } from "@/lib/studies";
 import { formatDuration, formatTokens, methodLabels, studyTypeLabels } from "@/lib/study-display";
+import { GPT_RESEARCHER_REPORT_TYPE_LABELS } from "@/lib/gpt-researcher-types";
 
 type OpenAIProviderStatus = ReturnType<typeof getOpenAIProviderStatus>;
 type StudyEvent = StudyDetail["events"][number];
@@ -104,8 +106,10 @@ function TracePayloadDetails({
   const participants = stringList(payload.participants);
   const directions = directionList(payload.directions);
   const panelTitle = typeof payload.title === "string" ? payload.title : "";
+  const platform = typeof payload.platform === "string" ? payload.platform : "";
+  const collectionMode = typeof payload.collectionMode === "string" ? payload.collectionMode : "";
 
-  if (!queries.length && !sources.length && !names.length && !participants.length && !directions.length && !panelTitle) {
+  if (!queries.length && !sources.length && !names.length && !participants.length && !directions.length && !panelTitle && !platform) {
     return null;
   }
 
@@ -126,28 +130,14 @@ function TracePayloadDetails({
       ) : null}
       {names.length ? <section><h4>AI 合成 Persona</h4><div className="agent-trace-chips">{names.map((name) => <span key={name}>{name}</span>)}</div></section> : null}
       {panelTitle ? <section><h4>Panel</h4><p>{panelTitle}</p></section> : null}
+      {platform ? <section><h4>平台与采集方式</h4><p>{platform} · {collectionMode === "official_public_api" ? "官方公开 API" : "公开网页搜索（非站内爬虫）"}</p></section> : null}
       {participants.length ? <section><h4>模拟访谈对象</h4><div className="agent-trace-chips">{participants.map((name) => <span key={name}>{name}</span>)}</div></section> : null}
       {directions.length ? <section><h4>验证方向</h4><ol className="agent-direction-list">{directions.map((direction) => <li key={direction.title}><span>{direction.title}</span>{direction.verdict ? <small>{direction.verdict}</small> : null}</li>)}</ol></section> : null}
     </div>
   );
 }
 
-function ToolCall({
-  name,
-  status = "done",
-  children,
-}: {
-  name: string;
-  status?: "done" | "active" | "waiting" | "failed";
-  children?: React.ReactNode;
-}) {
-  return (
-    <details className={`agent-tool-call tool-${status}`} open={status === "active" || status === "failed"}>
-      <summary><ChevronRight size={15} /><span>exec</span><strong>{name}</strong>{children ? <small>查看过程</small> : null}</summary>
-      {children ? <div className="agent-tool-body">{children}</div> : null}
-    </details>
-  );
-}
+const ToolCall = StudyToolCall;
 
 function ArtifactResultCard({ artifact }: { artifact: StudyDetail["artifacts"][number] }) {
   const content = Array.isArray(artifact.content) ? {} : artifact.content;
@@ -244,16 +234,22 @@ function PlanningTrace({ study }: { study: StudyDetail }) {
               </dl>
             </ToolCall>
           ) : null}
-          {!clarificationPending ? <ToolCall name="makeStudyPlan">
+          {!clarificationPending ? <ToolCall
+            key={`study-plan-${study.plan.version}`}
+            name="makeStudyPlan"
+            autoFocus={study.plan.status !== "confirmed"}
+            scrollTargetSelector="[data-study-plan-confirm]"
+          >
             <section className="agent-plan-card">
               <header><div><span>研究计划</span><h2>{study.title}</h2></div><FileText size={20} /></header>
               <div className="agent-plan-grid">
                 <section><h3>研究目标</h3><p>{study.plan.rationale}</p></section>
                 <section><h3>研究方法</h3><p>{study.plan.methods.map((method) => methodLabels[method]).join(" + ") || "公开资料综合"}</p></section>
+                <section><h3>GPT Researcher 模式</h3><p>{GPT_RESEARCHER_REPORT_TYPE_LABELS[study.plan.gptResearcherReportType] ?? study.plan.gptResearcherReportType}</p></section>
                 <section><h3>预计周期</h3><p>{formatDuration(study.plan.estimatedDurationMinutes)}</p></section>
                 <section><h3>预计用量</h3><p>{formatTokens(study.plan.estimatedTokens)} Tokens</p></section>
               </div>
-              {study.plan.status === "confirmed" ? <div className="agent-plan-confirmed"><Check size={15} />Plan v{study.plan.version} 已确认 · {study.plan.contentHash ? `${study.plan.contentHash.slice(0, 10)}…` : "执行版本已锁定"}{study.workflow ? ` · Workflow v${study.workflow.version}` : ""}</div> : <StudyDetailActions publicId={study.publicId} />}
+              {study.plan.status === "confirmed" ? <div className="agent-plan-confirmed"><Check size={15} />Plan v{study.plan.version} 已确认 · {study.plan.contentHash ? `${study.plan.contentHash.slice(0, 10)}…` : "执行版本已锁定"}{study.workflow ? ` · Workflow v${study.workflow.version}` : ""}</div> : <StudyDetailActions publicId={study.publicId} plan={study.plan} />}
             </section>
           </ToolCall> : null}
         </div>
@@ -273,9 +269,11 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
   ));
   const events = study.events.filter((event) => !study.runId || event.runId === study.runId || event.runId === null);
   const steps = createProgressItems(study);
-  const activeStep = steps.find((step) => step.status === "active");
-  const latestEvent = events.at(-1);
   const tasksByKey = new Map(study.tasks.map((task) => [task.key, task]));
+  const activeStep = steps.find((step) => step.status === "active");
+  const inputStepKey = steps.find((step) => tasksByKey.get(step.key)?.inputRequest)?.key;
+  const attentionStepKey = inputStepKey ?? activeStep?.key;
+  const latestEvent = events.at(-1);
   const actionLabels: Record<string, string> = {
     continue: "继续固定 DAG",
     append_task: "追加受控任务",
@@ -320,7 +318,7 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
           </div>
         ) : null}
         <section className="agent-execution-timeline" data-replay-run={study.runId ?? undefined}>
-          {steps.map((step, index) => {
+          {steps.filter((step) => step.status !== "waiting" || Boolean(tasksByKey.get(step.key)?.inputRequest)).map((step, index) => {
             const task = tasksByKey.get(step.key);
             const startedEvent = events.findLast((event) => step.startedTypes.includes(event.type));
             const completedEvent = events.findLast((event) => step.completedTypes.includes(event.type));
@@ -339,10 +337,11 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
                   ? "任务未完成，错误详情已记录在当前步骤。"
                   : "等待前序研究任务完成。";
             return <div className="agent-task-event" key={step.key}>
-              <ToolCall name={step.toolName} status={step.status}>
+              <ToolCall name={step.toolName} status={task?.inputRequest ? "active" : step.status} autoFocus={step.key === attentionStepKey}>
                   <p className="agent-tool-message"><strong>{index + 1}. {step.label}</strong></p>
                   {task?.origin === "dynamic" ? <span className="agent-dynamic-task-badge">动态追加 · 第 {task.generation} 代</span> : null}
                   <p className="agent-step-summary">{stepSummary}</p>
+                  {typeof payload.platform === "string" ? <p className="agent-source-mode"><strong>{payload.platform}</strong> · {payload.collectionMode === "official_public_api" ? "官方公开 API" : "公开网页搜索（不访问站内登录内容）"}</p> : null}
                   <dl className="agent-tool-fields">
                     <div><dt>status</dt><dd>{step.status}</dd></div>
                     {startedAt ? <div><dt>started</dt><dd>{startedAt.toLocaleTimeString("zh-CN")}</dd></div> : null}
@@ -387,7 +386,7 @@ function ExecutionTrace({ study, provider }: { study: StudyDetail; provider: Ope
           })}
         </section>
         {study.reasoningDecisions.length ? (
-          <details className="agent-reasoning-trace" open>
+          <details className="agent-reasoning-trace">
             <summary><ChevronRight size={15} /><strong>调度决策</strong><span>{study.reasoningDecisions.length} 次</span></summary>
             <ol>{study.reasoningDecisions.map((decision) => {
               const action = typeof decision.chosenAction.type === "string" ? decision.chosenAction.type : "continue";
@@ -524,7 +523,8 @@ export function StudyAgentWorkspace({
   provider: OpenAIProviderStatus;
 }) {
   const progressItems = createProgressItems(study);
-  const initialArtifactId = study.artifacts.findLast((artifact) => artifact.type === "research_report")?.publicId ?? null;
+  const initialArtifactId = study.artifacts.findLast((artifact) => artifact.type === "research_report")?.publicId
+    ?? "__study_plan__";
 
   return (
     <StudyArtifactConsoleProvider initialArtifactId={initialArtifactId}>

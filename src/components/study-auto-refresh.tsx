@@ -29,6 +29,10 @@ const visibleEventTypes = new Set([
   "agent.turn.completed",
   "agent.controller.failed",
   "reasoning.decision.recorded",
+  "gpt_researcher.research",
+  "gpt_researcher.logs",
+  "gpt_researcher.report",
+  "research.engine.completed",
   "run.autonomous_recovery_queued",
   "research.completed",
   "run.failed",
@@ -37,6 +41,11 @@ const visibleEventTypes = new Set([
 
 function eventLabel(event: StreamedStudyEvent) {
   const toolName = typeof event.payload.toolName === "string" ? event.payload.toolName : "";
+  const externalOutput = typeof event.payload.output === "string" ? event.payload.output.replace(/\s+/gu, " ").trim() : "";
+  if (event.type === "gpt_researcher.report") return { title: "GPT Researcher · 报告草稿", detail: externalOutput ? `已接收增量：${externalOutput.slice(0, 140)}` : "正在接收报告草稿增量", status: "active" };
+  if (event.type === "gpt_researcher.research") return { title: "GPT Researcher · 检索", detail: externalOutput ? externalOutput.slice(0, 160) : "正在检索并整理公开资料", status: "active" };
+  if (event.type === "gpt_researcher.logs") return { title: "GPT Researcher · 进度", detail: externalOutput ? externalOutput.slice(0, 160) : "研究引擎正在推进", status: "active" };
+  if (event.type === "research.engine.completed") return { title: "研究引擎完成", detail: "草稿和来源已交回 GEA，开始证据核验与报告 gate", status: "active" };
   if (event.type === "tool.call.started") return { title: toolName, detail: "正在调用工具", status: "active" };
   if (event.type === "tool.call.progress") {
     const elapsedMs = typeof event.payload.elapsedMs === "number" ? event.payload.elapsedMs : 0;

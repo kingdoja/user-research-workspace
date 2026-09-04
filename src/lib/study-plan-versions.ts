@@ -26,13 +26,13 @@ export async function createConfirmedPlanVersion(
        public_id, workspace_id, study_id, intent_version_id, version, lifecycle_status, snapshot_reason,
        product_line, brief_snapshot, study_type, framework, methods, persona_filters, persona_count,
        estimated_duration_minutes, estimated_tokens, source, provider_response_id,
-       provider_model, prompt_version, rationale, content_hash, confirmed_by, confirmed_at
+       provider_model, prompt_version, rationale, gpt_researcher_report_type, content_hash, confirmed_by, confirmed_at
      )
      select $2, study.workspace_id, study.id, $4, plan.version, 'confirmed', 'confirmation',
             study.product_line, study.brief, study.study_type, plan.framework, plan.methods, plan.persona_filters,
             plan.persona_count, plan.estimated_duration_minutes, plan.estimated_tokens,
             plan.source, plan.provider_response_id, plan.provider_model, plan.prompt_version,
-            plan.rationale,
+            plan.rationale, plan.gpt_researcher_report_type,
             encode(digest(jsonb_build_object(
               'schemaVersion', 'research-plan-v1',
               'productLine', study.product_line,
@@ -48,7 +48,8 @@ export async function createConfirmedPlanVersion(
               'providerResponseId', plan.provider_response_id,
               'providerModel', plan.provider_model,
               'promptVersion', plan.prompt_version,
-              'rationale', plan.rationale
+              'rationale', plan.rationale,
+              'gptResearcherReportType', plan.gpt_researcher_report_type
             )::text, 'sha256'), 'hex'),
             $3, now()
      from studies study

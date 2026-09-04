@@ -77,7 +77,7 @@ export const UNIVERSAL_AGENT_PRODUCT_TOOLS: readonly UniversalAgentProductTool[]
     title: "创建研究与报告任务",
     description: "创建研究项目并进入澄清/计划阶段，最终报告由受治理的研究 Harness 生成。",
     mutates: true,
-    inputHint: "brief, productLine(research|market_insight), sourcePanelPublicId?",
+    inputHint: "brief, productLine(research|market_insight), gptResearcherReportType?, sourcePanelPublicId?",
   },
   {
     name: "research.run_confirmed",
@@ -110,6 +110,7 @@ const productToolSchemas: Record<UniversalAgentProductToolName, z.ZodType<Record
     brief: z.string().trim().min(12).max(4000),
     productLine: z.enum(["research", "market_insight"]).default("research"),
     sourcePanelPublicId: z.string().trim().min(8).max(120).optional(),
+    gptResearcherReportType: z.enum(["research_report", "deep", "detailed_report", "subtopic_report"]).default("research_report"),
   }).strict(),
   "research.run_confirmed": z.object({ studyPublicId: z.string().trim().min(8).max(120) }).strict(),
   "report.read": z.object({ studyPublicId: z.string().trim().min(8).max(120) }).strict(),
@@ -244,8 +245,8 @@ export async function executeUniversalAgentProductTool(input: {
   }
   if (input.toolName === "research.create") {
     const { createStudy } = await import("@/lib/studies");
-    const args = parsed.data as { brief: string; productLine: "research" | "market_insight"; sourcePanelPublicId?: string };
-    const publicId = await createStudy(input.viewer, args.brief, args.productLine, args.sourcePanelPublicId);
+    const args = parsed.data as { brief: string; productLine: "research" | "market_insight"; sourcePanelPublicId?: string; gptResearcherReportType: "research_report" | "deep" | "detailed_report" | "subtopic_report" };
+    const publicId = await createStudy(input.viewer, args.brief, args.productLine, args.sourcePanelPublicId, args.gptResearcherReportType);
     return {
       status: "clarification_required",
       resourceType: "study", resourcePublicId: publicId,

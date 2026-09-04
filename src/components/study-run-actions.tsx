@@ -2,7 +2,7 @@
 
 import { LoaderCircle, Play, RotateCcw } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 
 export function StudyRunActions({
   publicId,
@@ -18,6 +18,12 @@ export function StudyRunActions({
   const router = useRouter();
   const [error, setError] = useState("");
   const [pending, startTransition] = useTransition();
+  const actionRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => actionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 120);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   function startRun() {
     setError("");
@@ -39,7 +45,7 @@ export function StudyRunActions({
   }
 
   return (
-    <div className="run-actions">
+    <div className="run-actions" ref={actionRef}>
       <button
         className="button button-green"
         type="button"

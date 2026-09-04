@@ -6,6 +6,7 @@ import { createStudy, listStudies } from "@/lib/studies";
 const createStudySchema = z.object({
   brief: z.string().trim().min(12).max(4000),
   productLine: z.enum(["research", "market_insight"]).default("research"),
+  gptResearcherReportType: z.enum(["research_report", "deep", "detailed_report", "subtopic_report"]).default("research_report"),
 });
 
 export async function GET(request: Request) {
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
     if (!parsed.success) {
       return NextResponse.json({ error: { code: "invalid_request", message: parsed.error.issues[0]?.message ?? "Invalid study input." } }, { status: 400 });
     }
-    const publicId = await createStudy(viewer, parsed.data.brief, parsed.data.productLine);
+    const publicId = await createStudy(viewer, parsed.data.brief, parsed.data.productLine, undefined, parsed.data.gptResearcherReportType);
     return NextResponse.json({ data: { publicId, status: "planning" } }, { status: 201 });
   });
 }
