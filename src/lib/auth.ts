@@ -10,6 +10,7 @@ export type Viewer = {
   workspacePublicId: string;
   workspaceName: string;
   role: "owner" | "admin" | "member" | "viewer";
+  isPlatformAdmin: boolean;
   tokenBalance: number;
 };
 
@@ -92,6 +93,7 @@ export async function getViewer(): Promise<Viewer | null> {
     workspace_public_id: string;
     workspace_name: string;
     role: Viewer["role"];
+    is_platform_admin: boolean;
     token_balance: string;
   }>(
     `select
@@ -103,6 +105,7 @@ export async function getViewer(): Promise<Viewer | null> {
        workspaces.public_id as workspace_public_id,
        workspaces.name as workspace_name,
        workspace_members.role,
+       users.is_platform_admin,
        workspaces.token_balance::text as token_balance
      from users
      join workspace_members on workspace_members.user_id = users.id
@@ -127,6 +130,7 @@ export async function getViewer(): Promise<Viewer | null> {
     workspacePublicId: row.workspace_public_id,
     workspaceName: row.workspace_name,
     role: row.role,
+    isPlatformAdmin: row.is_platform_admin,
     tokenBalance: Number(row.token_balance),
   };
 }

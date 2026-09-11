@@ -39,6 +39,7 @@ import { getOpenAIProviderStatus } from "@/lib/openai-provider";
 import type { StudyDetail } from "@/lib/studies";
 import { formatDuration, formatTokens, methodLabels, studyTypeLabels } from "@/lib/study-display";
 import { GPT_RESEARCHER_REPORT_TYPE_LABELS } from "@/lib/gpt-researcher-types";
+import { planResearchSources } from "@/lib/research-source-strategy";
 
 type OpenAIProviderStatus = ReturnType<typeof getOpenAIProviderStatus>;
 type StudyEvent = StudyDetail["events"][number];
@@ -181,6 +182,15 @@ function PlanningTrace({ study }: { study: StudyDetail }) {
   const clarificationPending = study.clarification.status === "pending";
   const clarificationCompleted = study.clarification.status === "completed";
   const answerMap = new Map(study.clarification.answers.map((answer) => [answer.questionId, answer.selected]));
+  const sourceStrategy = planResearchSources({ brief: study.brief, methods: study.plan.methods });
+  const evidenceNeedLabels: Record<string, string> = {
+    market_facts: "市场事实",
+    first_person_voice: "第一人称表达",
+    behavior_metrics: "行为指标",
+    official_platform_data: "官方平台数据",
+    competitor_comparison: "竞品比较",
+    primary_research: "一手研究",
+  };
 
   return (
     <>
@@ -246,8 +256,14 @@ function PlanningTrace({ study }: { study: StudyDetail }) {
                 <section><h3>研究目标</h3><p>{study.plan.rationale}</p></section>
                 <section><h3>研究方法</h3><p>{study.plan.methods.map((method) => methodLabels[method]).join(" + ") || "公开资料综合"}</p></section>
                 <section><h3>GPT Researcher 模式</h3><p>{GPT_RESEARCHER_REPORT_TYPE_LABELS[study.plan.gptResearcherReportType] ?? study.plan.gptResearcherReportType}</p></section>
+                <section><h3>来源策略</h3><p>{sourceStrategy.preferredModes.map((mode) => mode === "public_web" ? "全网公开网页" : mode === "official_api" ? "可用官方 API" : mode === "human_input" ? "一手材料" : "工作区资料").join(" + ")}</p></section>
+                <section><h3>证据需求</h3><p>{sourceStrategy.evidenceNeeds.map((need) => evidenceNeedLabels[need] ?? need).join("、")}</p></section>
                 <section><h3>预计周期</h3><p>{formatDuration(study.plan.estimatedDurationMinutes)}</p></section>
                 <section><h3>预计用量</h3><p>{formatTokens(study.plan.estimatedTokens)} Tokens</p></section>
+              </div>
+              <div className="agent-plan-source-note">
+                <strong>采集边界</strong>
+                <p>{sourceStrategy.rationale[0]} {sourceStrategy.requestedPlatforms.length ? `已识别平台：${sourceStrategy.requestedPlatforms.join("、")}；未配置官方连接器时仅检索公开网页，不执行站内登录或爬虫。` : "未指定平台时不会虚构平台任务；如证据不足，系统会请求工作区资料或用户补充材料。"}</p>
               </div>
               {study.plan.status === "confirmed" ? <div className="agent-plan-confirmed"><Check size={15} />Plan v{study.plan.version} 已确认 · {study.plan.contentHash ? `${study.plan.contentHash.slice(0, 10)}…` : "执行版本已锁定"}{study.workflow ? ` · Workflow v${study.workflow.version}` : ""}</div> : <StudyDetailActions publicId={study.publicId} plan={study.plan} />}
             </section>

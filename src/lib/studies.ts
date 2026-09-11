@@ -1095,9 +1095,9 @@ export async function submitStudyClarification(
        where study_id = studies.id and event_type = 'clarification.requested'
        order by created_at desc, id desc limit 1
      ) requested on true
-     where studies.public_id = $1 and studies.workspace_id = $2
+     where studies.public_id = $1 and ($3::boolean or studies.workspace_id = $2)
      limit 1`,
-    [publicId, viewer.workspaceId],
+    [publicId, viewer.workspaceId, viewer.isPlatformAdmin],
   );
   const study = result.rows[0];
 

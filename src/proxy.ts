@@ -3,6 +3,7 @@ import { type NextRequest, NextResponse } from "next/server";
 
 const protectedRoutePrefixes = [
   "/account",
+  "/admin",
   "/agent",
   "/context",
   "/interview/experiments",
@@ -71,6 +72,7 @@ export async function proxy(request: NextRequest) {
 export const config = {
   matcher: [
     "/account/:path*",
+    "/admin/:path*",
     "/agent/:path*",
     "/api/:path*",
     "/context/:path*",

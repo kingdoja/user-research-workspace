@@ -48,6 +48,11 @@ export type PublicWebSearchMetadata = {
   researchEngineFallbackReason?: string;
   qualityRejectedCount?: number;
   qualityRejectionReasons?: Record<string, number>;
+  sourceStrategyVersion?: string;
+  evidenceNeeds?: string[];
+  preferredSourceModes?: string[];
+  fallbackSourceModes?: string[];
+  requestedPlatforms?: string[];
 };
 
 export type PublicWebCollectionResult = {

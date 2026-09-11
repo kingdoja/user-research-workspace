@@ -90,6 +90,11 @@ import {
   RESEARCH_AGENT_TASK_TEMPLATE_VERSION,
   validateResearchAgentTaskTemplate,
 } from "@/lib/research-agent-templates";
+import {
+  detectRequestedResearchPlatforms,
+  planResearchSources,
+  type EvidenceNeed,
+} from "@/lib/research-source-strategy";
 
 type TaskStatus = "pending" | "running" | "completed" | "failed" | "skipped" | "waiting_input";
 
@@ -101,6 +106,7 @@ export type ResearchTaskDefinition = {
   dependsOn: string[];
   input?: Record<string, unknown>;
   gptResearcherReportType?: GptResearcherReportType;
+  evidenceNeeds?: EvidenceNeed[];
 };
 
 type HarnessStudy = {
@@ -230,6 +236,11 @@ const webResearchSchema = z.object({
     socialConnectorRunPublicId: z.string().optional(),
     qualityRejectedCount: z.number().optional(),
     qualityRejectionReasons: z.record(z.string(), z.number()).optional(),
+    sourceStrategyVersion: z.string().optional(),
+    evidenceNeeds: z.array(z.string()).optional(),
+    preferredSourceModes: z.array(z.string()).optional(),
+    fallbackSourceModes: z.array(z.string()).optional(),
+    requestedPlatforms: z.array(z.string()).optional(),
   }),
   audit: z.custom<SourceConnectorAuditSummary>().optional(),
   audits: z.array(z.custom<SourceConnectorAuditSummary>()).optional(),
@@ -459,17 +470,19 @@ const designStudyTool: ResearchTool<Record<string, never>, Record<string, unknow
   inputSchema: z.object({}),
   outputSchema: z.record(z.string(), z.unknown()),
   async execute({ study }) {
+    const sourceStrategy = planResearchSources({ brief: study.brief, methods: study.methods });
     const output = {
       framework: study.framework,
       methods: study.methods,
       audience: study.audience,
       executionMode: "durable_plan_and_execute",
+      sourceStrategy,
     };
     return {
       output,
       artifactType: "research_plan",
       artifactTitle: "研究执行计划",
-      eventPayload: { framework: study.framework, methods: study.methods },
+      eventPayload: { framework: study.framework, methods: study.methods, sourceStrategy },
     };
   },
 };
@@ -484,6 +497,15 @@ const researchInputSchema = z.object({
     sourceUrls: z.array(z.string().url()).max(8).optional(),
     selectedOption: z.string().max(160).optional(),
   }).optional(),
+  evidenceNeeds: z.array(z.enum([
+    "market_facts",
+    "first_person_voice",
+    "behavior_metrics",
+    "official_platform_data",
+    "competitor_comparison",
+    "primary_research",
+  ])).max(8).optional(),
+  sourceStrategyVersion: z.string().max(80).optional(),
 });
 
 const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, ProviderResearchSources> = {
@@ -511,6 +533,8 @@ const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, Provide
       signal,
       additionalSeedUrls: input.resumeInput?.sourceUrls,
       reportType: input.gptResearcherReportType ?? study.gptResearcherReportType,
+      evidenceNeeds: input.evidenceNeeds,
+      sourceStrategyVersion: input.sourceStrategyVersion,
       socialPlatform: input.platform,
       engine: task.toolName === "scoutSocialTrends" ? "local" : "configured",
       onProgress: async (event) => emitProgress?.(event),
@@ -541,6 +565,11 @@ const webResearchTool: ResearchTool<z.infer<typeof researchInputSchema>, Provide
         researchEngine: output.metadata.researchEngine ?? "local",
         researchEngineFallbackUsed: output.metadata.researchEngineFallbackUsed ?? false,
         researchEngineFallbackReason: output.metadata.researchEngineFallbackReason,
+        sourceStrategyVersion: output.metadata.sourceStrategyVersion,
+        evidenceNeeds: output.metadata.evidenceNeeds,
+        preferredSourceModes: output.metadata.preferredSourceModes,
+        fallbackSourceModes: output.metadata.fallbackSourceModes,
+        requestedPlatforms: output.metadata.requestedPlatforms,
       },
     };
   },
@@ -1012,22 +1041,6 @@ const researchTools = {
 export type ResearchToolName = keyof typeof researchTools;
 const agentDynamicToolNames: readonly ResearchToolName[] = ["deepResearch", "scoutSocialTrends"];
 
-const socialPlatformPatterns = [
-  { label: "小红书", patterns: ["小红书", "xiaohongshu", "rednote"] },
-  { label: "抖音", patterns: ["抖音", "douyin"] },
-  { label: "微博", patterns: ["微博", "weibo"] },
-  { label: "B站", patterns: ["b站", "哔哩哔哩", "bilibili"] },
-  { label: "知乎", patterns: ["知乎", "zhihu"] },
-  { label: "Bluesky", patterns: ["bluesky"] },
-] as const;
-
-function detectRequestedSocialPlatforms(brief?: string) {
-  const normalized = (brief ?? "").toLowerCase();
-  return socialPlatformPatterns
-    .filter(({ patterns }) => patterns.some((pattern) => normalized.includes(pattern)))
-    .map(({ label }) => label);
-}
-
 function socialTaskTitle(platform: string, directConnectorEnabled: boolean) {
   if (platform === "Bluesky" && directConnectorEnabled) return "扫描 Bluesky 公开 API 趋势与用户表达";
   if (platform === "公开社交信号") return "检索公开网页中的社交趋势与用户表达";
@@ -1053,6 +1066,7 @@ export function createResearchTaskPlan(input: {
   personaCount?: number;
   gptResearcherReportType?: GptResearcherReportType;
 }): ResearchTaskDefinition[] {
+  const sourceStrategy = planResearchSources({ brief: input.brief, methods: input.methods });
   const tasks: ResearchTaskDefinition[] = [{
     key: "design",
     title: "设计研究框架与执行步骤",
@@ -1060,7 +1074,7 @@ export function createResearchTaskPlan(input: {
     dependsOn: [],
   }];
   const sourceTool = input.methods.includes("Scout Agent") ? "scoutSocialTrends" : "deepResearch";
-  const platformCandidates = detectRequestedSocialPlatforms(input.brief);
+  const platformCandidates = detectRequestedResearchPlatforms(input.brief);
   const directConnectorEnabled = getBlueskyPublicConnectorStatus().enabled;
   const platforms = sourceTool === "scoutSocialTrends"
     ? (platformCandidates.length ? platformCandidates : ["公开社交信号"]).slice(0, 3)
@@ -1071,16 +1085,18 @@ export function createResearchTaskPlan(input: {
         title: socialTaskTitle(platform, directConnectorEnabled),
         toolName: sourceTool,
         dependsOn: ["design"],
-        input: { platform, collectionMode: platform === "Bluesky" && directConnectorEnabled ? "official_public_api" : "public_web_search_only", focus: index === 0 ? "痛点、场景与自然语言表达" : "比较、阻力与决策触发", gptResearcherReportType: input.gptResearcherReportType ?? "research_report" },
+        input: { platform, collectionMode: platform === "Bluesky" && directConnectorEnabled ? "official_public_api" : "public_web_search_only", focus: index === 0 ? "痛点、场景与自然语言表达" : "比较、阻力与决策触发", gptResearcherReportType: input.gptResearcherReportType ?? "research_report", evidenceNeeds: sourceStrategy.evidenceNeeds, sourceStrategyVersion: sourceStrategy.version },
         gptResearcherReportType: input.gptResearcherReportType ?? "research_report",
+        evidenceNeeds: sourceStrategy.evidenceNeeds,
       }))
     : [{
         key: "research",
         title: "研究公开资料、行业背景与用户场景",
         toolName: sourceTool,
         dependsOn: ["design"],
-        input: { focus: "行业事实、竞品、用户场景与决策约束", gptResearcherReportType: input.gptResearcherReportType ?? "research_report" },
+        input: { focus: "行业事实、竞品、用户场景与决策约束", gptResearcherReportType: input.gptResearcherReportType ?? "research_report", evidenceNeeds: sourceStrategy.evidenceNeeds, sourceStrategyVersion: sourceStrategy.version },
         gptResearcherReportType: input.gptResearcherReportType ?? "research_report",
+        evidenceNeeds: sourceStrategy.evidenceNeeds,
       }];
   tasks.push(...researchTasks);
   const researchDependencies = researchTasks.map((task) => task.key);
@@ -1180,6 +1196,7 @@ export function createMarketInsightTaskPlan(input: {
   brief?: string;
   gptResearcherReportType?: GptResearcherReportType;
 }): ResearchTaskDefinition[] {
+  const sourceStrategy = planResearchSources({ brief: input.brief, methods: input.methods });
   const sourceTool: ResearchToolName = input.methods.includes("Scout Agent")
     ? "scoutSocialTrends"
     : "deepResearch";
@@ -1198,24 +1215,27 @@ export function createMarketInsightTaskPlan(input: {
       title: "建立市场格局与品类变化基线",
       toolName: "deepResearch",
       dependsOn: ["design"],
-      input: { focus: "市场规模信号、品类结构、增长驱动、政策与渠道变化", gptResearcherReportType: input.gptResearcherReportType ?? "research_report" },
+      input: { focus: "市场规模信号、品类结构、增长驱动、政策与渠道变化", gptResearcherReportType: input.gptResearcherReportType ?? "research_report", evidenceNeeds: sourceStrategy.evidenceNeeds, sourceStrategyVersion: sourceStrategy.version },
       gptResearcherReportType: input.gptResearcherReportType ?? "research_report",
+      evidenceNeeds: sourceStrategy.evidenceNeeds,
     },
     {
       key: "competitive_signals",
       title: "梳理竞争信号与替代方案",
       toolName: "deepResearch",
       dependsOn: ["design"],
-      input: { focus: "主要竞品、替代方案、定位差异、定价动作与能力缺口", gptResearcherReportType: input.gptResearcherReportType ?? "research_report" },
+      input: { focus: "主要竞品、替代方案、定位差异、定价动作与能力缺口", gptResearcherReportType: input.gptResearcherReportType ?? "research_report", evidenceNeeds: sourceStrategy.evidenceNeeds, sourceStrategyVersion: sourceStrategy.version },
       gptResearcherReportType: input.gptResearcherReportType ?? "research_report",
+      evidenceNeeds: sourceStrategy.evidenceNeeds,
     },
     {
       key: "opportunity_signals",
       title: `扫描${sourceLabel}中的机会信号`,
       toolName: sourceTool,
       dependsOn: ["design"],
-      input: { focus: "新兴需求、未满足场景、用户自然语言、弱信号与反向证据", gptResearcherReportType: input.gptResearcherReportType ?? "research_report" },
+      input: { focus: "新兴需求、未满足场景、用户自然语言、弱信号与反向证据", gptResearcherReportType: input.gptResearcherReportType ?? "research_report", evidenceNeeds: sourceStrategy.evidenceNeeds, sourceStrategyVersion: sourceStrategy.version },
       gptResearcherReportType: input.gptResearcherReportType ?? "research_report",
+      evidenceNeeds: sourceStrategy.evidenceNeeds,
     },
     {
       key: "report",

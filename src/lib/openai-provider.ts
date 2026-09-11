@@ -40,6 +40,10 @@ import {
   curatePublicWebSources,
   formatResearchAnswerabilityForPrompt,
 } from "@/lib/research-report-design";
+import {
+  planResearchSources,
+  RESEARCH_SOURCE_STRATEGY_VERSION,
+} from "@/lib/research-source-strategy";
 import { isGptResearcherEnabled, runGptResearcher, type GptResearcherReportType } from "@/lib/gpt-researcher-adapter";
 
 const DEFAULT_MODEL = "gpt-5.6-terra";
@@ -2567,9 +2571,14 @@ export async function researchPublicWeb(input: {
   additionalSeedUrls?: string[];
   reportType?: GptResearcherReportType;
   socialPlatform?: string;
+  evidenceNeeds?: string[];
+  sourceStrategyVersion?: string;
   engine?: "configured" | "local";
   onProgress?: (event: ResearchProgressEvent) => Promise<void> | void;
 }): Promise<ProviderResearchSources> {
+  const sourceStrategy = planResearchSources({ brief: input.brief });
+  const evidenceNeeds = input.evidenceNeeds ?? sourceStrategy.evidenceNeeds;
+  const sourceStrategyVersion = input.sourceStrategyVersion ?? RESEARCH_SOURCE_STRATEGY_VERSION;
   let researchEngineFallbackReason: string | null = null;
   if (input.engine !== "local" && isGptResearcherEnabled()) {
     try {
@@ -2581,6 +2590,8 @@ export async function researchPublicWeb(input: {
         signal: input.signal,
         additionalSeedUrls: input.additionalSeedUrls,
         reportType: input.reportType,
+        evidenceNeeds,
+        requestedPlatforms: sourceStrategy.requestedPlatforms,
         onProgress: async (event) => {
           // The external engine's progress is intentionally normalized to the
           // same provider event shape consumed by the durable harness.
@@ -2637,7 +2648,16 @@ export async function researchPublicWeb(input: {
       return {
         ...external,
         sources,
-        metadata: { ...external.metadata, researchEngine: "gpt-researcher", researchEngineFallbackUsed: false },
+        metadata: {
+          ...external.metadata,
+          researchEngine: "gpt-researcher",
+          researchEngineFallbackUsed: false,
+          sourceStrategyVersion,
+          evidenceNeeds,
+          preferredSourceModes: sourceStrategy.preferredModes,
+          fallbackSourceModes: sourceStrategy.fallbackModes,
+          requestedPlatforms: sourceStrategy.requestedPlatforms,
+        },
         audit,
         audits,
         answerability: assessResearchAnswerability({ brief: input.brief, sources }),
@@ -2807,6 +2827,11 @@ export async function researchPublicWeb(input: {
       socialConnectorRunPublicId: social?.audit.publicId,
       researchEngine: "local",
       researchEngineFallbackUsed: Boolean(researchEngineFallbackReason),
+      sourceStrategyVersion,
+      evidenceNeeds,
+      preferredSourceModes: sourceStrategy.preferredModes,
+      fallbackSourceModes: sourceStrategy.fallbackModes,
+      requestedPlatforms: sourceStrategy.requestedPlatforms,
       ...(researchEngineFallbackReason ? { researchEngineFallbackReason } : {}),
     },
     audit: audits[0],

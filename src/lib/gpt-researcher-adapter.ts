@@ -65,6 +65,8 @@ export async function runGptResearcher(input: {
   signal?: AbortSignal;
   additionalSeedUrls?: string[];
   reportType?: GptResearcherReportType;
+  evidenceNeeds?: string[];
+  requestedPlatforms?: string[];
   onProgress?: (event: GptResearcherProgress) => Promise<void> | void;
 }): Promise<GptResearcherRunResult> {
   const { baseUrl, token } = bridgeConfig();
@@ -104,9 +106,14 @@ export async function runGptResearcher(input: {
       method: "POST", signal,
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({
-        query: `${input.brief}\n研究框架：${input.framework}`,
+        query: `${input.brief}\n研究框架：${input.framework}\n证据需求：${(input.evidenceNeeds ?? []).join("、") || "市场事实"}\n指定平台：${(input.requestedPlatforms ?? []).join("、") || "无（默认全网公开网页）"}`,
         report_type: normalizeGptResearcherReportType(input.reportType), report_source: "web", source_urls: validatedSeedUrls,
-        metadata: { userPublicId: input.userPublicId, studyPublicId: input.studyPublicId },
+        metadata: {
+          userPublicId: input.userPublicId,
+          studyPublicId: input.studyPublicId,
+          evidenceNeeds: input.evidenceNeeds ?? [],
+          requestedPlatforms: input.requestedPlatforms ?? [],
+        },
       }),
     });
     if (!createResponse.ok) throw new Error(`GPT_RESEARCHER_BRIDGE_CREATE_${createResponse.status}`);
@@ -152,7 +159,17 @@ export async function runGptResearcher(input: {
     if (!sources.length) throw new Error("PUBLIC_WEB_SOURCES_INSUFFICIENT");
     return {
       queries: [input.brief], sources,
-      metadata: { primaryProvider: "gpt-researcher", fallbackUsed: false, seedSourceCount: input.additionalSeedUrls?.length ?? 0, searchSourceCount: sources.length, finalSourceCount: sources.length, connectorRunPublicId: created.run_id, policyVersion: "gpt-researcher-bridge-v1" },
+      metadata: {
+        primaryProvider: "gpt-researcher",
+        fallbackUsed: false,
+        seedSourceCount: input.additionalSeedUrls?.length ?? 0,
+        searchSourceCount: sources.length,
+        finalSourceCount: sources.length,
+        connectorRunPublicId: created.run_id,
+        policyVersion: "gpt-researcher-bridge-v1",
+        evidenceNeeds: input.evidenceNeeds ?? [],
+        requestedPlatforms: input.requestedPlatforms ?? [],
+      },
       responseId: created.run_id, model: "gpt-researcher", usage: null,
       draftReport: result.report || result.draft || draftReport || undefined,
     };
