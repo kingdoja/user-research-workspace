@@ -141,7 +141,8 @@ export async function executeUniversalAgentProductTool(input: {
     return {
       status: "blocked", resourceType: "product_tool", resourcePublicId: null, href: null,
       summary: `未执行 ${input.toolName}：本轮未获得副作用执行确认。`,
-      nextAction: "请用户确认本轮允许执行已选能力。", error: "product_execution_not_confirmed",
+      nextAction: "请用户勾选输入框中的“允许本轮执行已选能力”，然后重新发送本次请求；仅回复文字确认不会授予执行权限。",
+      error: "product_execution_not_confirmed",
     };
   }
   const parsed = productToolSchemas[input.toolName].safeParse(input.arguments);

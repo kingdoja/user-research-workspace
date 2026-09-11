@@ -35,7 +35,7 @@ async function main() {
   assert.equal(denied.resourcePublicId, null);
   assert.equal(denied.href, null);
   assert.equal(typeof denied.summary, "string");
-  assert.equal(typeof denied.nextAction, "string");
+  assert.match(denied.nextAction ?? "", /勾选.*允许本轮执行已选能力/);
 
   const invalid = await executeUniversalAgentProductTool({
     viewer: fakeViewer,

@@ -31,8 +31,20 @@ export type AdminStudySummary = {
   artifactCount: number;
 };
 
+export type AdminReportDetail = {
+  publicId: string;
+  title: string;
+  description: string;
+  content: Record<string, unknown>;
+  generatedAt: string;
+  study: { publicId: string; title: string; brief: string; status: string };
+  owner: { displayName: string; email: string };
+  workspaceName: string;
+  artifacts: Array<{ publicId: string; type: string; title: string; content: unknown; createdAt: string }>;
+};
+
 export function isPlatformAdmin(viewer: Viewer) {
-  return viewer.isPlatformAdmin;
+  return viewer.isPlatformAdmin === true;
 }
 
 export function requirePlatformAdmin(viewer: Viewer) {
@@ -83,7 +95,7 @@ export async function listAdminUsers(viewer: Viewer): Promise<AdminUserSummary[]
   }));
 }
 
-export async function listAdminStudies(viewer: Viewer, limit = 250): Promise<AdminStudySummary[]> {
+export async function listAdminStudies(viewer: Viewer): Promise<AdminStudySummary[]> {
   requirePlatformAdmin(viewer);
   const database = await getDatabase();
   const result = await database.query<{
@@ -105,9 +117,7 @@ export async function listAdminStudies(viewer: Viewer, limit = 250): Promise<Adm
        left join reports report on report.study_id = study.id
        left join study_artifacts artifact on artifact.study_id = study.id
       group by study.id, workspace.id, app_user.id, report.id
-      order by study.updated_at desc
-      limit $1`,
-    [limit],
+      order by study.updated_at desc`,
   );
   return result.rows.map((row) => ({
     publicId: row.public_id,
@@ -130,4 +140,55 @@ export async function listAdminStudies(viewer: Viewer, limit = 250): Promise<Adm
       : null,
     artifactCount: Number(row.artifact_count),
   }));
+}
+
+export async function getAdminReport(viewer: Viewer, publicId: string): Promise<AdminReportDetail | null> {
+  requirePlatformAdmin(viewer);
+  const database = await getDatabase();
+  const result = await database.query<{
+    report_public_id: string; report_title: string; report_description: string;
+    report_content: unknown; report_generated_at: string; study_public_id: string;
+    study_title: string; study_brief: string; study_status: string; workspace_name: string;
+    owner_name: string; owner_email: string; study_id: string;
+  }>(
+    `select report.public_id as report_public_id, report.title as report_title,
+            report.description as report_description, report.content_json as report_content,
+            report.generated_at::text as report_generated_at, study.public_id as study_public_id,
+            study.title as study_title, study.brief as study_brief, study.status as study_status,
+            workspace.name as workspace_name, app_user.display_name as owner_name,
+            app_user.email as owner_email, study.id::text as study_id
+       from reports report
+       join studies study on study.id = report.study_id
+       join workspaces workspace on workspace.id = study.workspace_id
+       join users app_user on app_user.id = study.created_by
+      where report.public_id = $1
+      limit 1`,
+    [publicId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const artifacts = await database.query<{ public_id: string; artifact_type: string; title: string; content: unknown; created_at: string }>(
+    `select public_id, artifact_type, title, content, created_at::text as created_at
+       from study_artifacts
+      where study_id = $1
+      order by created_at asc, id asc`,
+    [row.study_id],
+  );
+  return {
+    publicId: row.report_public_id,
+    title: row.report_title,
+    description: row.report_description,
+    content: jsonObject(row.report_content),
+    generatedAt: row.report_generated_at,
+    study: { publicId: row.study_public_id, title: row.study_title, brief: row.study_brief, status: row.study_status },
+    owner: { displayName: row.owner_name, email: row.owner_email },
+    workspaceName: row.workspace_name,
+    artifacts: artifacts.rows.map((artifact) => ({
+      publicId: artifact.public_id,
+      type: artifact.artifact_type,
+      title: artifact.title,
+      content: artifact.content,
+      createdAt: artifact.created_at,
+    })),
+  };
 }

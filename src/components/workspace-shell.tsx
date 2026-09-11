@@ -73,7 +73,7 @@ type WorkspaceShellProps = {
     displayName: string;
     workspaceName: string;
     tokenBalance: number;
-    isPlatformAdmin: boolean;
+    isPlatformAdmin?: boolean;
   };
 };
 
@@ -169,7 +169,7 @@ export function WorkspaceShell({ children, viewer }: WorkspaceShellProps) {
                 {navigation(section.items)}
               </div>
             ))}
-            {viewer.isPlatformAdmin ? <div className="workspace-nav-group"><div className="workspace-nav-section-label">平台</div><Link className={`workspace-nav-link${pathname === "/admin" ? " active" : ""}`} href="/admin" title={sidebarCollapsed ? "管理员总览" : undefined} onClick={() => setMobileOpen(false)}><ShieldCheck size={19} strokeWidth={1.8} /><span>管理员总览</span></Link></div> : null}
+            {viewer.isPlatformAdmin === true ? <div className="workspace-nav-group"><div className="workspace-nav-section-label">平台</div><Link className={`workspace-nav-link${pathname === "/admin" ? " active" : ""}`} href="/admin" title={sidebarCollapsed ? "管理员总览" : undefined} onClick={() => setMobileOpen(false)}><ShieldCheck size={19} strokeWidth={1.8} /><span>管理员总览</span></Link></div> : null}
           </nav>
         </div>
         <div className="workspace-sidebar-foot">

@@ -40,6 +40,7 @@ type AgentLiveEvent = {
   toolName: string | null;
   output: Record<string, unknown> | null;
   errorCode: string | null;
+  createdAt: string;
 };
 type AgentStreamEvent = {
   id: string;
@@ -144,6 +145,36 @@ export function UniversalAgentWorkspace({
   const visibleStreamDraft = streamDraft?.runPublicId === liveRunPublicId ? streamDraft : null;
   const visibleLiveEvents = liveEvents.filter((event) => event.runPublicId === liveRunPublicId);
   const visibleStreamLength = (visibleStreamDraft?.content.length ?? 0) + (visibleStreamDraft?.error?.length ?? 0);
+  const conversationItems = [
+    ...initialWorkspace.messages.map((message, index) => ({
+      type: "message" as const,
+      at: Date.parse(message.createdAt),
+      order: message.role === "user" ? 0 : 3,
+      sequence: Number.MAX_SAFE_INTEGER,
+      index,
+      message,
+    })),
+    ...visibleLiveEvents.map((event, index) => ({
+      type: "event" as const,
+      at: Date.parse(event.createdAt),
+      // A decision starts a step, followed by its tool execution. The
+      // sequence remains the tie-breaker when database timestamps collide.
+      order: event.kind === "decision" ? 1 : 2,
+      sequence: event.sequence,
+      index,
+      event,
+    })),
+  ].sort((left, right) => {
+    const leftAt = Number.isFinite(left.at) ? left.at : Number.MAX_SAFE_INTEGER;
+    const rightAt = Number.isFinite(right.at) ? right.at : Number.MAX_SAFE_INTEGER;
+    return leftAt - rightAt || left.order - right.order || left.sequence - right.sequence || left.index - right.index;
+  });
+
+  useEffect(() => {
+    if (!notice || notice.kind !== "success") return;
+    const timer = window.setTimeout(() => setNotice(null), 3_500);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   useEffect(() => {
     if (!followingOutputRef.current) return;
@@ -163,6 +194,12 @@ export function UniversalAgentWorkspace({
       try {
         const payload = JSON.parse((event as MessageEvent).data) as AgentLiveEvent;
         setLiveEvents((current) => current.some((item) => item.id === payload.id) ? current : [...current, payload].slice(-40));
+        if (payload.output?.error === "product_execution_not_confirmed") {
+          setNotice({
+            kind: "error",
+            text: "该操作需要执行确认，请勾选“允许本轮执行已选能力”后重新发送请求；仅回复文字确认不会授予权限。",
+          });
+        }
       } catch {
         // Ignore a malformed event; the server snapshot remains authoritative.
       }
@@ -399,28 +436,27 @@ export function UniversalAgentWorkspace({
             followingOutputRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 120;
           }}
         >
-          {initialWorkspace.messages.length ? initialWorkspace.messages.map((message) => (
-            <article className={`universal-message ${message.role}`} key={message.publicId}>
-              <span>{message.role === "user" ? "你" : message.role === "assistant" ? <Bot size={15} /> : <Code2 size={14} />}</span>
-              <div><small>{message.role === "user" ? "YOU" : message.role === "assistant" ? "UNIVERSAL AGENT" : message.role.toUpperCase()}</small><p>{message.content}</p></div>
+          {conversationItems.length ? conversationItems.map((item) => item.type === "message" ? (
+            <article className={`universal-message ${item.message.role}`} key={item.message.publicId}>
+              <span>{item.message.role === "user" ? "你" : item.message.role === "assistant" ? <Bot size={15} /> : <Code2 size={14} />}</span>
+              <div><small>{item.message.role === "user" ? "YOU" : item.message.role === "assistant" ? "UNIVERSAL AGENT" : item.message.role.toUpperCase()}</small><p>{item.message.content}</p></div>
             </article>
-          )) : !liveRunPublicId ? (
-            <div className="agent-conversation-empty"><Bot size={28} /><strong>{selectedThread ? "准备执行" : "创建一个会话"}</strong></div>
-          ) : null}
-          {visibleLiveEvents.map((event) => (
-            <article className={`universal-message tool ${event.status}`} key={`live-${event.id}`}>
+          ) : (
+            <article className={`universal-message tool ${item.event.status}`} key={`live-${item.event.id}`}>
               <span><Code2 size={14} /></span>
               <div>
-                <small>{event.kind.toUpperCase()} · {event.toolName ?? "DECISION"}</small>
-                <p>{event.summary}{event.errorCode ? `（${event.errorCode}）` : ""}</p>
-                {eventSources(event).length ? (
+                <small>{item.event.kind.toUpperCase()} · {item.event.toolName ?? "DECISION"}</small>
+                <p>{item.event.summary}{item.event.errorCode ? `（${item.event.errorCode}）` : ""}</p>
+                {eventSources(item.event).length ? (
                   <div className="agent-source-links">
-                    {eventSources(event).map((source) => <a href={source.url} target="_blank" rel="noreferrer" key={source.url}>{source.title}</a>)}
+                    {eventSources(item.event).map((source) => <a href={source.url} target="_blank" rel="noreferrer" key={source.url}>{source.title}</a>)}
                   </div>
                 ) : null}
               </div>
             </article>
-          ))}
+          )) : !liveRunPublicId ? (
+            <div className="agent-conversation-empty"><Bot size={28} /><strong>{selectedThread ? "准备执行" : "创建一个会话"}</strong></div>
+          ) : null}
           {liveRunPublicId ? (
             <article className="universal-message assistant streaming">
               <span><Bot size={15} /></span>

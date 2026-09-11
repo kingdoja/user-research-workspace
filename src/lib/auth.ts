@@ -10,7 +10,7 @@ export type Viewer = {
   workspacePublicId: string;
   workspaceName: string;
   role: "owner" | "admin" | "member" | "viewer";
-  isPlatformAdmin: boolean;
+  isPlatformAdmin?: boolean;
   tokenBalance: number;
 };
 
