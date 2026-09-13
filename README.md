@@ -210,7 +210,7 @@ GitHub Actions 会在 Universal Agent 相关变更上运行 TypeScript 检查、
 
 更完整的系统边界、恢复依据和架构说明见 [`recovery/ARCHITECTURE_RECOVERY.md`](recovery/ARCHITECTURE_RECOVERY.md)；产品部署与运行细节见 [`services/sandbox-runner/README.md`](services/sandbox-runner/README.md)。
 
-## 诚实的边界
+## 边界
 
 - AI Persona 和模拟访谈用于探索假设，**不能当作真实用户样本、真实比例或因果证据**。
 - 当前实现是研究产品专用 Runtime 加受控的 Agent/Market Insight workflow，不宣称所有业务线都已经抽象成通用编排平台。
