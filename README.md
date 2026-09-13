@@ -170,7 +170,7 @@ GitHub Actions 会在 Universal Agent 相关变更上运行 TypeScript 检查、
 6. [`src/lib/universal-agent.ts`](src/lib/universal-agent.ts)：Agent action protocol、工具调用和 run 生命周期。
 7. [`services/sandbox-runner/`](services/sandbox-runner/)：不可信 Skill 的隔离执行。
 
-更完整的系统讲解见 [`docs/interview-kit/06-项目技术全景.md`](docs/interview-kit/06-项目技术全景.md) 和 [`recovery/ARCHITECTURE_RECOVERY.md`](recovery/ARCHITECTURE_RECOVERY.md)。
+更完整的系统边界、恢复依据和架构说明见 [`recovery/ARCHITECTURE_RECOVERY.md`](recovery/ARCHITECTURE_RECOVERY.md)；产品部署与运行细节见 [`services/sandbox-runner/README.md`](services/sandbox-runner/README.md)。
 
 ## 诚实的边界
 
