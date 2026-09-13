@@ -32,9 +32,26 @@ Worker 执行检索、Persona、访谈、验证和报告任务
 SSE 实时进度 + 数据库回放
 ```
 
-![研究工作区](recovery/reference/screenshots/workspace-rebuild-desktop.png)
+## 产品界面
 
-![研究计划与执行进度](recovery/reference/screenshots/study-rebuild-desktop.png)
+下面的截图展示了从研究创建、证据报告到 Persona、Skill 和 Universal Agent 的核心工作区：
+
+<p align="center">
+  <img src="docs/assets/readme/01-research-workspace.png" alt="研究工作区" width="49%">
+  <img src="docs/assets/readme/02-evidence-report.png" alt="带证据链的研究报告" width="49%">
+</p>
+<p align="center"><sub>研究入口与计划确认&nbsp;&nbsp;·&nbsp;&nbsp;带来源和证据解释的研究报告</sub></p>
+
+<p align="center">
+  <img src="docs/assets/readme/03-persona-library.png" alt="Persona Library" width="49%">
+  <img src="docs/assets/readme/04-skills-governance.png" alt="Skill Gateway" width="49%">
+</p>
+<p align="center"><sub>可复用 Persona 资产&nbsp;&nbsp;·&nbsp;&nbsp;内建 Skill 与执行权限治理</sub></p>
+
+<p align="center">
+  <img src="docs/assets/readme/05-universal-agent.png" alt="Universal Agent 工作区" width="75%">
+</p>
+<p align="center"><sub>通过结构化工具调用操作工作区文件和研究能力</sub></p>
 
 ## 已实现能力
 
