@@ -37,6 +37,9 @@ yarn-error.log*
 .env*
 !.env.example
 
+# private interview preparation notes
+/docs/interview-kit/
+
 # vercel
 .vercel
 
