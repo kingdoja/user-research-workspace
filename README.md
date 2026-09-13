@@ -1,12 +1,12 @@
-# GEA · AI 用户研究与智能体平台
+# AI 用户研究与智能体平台
 
 > 将一个开放式研究问题，转化为可确认、可恢复、可审计的研究流程。
 
-GEA 是一个面向用户研究的 AI Agent 平台：用户提交研究目标后，系统会先生成研究计划，待确认后再执行公开资料检索、Persona 构建、模拟访谈、证据整理和研究报告生成。每一步都有持久化状态、来源和事件记录，长时间任务可以排队、并行、重试、暂停和恢复。
+这是一个面向用户研究的 AI Agent 平台：用户提交研究目标后，系统会先生成研究计划，待确认后再执行公开资料检索、Persona 构建、模拟访谈、证据整理和研究报告生成。每一步都有持久化状态、来源和事件记录，长时间任务可以排队、并行、重试、暂停和恢复。
 
 从工程角度看，这个项目重点解决的不是“如何调用一次大模型”，而是如何把不稳定的模型调用组织成一套可运行、可解释、可回放的产品系统。
 
-> **English summary**: GEA is an AI user-research and agent platform built around durable workflows, evidence-grounded reports, governed tool calling, and isolated Skill execution.
+> **English summary**: This is an AI user-research and agent platform built around durable workflows, evidence-grounded reports, governed tool calling, and isolated Skill execution.
 
 ## 项目背景
 
