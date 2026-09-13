@@ -1,36 +1,27 @@
 # AI 用户研究与智能体平台
 
-> 将一个开放式研究问题，转化为可确认、可恢复、可审计的研究流程。
+> 从一个研究问题开始，得到一份有来源、可解释、可继续追问的研究结果。
 
-这是一个面向用户研究的 AI Agent 平台：用户提交研究目标后，系统会先生成研究计划，待确认后再执行公开资料检索、Persona 构建、模拟访谈、证据整理和研究报告生成。每一步都有持久化状态、来源和事件记录，长时间任务可以排队、并行、重试、暂停和恢复。
+这是一个面向产品经理、研究人员和 AI 应用开发者的用户研究工作台。输入一个研究目标，系统会协助完成研究计划、公开资料检索、Persona/访谈分析和报告生成；用户可以在关键节点确认范围、查看进度、追溯证据，并在任务中断后继续执行。
 
-从工程角度看，这个项目重点解决的不是“如何调用一次大模型”，而是如何把不稳定的模型调用组织成一套可运行、可解释、可回放的产品系统。
+它不只是“调用一次大模型”：研究过程被拆成可观察、可恢复的任务，模型输出经过结构化校验，报告结论尽量关联到真实来源。
 
-> **English summary**: This is an AI user-research and agent platform built around durable workflows, evidence-grounded reports, governed tool calling, and isolated Skill execution.
+> **English summary**: An AI user-research workspace that turns an open-ended question into a reviewable plan, evidence-grounded report, and traceable agent workflow.
 
-## 项目背景
+## 你可以用它做什么
 
-本仓库是基于幸存的公开网站、页面素材和产品线索进行的 clean-room reconstruction。原项目的私有后端、生产数据和 Provider 配置不在仓库中；因此这里展示的是一套可运行的工程恢复与架构实现，而不是对原私有系统的逐行还原。
+| 场景 | 从什么开始 | 最终得到 |
+| --- | --- | --- |
+| 消费者洞察 | 一个用户行为或购买决策问题 | 行业资料、用户场景、关键发现和后续问题 |
+| 产品研发 | 一个待验证的产品假设 | 研究计划、Persona/Panel、访谈分析和行动建议 |
+| 竞品与市场分析 | 一个品类、平台或竞品方向 | 带来源的市场观察、差异点和限制说明 |
+| Agent 工作台 | 一段自然语言任务 | 受权限和预算约束的工具调用、文件和运行记录 |
 
-## 产品流程
+## 3 步了解产品
 
-```text
-研究问题 / Brief
-      ↓
-澄清目标、受众、范围和证据需求
-      ↓
-生成并确认 Intent + Plan（不可变版本）
-      ↓
-创建 Run，物化依赖任务图并写入数据库队列
-      ↓
-Worker 执行检索、Persona、访谈、验证和报告任务
-      ↓
-保存来源快照、Context、Evidence、Artifact 和事件
-      ↓
-报告初稿 → 证据/质量评审 → 通过定稿或基于现有证据定向修订
-      ↓
-SSE 实时进度 + 数据库回放
-```
+1. **提交 Brief**：描述研究问题、目标受众、范围和期望产出。
+2. **确认计划**：系统先生成可审阅的 Intent + Plan，用户确认后才开始消耗模型和检索资源。
+3. **查看结果**：研究任务异步执行，页面展示实时进度；报告、来源、证据和执行事件都可以回看。
 
 ## 产品界面
 
@@ -53,7 +44,29 @@ SSE 实时进度 + 数据库回放
 </p>
 <p align="center"><sub>通过结构化工具调用操作工作区文件和研究能力</sub></p>
 
+## 产品流程
+
+```text
+研究问题 / Brief
+      ↓
+澄清目标、受众、范围和证据需求
+      ↓
+生成并确认 Intent + Plan（不可变版本）
+      ↓
+创建 Run，物化依赖任务图并写入数据库队列
+      ↓
+Worker 执行检索、Persona、访谈、验证和报告任务
+      ↓
+保存来源快照、Context、Evidence、Artifact 和事件
+      ↓
+报告初稿 → 证据/质量评审 → 通过定稿或基于现有证据定向修订
+      ↓
+SSE 实时进度 + 数据库回放
+```
+
 ## 已实现能力
+
+如果你是用户，可以把它理解成“研究问题 → 研究过程 → 可追溯结论”的工作台；如果你是面试官，下面这些能力对应的是一套完整的 AI 应用后端，而不是单次 Prompt Demo。
 
 | 模块 | 能力 | 关键实现 |
 | --- | --- | --- |
@@ -66,7 +79,9 @@ SSE 实时进度 + 数据库回放
 | Sandbox Runner | JavaScript/Python 一次性容器执行、非 root、只读 rootfs、资源限制、默认禁网、metrics 和优雅退出 | `services/sandbox-runner/` |
 | 平台能力 | workspace 隔离、API key、无状态 MCP、跨 workspace 发布/委托、Provider 路由 | `src/lib/platform-control.ts`、`src/app/api/v1/` |
 
-## 值得关注的工程设计
+## 为什么这个项目值得关注
+
+AI 产品真正落地时，难点通常在状态管理、失败恢复、结果可信度和权限边界。这里把这些问题都放进了同一条可回放的研究链路：
 
 | 问题 | 设计 | 结果 |
 | --- | --- | --- |
@@ -106,6 +121,10 @@ Browser / API clients / MCP
 ```
 
 运行时的核心原则是：**数据库保存事实，模型提出建议，Harness 决定是否执行**。研究计划、Workflow、Skill、Context retrieval 和 Provider 元数据都会被版本化，便于回放和比较实验结果。
+
+## 项目背景与实现边界
+
+本仓库是基于幸存的公开网站、页面素材和产品线索进行的 clean-room reconstruction。原项目的私有后端、生产数据和 Provider 配置不在仓库中；这里展示的是一套可运行的工程恢复与架构实现，而不是对原私有系统的逐行还原。
 
 ## 技术栈
 
