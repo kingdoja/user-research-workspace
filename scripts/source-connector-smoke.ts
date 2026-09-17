@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { closeDatabase, getDatabase } from "../src/lib/db";
 import { buildReportEvidenceCatalog } from "../src/lib/report-evidence";
 import {
+  assertPublicSourceUrl,
   buildSourceConnectorAudit,
   collectSourceCandidate,
   markSourceCandidateUnavailable,
@@ -65,6 +66,15 @@ function source(name: string, path = "/public"): SourceCandidate {
 async function main() {
   const database = await getDatabase();
   try {
+    for (const unsafeUrl of [
+      "http://127.0.0.1/private",
+      "http://[::ffff:7f00:1]/private",
+      "http://[::7f00:1]/private",
+      "http://[64:ff9b::7f00:1]/private",
+      "http://[2002:7f00:1::]/private",
+    ]) {
+      await assert.rejects(() => assertPublicSourceUrl(unsafeUrl));
+    }
     const candidates = [
       source("allow"),
       source("duplicate"),
@@ -195,6 +205,7 @@ async function main() {
     assert.deepEqual(counts.rows[0], { runs: 1, candidates: 8, snapshots: 4, observations: 2, removed: 1, unavailable: 1, externalized: 2 });
     console.log(JSON.stringify({
       ...counts.rows[0], duplicateHash: true, robotsDenied: true, privateRedirectRejected: true,
+      specialAddressTargetsRejected: true,
       immutableSnapshot: true, evidenceSnapshotLinked: true, artifactAuditRedacted: true,
       contentAddressedObjectStorage: true,
     }, null, 2));

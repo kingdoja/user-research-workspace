@@ -157,7 +157,7 @@ pnpm dev
 
 在 `.env.local` 中配置至少以下内容：
 
-- `DATABASE_URL` 和 `DATABASE_SSL_MODE`
+- `DATABASE_URL` 和 `DATABASE_SSL_MODE`（生产建议 `verify-full`，私有 CA 可通过 `DATABASE_SSL_CA` 提供）
 - `NEXT_PUBLIC_SUPABASE_URL`、`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 - 一个可用的模型 Provider（例如 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY`）
 
@@ -170,6 +170,8 @@ pnpm dev
 ```bash
 pnpm research:worker
 ```
+
+生产环境的 API 限流默认使用 PostgreSQL 共享计数器（`RATE_LIMIT_BACKEND=database`），并通过 Worker 心跳参与 readiness 判断。部署探针应使用 `/api/health` 作为 liveness、`/api/health/ready` 作为 readiness；后者会检查数据库、迁移、模型 Provider 和生产 Worker。
 
 本地开发时，研究确认流程会尝试唤醒一个任务；Universal Agent 和生产环境的长任务仍建议单独运行 Worker。
 
@@ -194,7 +196,7 @@ pnpm build
 
 仓库还提供针对研究报告、Provider 路由、任务恢复、Context/RAG、Evidence Graph、Realtime Interview、Universal Agent、Skill governance 和 Sandbox Runner 的 smoke tests。完整命令见 [`package.json`](package.json)；依赖数据库的隔离测试使用 `LOCAL_SMOKE_DATABASE_URL` 指向本机 PostgreSQL，避免写入远程生产库。
 
-GitHub Actions 会在 Universal Agent 相关变更上运行 TypeScript 检查、lint、隔离 smoke test 和 Next.js build，配置见 [`.github/workflows/universal-agent.yml`](.github/workflows/universal-agent.yml)。
+GitHub Actions 会在每次 push 和 pull request 上运行依赖审计、TypeScript 检查、lint、迁移链、关键隔离 smoke tests 和 Next.js build，配置见 [`.github/workflows/universal-agent.yml`](.github/workflows/universal-agent.yml)。
 
 ## 建议阅读顺序
 

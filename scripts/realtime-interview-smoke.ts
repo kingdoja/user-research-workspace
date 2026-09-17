@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { closeDatabase, getDatabase } from "../src/lib/db";
 import { createPublicId } from "../src/lib/identifiers";
 import {
@@ -75,8 +76,49 @@ async function main() {
     });
     if (typeof started === "string") throw new Error(`SMOKE_START_${started}`);
 
-    let state = started.state;
-    let calls = 0;
+    const recoveryKey = `smoke-recovery-${Date.now()}`;
+    await database.transaction(async (transaction) => {
+      const target = await transaction.query<{ session_id: string; question_id: string }>(
+        `select session.id::text as session_id, question.id::text as question_id
+         from interview_sessions session
+         join interview_questions question on question.project_id = session.project_id
+           and question.position = session.current_question_position
+         where session.public_id = $1 limit 1`,
+        [started.state.sessionPublicId],
+      );
+      await transaction.query(
+        `insert into interview_messages (
+           public_id, session_id, turn_index, role, content, question_id, message_type, idempotency_key
+         ) values ($1, $2, 1, 'participant', $3, $4, 'answer', $5)`,
+        [createPublicId("inm"), target.rows[0].session_id, scriptedAnswers[0], target.rows[0].question_id, recoveryKey],
+      );
+      await transaction.query(
+        "update interview_sessions set status = 'responding', last_activity_at = now() where id = $1",
+        [target.rows[0].session_id],
+      );
+    });
+    const stillLeased = await submitRealtimeInterviewTurn(
+      invitationToken, started.state.sessionPublicId, started.resumeToken,
+      { content: scriptedAnswers[0], idempotencyKey: recoveryKey },
+    );
+    assert.equal(stillLeased, "pending_turn");
+    await database.query(
+      "update interview_sessions set last_activity_at = now() - interval '130 seconds' where public_id = $1",
+      [started.state.sessionPublicId],
+    );
+    const recoveredTurn = await submitRealtimeInterviewTurn(
+      invitationToken, started.state.sessionPublicId, started.resumeToken,
+      { content: scriptedAnswers[0], idempotencyKey: recoveryKey },
+    );
+    if (typeof recoveredTurn === "string") throw new Error(`SMOKE_RECOVERY_${recoveredTurn}`);
+    if ("provider_error" in recoveredTurn) throw new Error(`SMOKE_PROVIDER_${recoveredTurn.provider_error}`);
+
+    let state;
+    if ("status" in recoveredTurn) state = recoveredTurn;
+    else if ("terminal" in recoveredTurn && recoveredTurn.terminal) state = recoveredTurn.terminal;
+    else if ("recovered" in recoveredTurn && recoveredTurn.recovered) state = recoveredTurn.recovered;
+    else throw new Error("SMOKE_RECOVERY_STATE_MISSING");
+    let calls = 1;
     while (state.status !== "completed" && calls < scriptedAnswers.length) {
       const result = await submitRealtimeInterviewTurn(
         invitationToken,
@@ -120,6 +162,7 @@ async function main() {
     console.log(JSON.stringify({
       completed: true,
       providerCalls: calls,
+      crashedTurnRecovered: true,
       providerTurns,
       messageCount: replay.messages.length,
       roles: replay.messages.map((message) => message.role),

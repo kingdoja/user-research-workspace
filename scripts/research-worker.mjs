@@ -42,6 +42,33 @@ const [{ processStudyJobQueue }, { processInterviewJobQueue }, { processAgentRun
 ]);
 const maxJobs = once ? 1 : 5;
 
+let workerHeartbeat;
+if (!versionOnly) {
+  const { getDatabase } = await import("../src/lib/db.ts");
+  const database = await getDatabase();
+  const writeHeartbeat = () => database.query(
+    `with stale as (
+       delete from runtime_worker_heartbeats
+       where heartbeat_at < now() - interval '7 days'
+       returning worker_id
+     )
+     insert into runtime_worker_heartbeats (worker_id, worker_kind, status, metadata, started_at, heartbeat_at)
+     values ($1, 'research-worker', 'running', $2::jsonb, now(), now())
+     on conflict (worker_id) do update set status = 'running', metadata = excluded.metadata,
+       heartbeat_at = now()`,
+    [workerId, JSON.stringify({ agentOnly })],
+  );
+  await writeHeartbeat();
+  workerHeartbeat = setInterval(() => {
+    writeHeartbeat().catch((error) => console.error(JSON.stringify({
+      event: "research_worker_heartbeat_failed",
+      workerId,
+      message: error instanceof Error ? error.message : "WORKER_HEARTBEAT_FAILED",
+    })));
+  }, 15_000);
+  workerHeartbeat.unref();
+}
+
 console.log(JSON.stringify({
   event: "research_worker_started",
   workerId,
@@ -84,5 +111,6 @@ if (!versionOnly) {
 
 if (once && !versionOnly) {
   const { closeDatabase } = await import("../src/lib/db.ts");
+  if (workerHeartbeat) clearInterval(workerHeartbeat);
   await closeDatabase();
 }

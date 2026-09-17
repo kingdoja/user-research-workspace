@@ -11,7 +11,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tok
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ token: string }> }) {
-  const rateLimit = checkRateLimit(request, "public-interview-submit", { limit: 30, windowMs: 15 * 60_000 });
+  const rateLimit = await checkRateLimit(request, "public-interview-submit", { limit: 30, windowMs: 15 * 60_000 });
   if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfterSeconds);
   if (!isSameOriginRequest(request)) return NextResponse.json({ error: "请求来源无效" }, { status: 403 });
   const parsed = submitPublicInterviewSchema.safeParse(await request.json().catch(() => null));

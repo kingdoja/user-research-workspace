@@ -8,7 +8,12 @@ import type { PublicInterviewInvitation } from "@/lib/interviews";
 import type { PublicRealtimeInterviewState } from "@/lib/realtime-interviews";
 
 type InterviewMode = "realtime" | "form";
-type StoredRealtimeSession = { sessionPublicId: string; resumeToken: string };
+type PendingRealtimeTurn = { idempotencyKey: string; content: string };
+type StoredRealtimeSession = {
+  sessionPublicId: string;
+  resumeToken: string;
+  pendingTurn?: PendingRealtimeTurn;
+};
 
 function storageKey(token: string) {
   return `atypica:realtime-interview:${token}`;
@@ -50,6 +55,10 @@ export function PublicInterviewForm({ invitation }: { invitation: PublicIntervie
       const result = await response.json() as { state: PublicRealtimeInterviewState };
       setCredentials(stored);
       setRealtime(result.state);
+      if (stored.pendingTurn) {
+        pendingTurnKey.current = stored.pendingTurn.idempotencyKey;
+        setDraft(stored.pendingTurn.content);
+      }
       setName(result.state.participantName);
       setMode("realtime");
       setStarted(true);
@@ -117,16 +126,28 @@ export function PublicInterviewForm({ invitation }: { invitation: PublicIntervie
     startTransition(async () => {
       const idempotencyKey = pendingTurnKey.current ?? createIdempotencyKey();
       pendingTurnKey.current = idempotencyKey;
-      const response = await fetch(`/api/interview-invitations/${invitation.token}/realtime/${realtime.sessionPublicId}/turn`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-interview-resume-token": credentials.resumeToken },
-        body: JSON.stringify({ content, idempotencyKey }),
-      });
-      const result = await response.json() as { error?: string; state?: PublicRealtimeInterviewState };
-      if (!response.ok || !result.state) { setDraft(content); setError(result.error ?? "Agent 暂时无法继续，请重试"); return; }
-      pendingTurnKey.current = null;
-      setRealtime(result.state);
-      if (result.state.status === "completed") setCompleted(true);
+      const pendingTurn = { idempotencyKey, content };
+      const stored = { ...credentials, pendingTurn };
+      setCredentials(stored);
+      window.localStorage.setItem(storageKey(invitation.token), JSON.stringify(stored));
+      try {
+        const response = await fetch(`/api/interview-invitations/${invitation.token}/realtime/${realtime.sessionPublicId}/turn`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-interview-resume-token": credentials.resumeToken },
+          body: JSON.stringify({ content, idempotencyKey }),
+        });
+        const result = await response.json() as { error?: string; state?: PublicRealtimeInterviewState };
+        if (!response.ok || !result.state) { setDraft(content); setError(result.error ?? "Agent 暂时无法继续，请重试"); return; }
+        pendingTurnKey.current = null;
+        const completedCredentials = { sessionPublicId: credentials.sessionPublicId, resumeToken: credentials.resumeToken };
+        setCredentials(completedCredentials);
+        window.localStorage.setItem(storageKey(invitation.token), JSON.stringify(completedCredentials));
+        setRealtime(result.state);
+        if (result.state.status === "completed") setCompleted(true);
+      } catch {
+        setDraft(content);
+        setError("网络连接中断，回答已保留，请重试");
+      }
     });
   }
 

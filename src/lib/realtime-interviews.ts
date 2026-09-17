@@ -18,6 +18,8 @@ export const REALTIME_INTERVIEW_SKILL = {
   workflowVersion: "realtime-interview-agent-v1",
 } as const;
 
+const REALTIME_TURN_LEASE_MS = 125_000;
+
 type RealtimeStatus = "waiting_participant" | "responding" | "completed" | "cancelled" | "failed";
 
 export type PublicRealtimeInterviewState = {
@@ -392,6 +394,9 @@ export async function submitRealtimeInterviewTurn(invitationToken: string, sessi
         [session.id, existing.rows[0].turn_index],
       );
       if (existingReply.rows[0]) return { recovered: await buildPublicState(transaction, session) };
+      if (session.status === "responding" && idleMilliseconds < REALTIME_TURN_LEASE_MS) {
+        return "pending_turn" as const;
+      }
     }
     if (!existing.rows[0]) {
       const lastMessage = await transaction.query<{ role: string; idempotency_key: string | null }>(
@@ -496,12 +501,17 @@ export async function submitRealtimeInterviewTurn(invitationToken: string, sessi
     });
   } catch (error) {
     const described = describeOpenAIError(error);
+    console.error("Realtime interview provider turn failed", {
+      sessionPublicId: claimed.public_id,
+      code: described.code,
+      message: described.message,
+    });
     await database.query(
       `update interview_sessions set status = 'waiting_participant', error_message = $2,
               updated_at = now() where id = $1 and status = 'responding'`,
-      [claimed.id, described.message],
+      [claimed.id, "Agent 暂时无法继续，请重试"],
     );
-    return { provider_error: described.message } as const;
+    return { provider_error: "REALTIME_PROVIDER_FAILED" } as const;
   } finally {
     clearTimeout(timeout);
   }
@@ -523,6 +533,9 @@ export async function submitRealtimeInterviewTurn(invitationToken: string, sessi
   const saved = await database.transaction(async (transaction) => {
     const session = await getRealtimeSession(transaction, invitationToken, sessionPublicId, resumeToken, true);
     if (!session) return "not_found" as const;
+    if (session.status === "completed" || session.status === "cancelled" || session.status === "failed") {
+      return { terminal: await buildPublicState(transaction, session) };
+    }
     const participant = await transaction.query<{ turn_index: number }>(
       `select turn_index from interview_messages
        where session_id = $1 and idempotency_key = $2 and role = 'participant' limit 1`,

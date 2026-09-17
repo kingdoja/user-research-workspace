@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { BlockList, isIP, type LookupFunction } from "node:net";
+import { Readable } from "node:stream";
 import * as cheerio from "cheerio";
 import type { Queryable } from "@/lib/db";
 import { createPublicId } from "@/lib/identifiers";
@@ -120,7 +123,7 @@ export type SourceConnectorAuditSummary = Omit<SourceConnectorAudit, "candidates
   }>;
 };
 
-export type LookupHost = (hostname: string) => Promise<Array<{ address: string }>>;
+export type LookupHost = (hostname: string) => Promise<Array<{ address: string; family?: number }>>;
 type ConnectorDependencies = {
   fetchImpl?: typeof fetch;
   lookupHost?: LookupHost;
@@ -137,33 +140,22 @@ class SourceCollectionError extends Error {
   }
 }
 
-function isPrivateAddress(address: string) {
-  const normalized = address.toLowerCase();
-  const ipv4Parts = normalized.split(".").map(Number);
-  if (ipv4Parts.length === 4 && ipv4Parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) {
-    const [first, second, third] = ipv4Parts;
-    return first === 0 || first === 10 || first === 127 || first >= 224
-      || (first === 100 && second >= 64 && second <= 127)
-      || (first === 169 && second === 254)
-      || (first === 172 && second >= 16 && second <= 31)
-      || (first === 192 && second === 168)
-      || (first === 192 && second === 0 && third <= 2)
-      || (first === 198 && (second === 18 || second === 19 || second === 51))
-      || (first === 203 && second === 0 && third === 113);
-  }
+const nonPublicAddresses = new BlockList();
+for (const [network, prefix] of [
+  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8],
+  ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.0.2.0", 24],
+  ["192.168.0.0", 16], ["198.18.0.0", 15], ["198.51.100.0", 24], ["203.0.113.0", 24],
+  ["224.0.0.0", 4], ["240.0.0.0", 4],
+] as const) nonPublicAddresses.addSubnet(network, prefix, "ipv4");
+for (const [network, prefix] of [
+  ["::", 96], ["64:ff9b::", 96], ["64:ff9b:1::", 48], ["100::", 64],
+  ["2001::", 23], ["2001:db8::", 32], ["2002::", 16], ["fc00::", 7],
+  ["fe80::", 10], ["fec0::", 10], ["ff00::", 8],
+] as const) nonPublicAddresses.addSubnet(network, prefix, "ipv6");
 
-  const mappedDottedIpv4 = normalized.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/u)?.[1];
-  if (mappedDottedIpv4) return isPrivateAddress(mappedDottedIpv4);
-  const mappedHexIpv4 = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/u);
-  if (mappedHexIpv4) {
-    const high = Number.parseInt(mappedHexIpv4[1], 16);
-    const low = Number.parseInt(mappedHexIpv4[2], 16);
-    return isPrivateAddress(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
-  }
-  if (normalized === "::" || normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd")
-    || normalized.startsWith("fe8") || normalized.startsWith("fe9") || normalized.startsWith("fea") || normalized.startsWith("feb")
-    || normalized.startsWith("ff")) return true;
-  return false;
+function isPrivateAddress(address: string) {
+  const family = isIP(address);
+  return family === 0 || nonPublicAddresses.check(address, family === 4 ? "ipv4" : "ipv6");
 }
 
 export function canonicalizeSourceUrl(value: string) {
@@ -183,16 +175,17 @@ export function canonicalizeSourceUrl(value: string) {
 
 const defaultLookupHost: LookupHost = async (hostname) => lookup(hostname, { all: true });
 
-export async function assertPublicSourceUrl(value: string, lookupHost: LookupHost = defaultLookupHost) {
+async function resolvePublicSourceUrl(value: string, lookupHost: LookupHost) {
   const url = new URL(value);
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new SourceCollectionError("SOURCE_UNSAFE_URL");
   if (url.username || url.password) throw new SourceCollectionError("SOURCE_URL_CREDENTIALS");
   const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/gu, "");
   if (hostname === "localhost" || hostname.endsWith(".local")) throw new SourceCollectionError("SOURCE_UNSAFE_URL");
+  let addresses: Array<{ address: string; family?: number }>;
   if (isIP(hostname)) {
     if (isPrivateAddress(hostname)) throw new SourceCollectionError("SOURCE_UNSAFE_URL");
+    addresses = [{ address: hostname, family: isIP(hostname) }];
   } else {
-    let addresses: Array<{ address: string }>;
     try {
       addresses = await lookupHost(hostname);
     } catch {
@@ -202,12 +195,58 @@ export async function assertPublicSourceUrl(value: string, lookupHost: LookupHos
       throw new SourceCollectionError("SOURCE_UNSAFE_URL");
     }
   }
-  return url;
+  return { url, addresses };
+}
+
+export async function assertPublicSourceUrl(value: string, lookupHost: LookupHost = defaultLookupHost) {
+  return (await resolvePublicSourceUrl(value, lookupHost)).url;
 }
 
 function requestSignal(signal: AbortSignal | undefined, timeoutMs: number) {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+function pinnedLookup(addresses: Array<{ address: string; family?: number }>): LookupFunction {
+  return (_hostname, options, callback) => {
+    const resolved = addresses.map((item) => ({
+      address: item.address,
+      family: item.family || isIP(item.address),
+    }));
+    if (options.all) callback(null, resolved);
+    else callback(null, resolved[0].address, resolved[0].family);
+  };
+}
+
+function fetchPinnedPublicUrl(
+  url: URL,
+  addresses: Array<{ address: string; family?: number }>,
+  init: { headers: HeadersInit; signal: AbortSignal },
+) {
+  return new Promise<Response>((resolve, reject) => {
+    const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(url, {
+      method: "GET",
+      headers: Object.fromEntries(new Headers(init.headers)),
+      lookup: pinnedLookup(addresses),
+      signal: init.signal,
+    }, (incoming) => {
+      const headers = new Headers();
+      for (let index = 0; index < incoming.rawHeaders.length; index += 2) {
+        headers.append(incoming.rawHeaders[index], incoming.rawHeaders[index + 1]);
+      }
+      const status = incoming.statusCode ?? 500;
+      const body = [101, 204, 205, 304].includes(status)
+        ? null
+        : Readable.toWeb(incoming) as ReadableStream<Uint8Array>;
+      resolve(new Response(body, {
+        status,
+        statusText: incoming.statusMessage,
+        headers,
+      }));
+    });
+    request.once("error", reject);
+    request.end();
+  });
 }
 
 async function fetchWithControlledRedirects(
@@ -216,26 +255,27 @@ async function fetchWithControlledRedirects(
 ) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const lookupHost = options.lookupHost ?? defaultLookupHost;
-  let url = await assertPublicSourceUrl(value, lookupHost);
+  let resolved = await resolvePublicSourceUrl(value, lookupHost);
 
   for (let redirectCount = 0; redirectCount < 4; redirectCount += 1) {
-    const response = await fetchImpl(url, {
-      redirect: "manual",
-      credentials: "omit",
-      signal: requestSignal(options.signal, options.timeoutMs),
-      headers: {
+    const signal = requestSignal(options.signal, options.timeoutMs);
+    const headers = {
         "user-agent": "atypica-research/1.0 (+public-source-audit)",
         accept: options.accept,
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.7",
-      },
-    });
+        "accept-encoding": "identity",
+    };
+    const response = options.fetchImpl
+      ? await fetchImpl(resolved.url, { redirect: "manual", credentials: "omit", signal, headers })
+      : await fetchPinnedPublicUrl(resolved.url, resolved.addresses, { signal, headers });
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
       if (!location) throw new SourceCollectionError("SOURCE_REDIRECT_MISSING", { httpStatus: response.status });
-      url = await assertPublicSourceUrl(new URL(location, url).toString(), lookupHost);
+      await response.body?.cancel().catch(() => undefined);
+      resolved = await resolvePublicSourceUrl(new URL(location, resolved.url).toString(), lookupHost);
       continue;
     }
-    return { response, url };
+    return { response, url: resolved.url };
   }
   throw new SourceCollectionError("SOURCE_TOO_MANY_REDIRECTS");
 }

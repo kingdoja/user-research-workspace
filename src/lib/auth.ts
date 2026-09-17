@@ -1,5 +1,10 @@
 import { getDatabase } from "@/lib/db";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { cookies } from "next/headers";
+
+export const ACTIVE_WORKSPACE_COOKIE = "cognara-active-workspace";
+
+type WorkspaceRole = "owner" | "admin" | "member" | "viewer";
 
 export type Viewer = {
   userId: string;
@@ -9,9 +14,14 @@ export type Viewer = {
   workspaceId: string;
   workspacePublicId: string;
   workspaceName: string;
-  role: "owner" | "admin" | "member" | "viewer";
+  role: WorkspaceRole;
   isPlatformAdmin?: boolean;
   tokenBalance: number;
+  availableWorkspaces?: Array<{
+    publicId: string;
+    name: string;
+    role: WorkspaceRole;
+  }>;
 };
 
 export type AccountCreationErrorCode =
@@ -84,6 +94,7 @@ export async function getViewer(): Promise<Viewer | null> {
   }
 
   const database = await getDatabase();
+  const activeWorkspacePublicId = (await cookies()).get(ACTIVE_WORKSPACE_COOKIE)?.value ?? null;
   const result = await database.query<{
     user_id: string;
     user_public_id: string;
@@ -111,11 +122,11 @@ export async function getViewer(): Promise<Viewer | null> {
      join workspace_members on workspace_members.user_id = users.id
      join workspaces on workspaces.id = workspace_members.workspace_id
      where users.auth_user_id = $1
-     order by workspace_members.created_at asc
-     limit 1`,
+     order by workspace_members.created_at asc`,
     [authUserId],
   );
-  const row = result.rows[0];
+  const row = result.rows.find((workspace) => workspace.workspace_public_id === activeWorkspacePublicId)
+    ?? result.rows[0];
 
   if (!row) {
     return null;
@@ -132,5 +143,10 @@ export async function getViewer(): Promise<Viewer | null> {
     role: row.role,
     isPlatformAdmin: row.is_platform_admin,
     tokenBalance: Number(row.token_balance),
+    availableWorkspaces: result.rows.map((workspace) => ({
+      publicId: workspace.workspace_public_id,
+      name: workspace.workspace_name,
+      role: workspace.role,
+    })),
   };
 }

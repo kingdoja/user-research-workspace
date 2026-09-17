@@ -16,7 +16,7 @@ export async function POST(request: Request, context: RouteContext<"/api/studies
   if (!viewer) {
     return NextResponse.json({ error: "请先登录" }, { status: 401 });
   }
-  const rateLimit = checkRateLimit(request, "study-run", { limit: 10, windowMs: 15 * 60_000 }, `${viewer.workspaceId}:${viewer.userId}`);
+  const rateLimit = await checkRateLimit(request, "study-run", { limit: 10, windowMs: 15 * 60_000 }, `${viewer.workspaceId}:${viewer.userId}`);
   if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfterSeconds);
 
   const { publicId } = await context.params;

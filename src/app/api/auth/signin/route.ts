@@ -10,7 +10,7 @@ const signinSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const rateLimit = checkRateLimit(request, "auth-signin", { limit: 10, windowMs: 15 * 60_000 });
+  const rateLimit = await checkRateLimit(request, "auth-signin", { limit: 10, windowMs: 15 * 60_000 });
   if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfterSeconds);
   if (!isSameOriginRequest(request)) {
     return NextResponse.json({ error: "请求来源无效" }, { status: 403 });

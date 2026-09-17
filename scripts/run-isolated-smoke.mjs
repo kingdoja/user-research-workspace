@@ -14,6 +14,7 @@ const allowedSmokes = new Map([
   ["social-connector", { command: "pnpm", args: ["smoke:social-connector"], confirmation: "SOCIAL_CONNECTOR_SMOKE_CONFIRM" }],
   ["task-recovery", { command: "pnpm", args: ["smoke:task-recovery"], confirmation: "TASK_RECOVERY_SMOKE_CONFIRM" }],
   ["interview-metrics", { command: "pnpm", args: ["smoke:interview-metrics"], confirmation: "INTERVIEW_METRICS_SMOKE_CONFIRM" }],
+  ["realtime-interview", { command: "pnpm", args: ["smoke:realtime-interview"], confirmation: "REALTIME_INTERVIEW_SMOKE_CONFIRM" }],
   ["context-hybrid", { command: "pnpm", args: ["smoke:context-hybrid"], confirmation: "CONTEXT_HYBRID_SMOKE_CONFIRM" }],
   ["context-asset-flywheel", { command: "pnpm", args: ["smoke:context-asset-flywheel"], confirmation: "CONTEXT_ASSET_FLYWHEEL_SMOKE_CONFIRM" }],
   ["context-memory-policy", { command: "pnpm", args: ["smoke:context-memory-policy"], confirmation: "CONTEXT_MEMORY_POLICY_SMOKE_CONFIRM" }],

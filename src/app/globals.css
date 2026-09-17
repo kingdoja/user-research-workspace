@@ -276,6 +276,7 @@ button:disabled { cursor: not-allowed; opacity: .55; transform: none !important;
 .workspace-brand { height: 68px; display: flex; align-items: center; padding: 0 28px; border-right: 1px solid #313235; font-size: 21px; font-weight: 700; color: #fff; transition: padding .2s ease, font-size .2s ease; }
 .workspace-switcher { min-width: 0; padding: 0 32px; color: #dededc; font-size: 14px; }
 .workspace-switcher span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-switcher select { max-width: 260px; border: 0; background: transparent; color: inherit; font: inherit; }
 .workspace-account { display: flex; align-items: center; gap: 12px; padding: 0 24px; }
 .token-balance { min-height: 38px; display: inline-flex; align-items: center; gap: 8px; color: #e8e8e6; font-size: 13px; }
 .token-balance svg { color: var(--accent); }

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getViewer } from "@/lib/auth";
-import { isSameOriginRequest } from "@/lib/request-security";
+import { internalErrorResponse, isSameOriginRequest } from "@/lib/request-security";
 import { retryAgentRun, retryAgentRunInputSchema } from "@/lib/universal-agent";
 
 export async function POST(request: Request, context: {
@@ -26,7 +26,9 @@ export async function POST(request: Request, context: {
     return NextResponse.json(result, { status: 202 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Agent 重试入队失败";
-    const status = /agent_runs_one_active_thread_idx/.test(message) ? 409 : 500;
-    return NextResponse.json({ error: message.slice(0, 800) }, { status });
+    if (/agent_runs_one_active_thread_idx/.test(message)) {
+      return NextResponse.json({ error: "当前会话已有任务排队或运行中" }, { status: 409 });
+    }
+    return internalErrorResponse(error, "Agent 重试入队失败");
   }
 }

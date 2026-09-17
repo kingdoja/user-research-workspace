@@ -1,3 +1,6 @@
+import { createHash, randomUUID } from "node:crypto";
+import { getDatabase } from "@/lib/db";
+
 function firstHeaderValue(value: string | null) {
   return value?.split(",", 1)[0]?.trim() || null;
 }
@@ -24,7 +27,7 @@ function pruneRateLimitBuckets(now: number) {
   }
 }
 
-export function checkRateLimit(request: Request, name: string, policy: RateLimitPolicy, subject?: string) {
+function checkMemoryRateLimit(request: Request, name: string, policy: RateLimitPolicy, subject?: string) {
   const now = Date.now();
   pruneRateLimitBuckets(now);
   const key = `${name}:${(subject ?? requestClientKey(request)).slice(0, 240)}`;
@@ -38,6 +41,49 @@ export function checkRateLimit(request: Request, name: string, policy: RateLimit
   return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((current.resetAt - now) / 1000)) };
 }
 
+export async function checkRateLimit(request: Request, name: string, policy: RateLimitPolicy, subject?: string) {
+  const backend = process.env.RATE_LIMIT_BACKEND?.trim().toLowerCase()
+    || (process.env.NODE_ENV === "production" ? "database" : "memory");
+  if (backend === "memory") return checkMemoryRateLimit(request, name, policy, subject);
+  if (backend !== "database") throw new Error("RATE_LIMIT_BACKEND must be either memory or database");
+
+  const rawKey = `${name}:${policy.limit}:${policy.windowMs}:${(subject ?? requestClientKey(request)).slice(0, 240)}`;
+  const key = createHash("sha256").update(rawKey).digest("hex");
+  try {
+    const database = await getDatabase();
+    const result = await database.query<{ count: number; retry_after_seconds: number }>(
+      `with expired as (
+         delete from request_rate_limits where key_hash in (
+           select key_hash from request_rate_limits where expires_at <= now() limit 100
+         ) returning key_hash
+       )
+       insert into request_rate_limits (key_hash, request_count, expires_at)
+       values ($1, 1, now() + ($2::double precision * interval '1 millisecond'))
+       on conflict (key_hash) do update set
+         request_count = case when request_rate_limits.expires_at <= now()
+           then 1 else request_rate_limits.request_count + 1 end,
+         expires_at = case when request_rate_limits.expires_at <= now()
+           then now() + ($2::double precision * interval '1 millisecond')
+           else request_rate_limits.expires_at end,
+         updated_at = now()
+       returning request_count as count,
+         greatest(1, ceil(extract(epoch from (expires_at - now()))))::int as retry_after_seconds`,
+      [key, policy.windowMs],
+    );
+    const bucket = result.rows[0];
+    return {
+      allowed: Boolean(bucket && bucket.count <= policy.limit),
+      retryAfterSeconds: bucket && bucket.count > policy.limit ? bucket.retry_after_seconds : 0,
+    };
+  } catch (error) {
+    console.error("Shared rate limiter failed", { name, error });
+    if (process.env.RATE_LIMIT_FAIL_OPEN === "1" && process.env.NODE_ENV !== "production") {
+      return checkMemoryRateLimit(request, name, policy, subject);
+    }
+    return { allowed: false, retryAfterSeconds: 1 };
+  }
+}
+
 export function rateLimitResponse(retryAfterSeconds: number) {
   return new Response(JSON.stringify({ error: "请求过于频繁，请稍后再试" }), {
     status: 429,
@@ -45,6 +91,19 @@ export function rateLimitResponse(retryAfterSeconds: number) {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "retry-after": String(retryAfterSeconds),
+    },
+  });
+}
+
+export function internalErrorResponse(error: unknown, message = "服务器暂时无法处理请求", status = 500) {
+  const requestId = randomUUID();
+  console.error("API request failed", { requestId, error });
+  return new Response(JSON.stringify({ error: message, code: "INTERNAL_ERROR", requestId }), {
+    status,
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "x-request-id": requestId,
     },
   });
 }

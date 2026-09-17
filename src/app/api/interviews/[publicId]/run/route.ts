@@ -12,7 +12,7 @@ export async function POST(request: Request, context: RouteContext) {
   if (!isSameOriginRequest(request)) return NextResponse.json({ error: "请求来源无效" }, { status: 403 });
   const viewer = await getViewer();
   if (!viewer) return NextResponse.json({ error: "请先登录" }, { status: 401 });
-  const rateLimit = checkRateLimit(request, "interview-run", { limit: 10, windowMs: 15 * 60_000 }, `${viewer.workspaceId}:${viewer.userId}`);
+  const rateLimit = await checkRateLimit(request, "interview-run", { limit: 10, windowMs: 15 * 60_000 }, `${viewer.workspaceId}:${viewer.userId}`);
   if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfterSeconds);
   const { publicId } = await context.params;
   const result = await queueInterviewRun(viewer, publicId);

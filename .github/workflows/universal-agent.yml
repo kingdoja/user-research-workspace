@@ -1,26 +1,6 @@
-name: Universal Agent
+name: Project Verification
 
-on:
-  push:
-    paths:
-      - "src/lib/universal-agent.ts"
-      - "src/lib/universal-agent-product-tools.ts"
-      - "src/components/universal-agent-workspace.tsx"
-      - "src/app/api/agent/**"
-      - "scripts/universal-agent*.ts"
-      - "supabase/migrations/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
-  pull_request:
-    paths:
-      - "src/lib/universal-agent.ts"
-      - "src/lib/universal-agent-product-tools.ts"
-      - "src/components/universal-agent-workspace.tsx"
-      - "src/app/api/agent/**"
-      - "scripts/universal-agent*.ts"
-      - "supabase/migrations/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
+on: [push, pull_request]
 
 jobs:
   verify:
@@ -42,6 +22,8 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
       DATABASE_SSL_MODE: disable
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -52,9 +34,17 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --registry=https://registry.npmjs.org --audit-level=high
       - run: pnpm exec tsc --noEmit
       - run: pnpm lint
       - run: pnpm smoke:isolated universal-agent-product-tools
+        env:
+          LOCAL_SMOKE_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      - run: pnpm smoke:isolated source-connector
+        env:
+          LOCAL_SMOKE_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      - run: pnpm smoke:isolated realtime-interview
+        if: ${{ env.OPENAI_API_KEY != '' || env.DEEPSEEK_API_KEY != '' }}
         env:
           LOCAL_SMOKE_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
       - run: pnpm exec next build --webpack

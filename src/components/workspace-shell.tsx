@@ -71,9 +71,11 @@ type WorkspaceShellProps = {
   children: ReactNode;
   viewer: {
     displayName: string;
+    workspacePublicId?: string;
     workspaceName: string;
     tokenBalance: number;
     isPlatformAdmin?: boolean;
+    availableWorkspaces?: Array<{ publicId: string; name: string }>;
   };
 };
 
@@ -96,6 +98,17 @@ export function WorkspaceShell({ children, viewer }: WorkspaceShellProps) {
       } catch {
         router.replace("/auth/signin");
       }
+    });
+  }
+
+  function switchWorkspace(workspacePublicId: string) {
+    startTransition(async () => {
+      const response = await fetch("/api/account/workspace", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workspacePublicId }),
+      });
+      if (response.ok) router.refresh();
     });
   }
 
@@ -135,7 +148,18 @@ export function WorkspaceShell({ children, viewer }: WorkspaceShellProps) {
           Cognara AI
         </Link>
         <div className="workspace-switcher">
-          <span>{viewer.workspaceName}</span>
+          {viewer.availableWorkspaces && viewer.availableWorkspaces.length > 1 ? (
+            <select
+              aria-label="切换工作区"
+              disabled={pending}
+              value={viewer.workspacePublicId}
+              onChange={(event) => switchWorkspace(event.target.value)}
+            >
+              {viewer.availableWorkspaces.map((workspace) => (
+                <option value={workspace.publicId} key={workspace.publicId}>{workspace.name}</option>
+              ))}
+            </select>
+          ) : <span>{viewer.workspaceName}</span>}
         </div>
         <div className="workspace-account">
           <Link className="token-balance" href="/account" title="Token 余额">

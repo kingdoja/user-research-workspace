@@ -6,7 +6,7 @@ import { checkRateLimit, isSameOriginRequest, rateLimitResponse } from "@/lib/re
 export const maxDuration = 120;
 
 export async function POST(request: Request, { params }: { params: Promise<{ token: string }> }) {
-  const rateLimit = checkRateLimit(request, "realtime-interview-start", { limit: 5, windowMs: 60 * 60_000 });
+  const rateLimit = await checkRateLimit(request, "realtime-interview-start", { limit: 5, windowMs: 60 * 60_000 });
   if (!rateLimit.allowed) return rateLimitResponse(rateLimit.retryAfterSeconds);
   if (!isSameOriginRequest(request)) return NextResponse.json({ error: "请求来源无效" }, { status: 403 });
   const parsed = startRealtimeInterviewSchema.safeParse(await request.json().catch(() => null));
