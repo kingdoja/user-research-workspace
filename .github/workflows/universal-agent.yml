@@ -31,7 +31,8 @@ jobs:
           version: 11.16.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # pnpm 11 uses node:sqlite and requires Node.js >= 22.13.
+          node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --registry=https://registry.npmjs.org --audit-level=high
