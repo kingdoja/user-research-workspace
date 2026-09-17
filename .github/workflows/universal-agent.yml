@@ -36,6 +36,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --registry=https://registry.npmjs.org --audit-level=high
+      - run: pnpm exec next typegen
       - run: pnpm exec tsc --noEmit
       - run: pnpm lint
       - run: pnpm smoke:isolated universal-agent-product-tools
