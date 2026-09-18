@@ -27,7 +27,7 @@ GPT_RESEARCHER_BRIDGE_EVENT_LIMIT=2000
 
 ### 本机已验证的模型组合
 
-当前本机的 `yundu.lat` 无法建立连接。要继续使用 GPT Researcher，可让不同组件使用各自可达的服务：DeepSeek 负责 GPT Researcher 的规划/执行/写作，Qwen `text-embedding-v4` 负责网页相关性压缩，Tavily 负责搜索。将下面的非密钥配置放入 bridge 的 `.env`，密钥填入对应服务自己的值：
+当前 GEA 的 OpenAI-compatible Provider 已切换为 `https://yundu.lol/v1`。GPT Researcher bridge 仍建议让不同组件使用各自明确配置的服务：DeepSeek 负责 GPT Researcher 的规划/执行/写作，Qwen `text-embedding-v4` 负责网页相关性压缩，Tavily 负责搜索。将下面的非密钥配置放入 bridge 的 `.env`，密钥填入对应服务自己的值：
 
 ```env
 GPT_RESEARCHER_BRIDGE_TOKEN=<与 GEA 相同的 token>

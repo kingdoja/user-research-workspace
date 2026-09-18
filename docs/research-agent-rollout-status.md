@@ -33,11 +33,12 @@
 
 ## Provider 验证
 
-- 报告阶段已切换为 `deepseek/deepseek-v4-pro`，report + judge smoke 已通过。
-- yundu 兼容性探针已覆盖 `sol`、`sol-3.0`、`sol-3`、`gpt-5.6-terra` 和 `gpt-4o-mini`。
-- 2026-08-21 从当前环境访问 `https://yundu.lat/v1` 时，`/models` 与全部 chat-completions
-  请求均在网络层超时/不可达，没有返回 HTTP 状态；因此当前证据不足以判断 yundu 是否只支持
-  `sol`，端点恢复后运行 `pnpm probe:yundu-models` 再确认。
+- 报告与 judge 阶段按部署环境通过通用 OpenAI-compatible Provider 路由；生产切换为
+  `yundu/gpt-5.6-terra`，report + judge smoke 已通过。
+- yundu 兼容性探针已覆盖生产使用的 `gpt-5.6-terra` 以及网关公开的其它候选模型。
+- 2026-09-18 已从当前环境验证 `https://yundu.lol/v1`：`/models` 返回可用模型，
+  `gpt-5.6-terra` 的 chat-completions 与严格 JSON Schema 请求均返回 200；发布时使用
+  `pnpm probe:yundu-models` 复核网关模型清单。
 
 ## 影响范围
 

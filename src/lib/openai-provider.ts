@@ -999,7 +999,6 @@ function getDeepSeekClient() {
 function configuredProvider(stage: ProviderStage) {
   const override = activeProviderRoute(stage);
   if (override) return override.providerName.trim().toLowerCase();
-  if (stage === "followup") return "deepseek";
   const variable = stage === "plan"
     ? process.env.PLAN_PROVIDER
     : stage === "research"
@@ -1008,8 +1007,14 @@ function configuredProvider(stage: ProviderStage) {
         ? process.env.REASONING_PROVIDER ?? process.env.RESEARCH_PROVIDER
         : stage === "report"
           ? process.env.REPORT_PROVIDER
-          : process.env.REPORT_JUDGE_PROVIDER ?? process.env.REASONING_PROVIDER ?? process.env.RESEARCH_PROVIDER;
-  return variable?.trim().toLowerCase() || process.env.OPENAI_PROVIDER_NAME?.trim().toLowerCase() || "openai";
+          : stage === "judge"
+            ? process.env.REPORT_JUDGE_PROVIDER ?? process.env.REASONING_PROVIDER ?? process.env.RESEARCH_PROVIDER
+            : process.env.FOLLOWUP_PROVIDER
+              ?? process.env.REPORT_PROVIDER
+              ?? process.env.REASONING_PROVIDER
+              ?? process.env.RESEARCH_PROVIDER;
+  return variable?.trim().toLowerCase()
+    || (stage === "followup" ? "deepseek" : process.env.OPENAI_PROVIDER_NAME?.trim().toLowerCase() || "openai");
 }
 
 function usesDeepSeek(stage: ProviderStage) {
@@ -1068,7 +1073,9 @@ function getStageModel(stage: ProviderStage) {
   if (stage === "reasoning") return process.env.REASONING_MODEL?.trim() || process.env.OPENAI_RESEARCH_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
   if (stage === "report") return process.env.REPORT_MODEL?.trim() || process.env.OPENAI_RESEARCH_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
   if (stage === "judge") return process.env.REPORT_JUDGE_MODEL?.trim() || process.env.REASONING_MODEL?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
-  return process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+  return process.env.OPENAI_FOLLOWUP_MODEL?.trim()
+    || process.env.OPENAI_MODEL?.trim()
+    || DEFAULT_MODEL;
 }
 
 function getPlanModel() {
@@ -1424,11 +1431,13 @@ export function getOpenAIProviderStatus() {
 }
 
 export function getFollowupProviderStatus() {
+  const followup = getProviderStageStatus("followup");
   return {
-    providerName: "deepseek",
-    configured: Boolean(process.env.DEEPSEEK_API_KEY?.trim()),
-    model: getFollowupModel(),
-    protocol: getApiProtocol("followup"),
+    providerName: followup.providerName,
+    configured: followup.configured,
+    requiredVariable: followup.requiredVariable,
+    model: followup.model,
+    protocol: followup.protocol,
     stateMode: "application_managed" as const,
   };
 }

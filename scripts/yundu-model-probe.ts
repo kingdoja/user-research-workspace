@@ -2,12 +2,12 @@ import { loadEnvConfig } from "@next/env";
 
 loadEnvConfig(process.cwd());
 
-const baseUrl = (process.env.OPENAI_BASE_URL?.trim() || "https://yundu.lat/v1").replace(/\/$/, "");
+const baseUrl = (process.env.OPENAI_BASE_URL?.trim() || "https://yundu.lol/v1").replace(/\/$/, "");
 const apiKey = process.env.OPENAI_API_KEY?.trim();
 if (!apiKey) throw new Error("OPENAI_API_KEY_MISSING");
 
 const timeoutMs = Math.max(5_000, Math.min(60_000, Number(process.env.YUNDU_PROBE_TIMEOUT_MS ?? 30_000)));
-const candidates = (process.env.YUNDU_PROBE_MODELS?.split(",") ?? ["sol", "sol-3.0", "sol-3", "gpt-5.6-terra", "gpt-4o-mini"])
+const candidates = (process.env.YUNDU_PROBE_MODELS?.split(",") ?? ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5"])
   .map((model) => model.trim())
   .filter(Boolean);
 const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
