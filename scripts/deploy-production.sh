@@ -82,22 +82,33 @@ rollback() {
   set +e
   docker rm -f "$web_container" "$worker_container" >/dev/null 2>&1 || true
   docker run -d --name "$worker_container" --restart unless-stopped \
-    --network "$network_name" --env-file "$worker_env_file" "$worker_rollback" >/dev/null
+    --network "$network_name" --env-file "$worker_env_file" "$worker_rollback" \
+    node node_modules/tsx/dist/cli.mjs scripts/research-worker.mjs >/dev/null
   docker run -d --name "$web_container" --restart unless-stopped \
     --network "$network_name" -p "${web_port}:3000" \
-    --env-file "$web_env_file" "$web_rollback" >/dev/null
+    --env-file "$web_env_file" "$web_rollback" \
+    node node_modules/next/dist/bin/next start >/dev/null
   for endpoint in /api/health /api/health/ready; do
     curl --fail --silent --show-error --max-time 10 "${health_base_url}${endpoint}" >/dev/null || true
   done
   set -e
 }
-trap rollback ERR
+on_exit() {
+  local exit_code=$?
+  if [[ "$rollback_done" != 1 ]]; then
+    rollback
+  fi
+  trap - EXIT
+  exit "$exit_code"
+}
+trap on_exit EXIT
 
 # Replace the background worker first so new web requests never enqueue work
 # that the old worker cannot understand.
 docker rm -f "$worker_container" >/dev/null
 docker run -d --name "$worker_container" --restart unless-stopped \
-  --network "$network_name" --env-file "$worker_env_file" "$image" >/dev/null
+  --network "$network_name" --env-file "$worker_env_file" "$image" \
+  node node_modules/tsx/dist/cli.mjs scripts/research-worker.mjs >/dev/null
 
 sleep 2
 [[ "$(docker inspect -f '{{.State.Running}}' "$worker_container")" == "true" ]]
@@ -105,7 +116,8 @@ sleep 2
 docker rm -f "$web_container" >/dev/null
 docker run -d --name "$web_container" --restart unless-stopped \
   --network "$network_name" -p "${web_port}:3000" \
-  --env-file "$web_env_file" "$image" >/dev/null
+  --env-file "$web_env_file" "$image" \
+  node node_modules/next/dist/bin/next start >/dev/null
 
 for endpoint in /api/health /api/health/ready; do
   for attempt in {1..18}; do
@@ -118,6 +130,6 @@ for endpoint in /api/health /api/health/ready; do
 done
 
 rollback_done=1
-trap - ERR
+trap - EXIT
 echo "DEPLOY_OK image=$image webRollback=$web_rollback workerRollback=$worker_rollback"
 REMOTE
