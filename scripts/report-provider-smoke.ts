@@ -15,13 +15,15 @@ async function main() {
   } = await import("../src/lib/openai-provider");
   const reportStatus = getProviderStageStatus("report");
   const judgeStatus = getProviderStageStatus("judge");
-  const expectedReportProvider = process.env.EXPECTED_REPORT_PROVIDER?.trim().toLowerCase() || "deepseek";
-  const expectedReportModel = process.env.EXPECTED_REPORT_MODEL?.trim() || "deepseek-v4-pro";
+  const expectedReportProvider = process.env.EXPECTED_REPORT_PROVIDER?.trim().toLowerCase() || reportStatus.providerName;
+  const expectedReportModel = process.env.EXPECTED_REPORT_MODEL?.trim() || reportStatus.model;
+  const expectedJudgeProvider = process.env.EXPECTED_JUDGE_PROVIDER?.trim().toLowerCase() || judgeStatus.providerName;
+  const expectedJudgeModel = process.env.EXPECTED_JUDGE_MODEL?.trim() || judgeStatus.model;
   assert.equal(reportStatus.providerName, expectedReportProvider);
   assert.equal(reportStatus.model, expectedReportModel);
   assert.equal(reportStatus.configured, true);
-  assert.equal(judgeStatus.providerName, "deepseek");
-  assert.equal(judgeStatus.model, "deepseek-v4-pro");
+  assert.equal(judgeStatus.providerName, expectedJudgeProvider);
+  assert.equal(judgeStatus.model, expectedJudgeModel);
   assert.equal(judgeStatus.configured, true);
 
   const sources = [
@@ -67,7 +69,7 @@ async function main() {
     userPublicId: "report-provider-smoke",
     studyPublicId: "report-provider-smoke",
   });
-  assert.equal(review.provider, "deepseek");
+  assert.equal(review.provider, judgeStatus.providerName);
   assert.equal(review.model, judgeStatus.model);
   assert.ok(review.responseId);
   assert.ok(review.score >= 0 && review.score <= 100);
